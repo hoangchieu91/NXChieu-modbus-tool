@@ -14,6 +14,7 @@ import {
   ZoomOut,
   RotateCcw,
   Radio,
+  Sliders,
 } from 'lucide-react';
 import { ChartDataPoint, ChartTrace } from '../types/modbus';
 
@@ -40,6 +41,8 @@ export const TrendChart: React.FC<TrendChartProps> = ({
   // Display mode
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const [isNormalizedScale, setIsNormalizedScale] = useState<boolean>(false);
+
 
   // Zoom & Pan state
   const [viewPointsCount, setViewPointsCount] = useState<number>(60); // number of points shown in window
@@ -186,11 +189,13 @@ export const TrendChart: React.FC<TrendChartProps> = ({
       ctx.lineTo(padding.left + chartW, y);
       ctx.stroke();
 
-      const val = globalYRange.max - (globalYRange.range / gridSteps) * i;
+      const gridLabel = isNormalizedScale
+        ? `${100 - Math.round((100 / gridSteps) * i)}%`
+        : (globalYRange.max - (globalYRange.range / gridSteps) * i).toFixed(2);
       ctx.fillStyle = '#64748b';
       ctx.font = '10px monospace';
       ctx.textAlign = 'left';
-      ctx.fillText(val.toFixed(2), padding.left + chartW + 6, y + 3);
+      ctx.fillText(gridLabel, padding.left + chartW + 6, y + 3);
     }
     ctx.setLineDash([]);
 
@@ -203,13 +208,30 @@ export const TrendChart: React.FC<TrendChartProps> = ({
       const windowPts = allPts.slice(windowSliceRange.startIdx, windowSliceRange.endIdx);
       if (windowPts.length === 0) return;
 
+      // Calculate trace-specific range if Normalized Mode is active
+      let traceMin = globalYRange.min;
+      let traceRange = globalYRange.range;
+      if (isNormalizedScale) {
+        const vals = windowPts.map((p) => p.value);
+        let vMin = Math.min(...vals);
+        let vMax = Math.max(...vals);
+        if (vMin === vMax) {
+          vMin -= 1;
+          vMax += 1;
+        }
+        const margin = (vMax - vMin) * 0.12;
+        traceMin = vMin - margin;
+        traceRange = (vMax - vMin) + margin * 2;
+      }
+
       const coords: { x: number; y: number; val: number; time: string }[] = [];
       windowPts.forEach((p, idx) => {
         const x = padding.left + idx * xStep;
-        const normalizedY = (p.value - globalYRange.min) / globalYRange.range;
+        const normalizedY = (p.value - traceMin) / traceRange;
         const y = padding.top + chartH - normalizedY * chartH;
         coords.push({ x, y, val: p.value, time: p.timestamp });
       });
+
 
       if (coords.length > 0) {
         // Gradient fill below first visible trace if single, or light transparent fill
@@ -490,6 +512,20 @@ export const TrendChart: React.FC<TrendChartProps> = ({
 
         {/* Right Actions */}
         <div className="flex items-center space-x-1.5">
+          {/* Normalized Scale Toggle */}
+          <button
+            onClick={() => setIsNormalizedScale(!isNormalizedScale)}
+            className={`flex items-center space-x-1 px-2 py-1 rounded text-[11px] font-semibold border transition ${
+              isNormalizedScale
+                ? 'bg-fuchsia-950 text-fuchsia-300 border-fuchsia-600 shadow-sm'
+                : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white hover:bg-slate-700'
+            }`}
+            title="Tự động chuẩn hóa biên độ từng kênh (Auto-scaled 0-100%): Giúp quan sát rõ sóng hình sin của cả Điện áp 220V và Dòng điện 5A trên cùng một biểu đồ"
+          >
+            <Sliders className="w-3 h-3 text-fuchsia-400" />
+            <span>{isNormalizedScale ? 'Thang %' : 'Thang Tuyệt Đối'}</span>
+          </button>
+
           {/* Pause / Resume */}
           <button
             onClick={() => setIsPaused(!isPaused)}
@@ -503,6 +539,7 @@ export const TrendChart: React.FC<TrendChartProps> = ({
             {isPaused ? <Play className="w-3 h-3 fill-current" /> : <Pause className="w-3 h-3" />}
             <span className="text-[11px]">{isPaused ? 'Resume' : 'Pause'}</span>
           </button>
+
 
           {/* Export CSV */}
           <button

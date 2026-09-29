@@ -260,9 +260,38 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                       Bật khung <strong>Traffic Log</strong> để xem trực tiếp các byte Hex truyền đi (TX) và phản hồi về (RX) theo chuẩn Modbus RTU/TCP để bắt lỗi CRC, Timeout hoặc Exception code (01, 02, 03, 04).
                     </p>
                   </div>
+
+                  <div className="p-3 bg-slate-900 rounded border border-slate-800">
+                    <span className="font-bold text-emerald-300 text-sm">6. Thanh Lọc & Tìm Kiếm Nhanh (Search & Filter)</span>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Khi cấu hình đọc danh sách lớn (50-100 thanh ghi), sử dụng ô tìm kiếm ở góc trên bảng DataGrid để lọc tức thời theo địa chỉ Modbus (ví dụ <code>40005</code>) hoặc theo tên biến Alias (ví dụ <code>áp</code>, <code>dòng</code>, <code>nhiệt</code>).
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 rounded border border-slate-800">
+                    <span className="font-bold text-fuchsia-300 text-sm">7. Chế Độ Xem Đa Cột Trực Tiếp (Multi-Column Live Mode)</span>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Nhấn nút <strong>⊞ Xem Đa Cột (Live)</strong> ở đầu bảng để mở rộng hiển thị đồng thời tất cả các dạng giải mã (UInt16, Int16, Int32 ABCD/CDAB, Float32 ABCD/CDAB, Đồng hồ nước 48-bit BE/BCD). Số liệu nhảy trực tiếp theo chu kỳ poll mà không cần mở popup!
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 rounded border border-slate-800">
+                    <span className="font-bold text-amber-300 text-sm">8. Chớp Sáng & Mũi Tên Chỉ Báo Biến Thiên (Value Change Glow)</span>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Khi giá trị thanh ghi thay đổi giữa 2 chu kỳ: nền ô giá trị chớp sáng dịu mắt (xanh lục nếu tăng, đỏ cam nếu giảm) kèm mũi tên <code>▲</code> hoặc <code>▼</code> hiển thị xu hướng biến thiên ngay lập tức.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 rounded border border-slate-800">
+                    <span className="font-bold text-slate-300 text-sm">9. Mật Độ Hiển Thị Bảng (Density: Chuẩn / Gọn)</span>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Chuyển đổi giữa <strong>Chuẩn</strong> (khoảng cách thoáng) và <strong>Gọn</strong> (thu nhỏ dòng) để hiển thị được nhiều thanh ghi hơn trên cùng một màn hình mà không cần cuộn chuột.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
+
           )}
 
           {/* TAB 3: MODBUS SLAVE */}
@@ -412,6 +441,15 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                   </div>
                 </div>
 
+                <div className="p-3 bg-slate-900 rounded border border-slate-800">
+                  <span className="font-bold text-fuchsia-300 text-sm">Thang Đo Chuẩn Hóa Tự Động (Auto-Normalized Scale %)</span>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Khi theo dõi đồng thời các đại lượng có biên độ chênh lệch lớn (ví dụ: Điện áp <strong>220V</strong> và Dòng điện <strong>5A</strong>), đường 5A sẽ bị dẹt sát đáy nếu dùng chung 1 trục.
+                    <br />
+                    Nhấn nút <strong>Thang %</strong> trên thanh điều khiển biểu đồ: Mỗi kênh sẽ tự động co giãn biên độ theo dải Min-Max riêng của nó, giúp bạn quan sát rõ dao động sóng hình sin của cả dòng, áp, công suất và tần số cùng một lúc!
+                  </p>
+                </div>
+
                 <div className="p-3 bg-slate-900 rounded border border-slate-800 flex items-center justify-between text-xs">
                   <div>
                     <span className="font-bold text-slate-200">Xuất dữ liệu biểu đồ ra CSV</span>
@@ -423,6 +461,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                 </div>
               </div>
             </div>
+
           )}
 
           {/* TAB 6: SCANNER & MULTI-COLUMN EXPLORER */}

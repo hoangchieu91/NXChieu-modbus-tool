@@ -90,8 +90,11 @@ export interface RegisterRow {
   format?: DataFormat;
   lastUpdated?: string;
   changed: boolean;
+  changeDirection?: 'up' | 'down' | null;
   hasValue: boolean;
+  decodedMulti?: MultiColumnDecoded;
 }
+
 
 export type SessionRole = 'master' | 'slave';
 export type SlaveTable = 'holding' | 'coils' | 'discrete' | 'input';

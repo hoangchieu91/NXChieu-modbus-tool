@@ -49,7 +49,8 @@ import {
   TabSession,
   TrafficEntry,
 } from './types/modbus';
-import { formatValue, getModbusAddressLabel } from './utils/formatters';
+import { formatValue, getModbusAddressLabel, decodeAllColumns } from './utils/formatters';
+
 import {
   loadWorkspace,
   saveWorkspace,
@@ -925,6 +926,8 @@ export const App: React.FC = () => {
       let displayVal = '--';
       let rawHex = '--';
       let changed = false;
+      let changeDirection: 'up' | 'down' | null = null;
+      let decodedMulti: import('./types/modbus').MultiColumnDecoded | undefined = undefined;
 
       const hasData = tab.role === 'slave' ? true : state.hasData;
       let cellHasValue = false;
@@ -938,6 +941,9 @@ export const App: React.FC = () => {
             displayVal = bit ? 'ON' : 'OFF';
             rawHex = bit ? '0x01' : '0x00';
             changed = bit !== prevBit;
+            if (changed) {
+              changeDirection = bit ? 'up' : 'down';
+            }
             cellHasValue = true;
           }
         } else {
@@ -950,7 +956,11 @@ export const App: React.FC = () => {
             displayVal = fmtRes.display;
             rawHex = fmtRes.hex;
             changed = v !== prevV;
+            if (changed) {
+              changeDirection = v > prevV ? 'up' : 'down';
+            }
             cellHasValue = true;
+            decodedMulti = decodeAllColumns(state.regs, i, addr, tab.definition.function_code);
           }
         }
       }
@@ -984,9 +994,12 @@ export const App: React.FC = () => {
         format: rowFormat,
         lastUpdated,
         changed,
+        changeDirection,
         hasValue: cellHasValue,
+        decodedMulti,
       });
     }
+
 
     return { rows: resultRows, isCoil };
   };

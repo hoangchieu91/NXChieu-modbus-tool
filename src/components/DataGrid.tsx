@@ -1,5 +1,13 @@
-import React, { useState } from 'react';
-import { SlidersHorizontal, LineChart } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import {
+  SlidersHorizontal,
+  LineChart,
+  Search,
+  X,
+  LayoutGrid,
+  ArrowUp,
+  ArrowDown,
+} from 'lucide-react';
 import { DataFormat, RegisterRow } from '../types/modbus';
 
 interface DataGridProps {
@@ -38,6 +46,15 @@ export const DataGrid: React.FC<DataGridProps> = ({
   const [editInput, setEditInput] = useState<string>('');
   const [justWrittenAddress, setJustWrittenAddress] = useState<number | null>(null);
 
+  // Search / Filter state
+  const [filterQuery, setFilterQuery] = useState<string>('');
+
+  // Density mode: 'standard' | 'compact'
+  const [density, setDensity] = useState<'standard' | 'compact'>('standard');
+
+  // Multi-column live inspector mode
+  const [isMultiColumnLive, setIsMultiColumnLive] = useState<boolean>(false);
+
   const startEdit = (row: RegisterRow) => {
     setEditingAddress(row.address);
     setEditInput(row.displayValue !== '--' ? String(row.displayValue) : '0');
@@ -52,303 +69,492 @@ export const DataGrid: React.FC<DataGridProps> = ({
     }
   };
 
+  // Filter rows based on query (by address or alias)
+  const filteredRows = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) => {
+      const matchAddr =
+        r.address.toString().includes(q) ||
+        r.displayAddress.toLowerCase().includes(q);
+      const matchAlias = r.alias.toLowerCase().includes(q);
+      return matchAddr || matchAlias;
+    });
+  }, [rows, filterQuery]);
+
+  const padY = density === 'compact' ? 'py-0.5' : 'py-1.5';
+  const textClass = density === 'compact' ? 'text-[11px]' : 'text-xs';
+
   return (
-    <div className="flex-1 overflow-auto bg-slate-950 font-mono text-xs select-text">
-      <table className="w-full border-collapse border border-slate-800 text-left">
-        {/* Table Header */}
-        <thead className="sticky top-0 bg-slate-900 border-b border-slate-700 text-slate-300 font-semibold z-10 shadow-sm">
-          <tr>
-            <th className="px-3 py-2 border-r border-slate-800 w-12 text-center text-slate-500">
-              #
-            </th>
-            <th className="px-3 py-2 border-r border-slate-800 w-24 text-cyan-400">
-              Address
-            </th>
-            <th className="px-3 py-2 border-r border-slate-800 w-20 text-slate-400">
-              Offset
-            </th>
-            <th className="px-3 py-2 border-r border-slate-800 min-w-[180px] text-slate-200">
-              Alias / Tên Biến
-            </th>
-            <th className="px-4 py-2 border-r border-slate-800 min-w-[180px] text-amber-300 font-bold">
-              Value (Giá Trị) <span className="text-[10px] text-slate-400 font-normal">[Click để gõ & Enter]</span>
-            </th>
-            <th className="px-3 py-2 border-r border-slate-800 w-24 text-emerald-400">
-              Raw Hex
-            </th>
-            {!isCoil && (
-              <th className="px-3 py-2 border-r border-slate-800 w-32 text-indigo-400">
-                Giải mã (Format)
-              </th>
+    <div className="flex-1 flex flex-col min-h-0 bg-slate-950 font-mono select-text">
+      {/* --- DataGrid Top Sub-Toolbar --- */}
+      <div className="flex flex-wrap items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs gap-2 shrink-0">
+        {/* Left: Search filter bar */}
+        <div className="flex items-center gap-2">
+          <div className="relative flex items-center">
+            <Search className="w-3.5 h-3.5 absolute left-2 text-slate-500 pointer-events-none" />
+            <input
+              type="text"
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+              placeholder="Lọc địa chỉ hoặc tên biến..."
+              className="pl-7 pr-6 py-1 bg-slate-950 border border-slate-700/80 rounded text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-48 sm:w-60 font-sans"
+            />
+            {filterQuery && (
+              <button
+                onClick={() => setFilterQuery('')}
+                className="absolute right-1.5 text-slate-400 hover:text-white p-0.5"
+                title="Xóa bộ lọc"
+              >
+                <X className="w-3 h-3" />
+              </button>
             )}
-            <th className="px-3 py-2 border-r border-slate-800 w-20 text-slate-300">
-              Đơn Vị
-            </th>
-            {!isCoil && (
-              <th className="px-3 py-2 border-r border-slate-800 w-20 text-slate-400">
-                Scale
-              </th>
-            )}
-            <th className="px-3 py-2 border-r border-slate-800 w-28 text-slate-400">
-              Cập Nhật (Time)
-            </th>
-            <th className="px-3 py-2 w-32 text-center text-slate-400">
-              Thao Tác
-            </th>
-          </tr>
-        </thead>
+          </div>
 
-        {/* Table Body */}
-        <tbody className="divide-y divide-slate-800/80">
-          {rows.length === 0 ? (
+          <span className="text-[11px] text-slate-400 font-sans">
+            Hiển thị <strong className="text-white font-mono">{filteredRows.length}</strong> / {rows.length} hàng
+          </span>
+        </div>
+
+        {/* Right: View mode controls */}
+        <div className="flex items-center gap-1.5 font-sans">
+          {/* Multi-Column Live Inspector Toggle */}
+          {!isCoil && (
+            <button
+              onClick={() => setIsMultiColumnLive(!isMultiColumnLive)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-semibold transition border ${
+                isMultiColumnLive
+                  ? 'bg-fuchsia-950/60 text-fuchsia-300 border-fuchsia-600/70 shadow-sm'
+                  : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white hover:bg-slate-700'
+              }`}
+              title="Mở rộng bảng để giải mã đồng thời tất cả các định dạng (Int16, UInt16, Float ABCD/CDAB, BCD nước 48-bit) theo thời gian thực"
+            >
+              <LayoutGrid className="w-3.5 h-3.5 text-fuchsia-400" />
+              <span>{isMultiColumnLive ? 'Thu Gọn Đa Cột' : '⊞ Xem Đa Cột (Live)'}</span>
+            </button>
+          )}
+
+          {/* Density Toggle */}
+          <div className="flex items-center bg-slate-950 p-0.5 rounded border border-slate-800">
+            <button
+              onClick={() => setDensity('standard')}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                density === 'standard' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Khoảng cách dòng chuẩn"
+            >
+              Chuẩn
+            </button>
+            <button
+              onClick={() => setDensity('compact')}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                density === 'compact' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Khoảng cách dòng đậm đặc (xem được nhiều hàng hơn)"
+            >
+              Gọn
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* --- Main Table Viewport --- */}
+      <div className="flex-1 overflow-auto">
+        <table className="w-full border-collapse border border-slate-800 text-left">
+          {/* Table Header */}
+          <thead className="sticky top-0 bg-slate-900 border-b border-slate-700 text-slate-300 font-semibold z-10 shadow-sm text-xs">
             <tr>
-              <td colSpan={11} className="text-center py-16 text-slate-500 font-sans">
-                <div className="flex flex-col items-center justify-center space-y-2">
-                  <SlidersHorizontal className="w-8 h-8 text-slate-600" />
-                  <p className="text-sm font-medium">Chưa có dữ liệu thanh ghi</p>
-                  <p className="text-xs text-slate-500">
-                    Nhấn <span className="text-cyan-400">Connect (F3)</span> và <span className="text-emerald-400">Poll</span> để bắt đầu quét
-                  </p>
-                </div>
-              </td>
-            </tr>
-          ) : (
-            rows.map((row, idx) => {
-              const traceColor = activeChartColorMap?.[row.address];
-              const isChartActive = Boolean(traceColor) || (activeChartAddresses && activeChartAddresses.includes(row.address));
+              <th className="px-3 py-2 border-r border-slate-800 w-12 text-center text-slate-500">
+                #
+              </th>
+              <th className="px-3 py-2 border-r border-slate-800 w-24 text-cyan-400">
+                Address
+              </th>
+              <th className="px-3 py-2 border-r border-slate-800 w-20 text-slate-400">
+                Offset
+              </th>
+              <th className="px-3 py-2 border-r border-slate-800 min-w-[160px] text-slate-200">
+                Alias / Tên Biến
+              </th>
 
-              return (
-                <tr
-                  key={row.address}
-                  className={`hover:bg-slate-800/60 transition-colors group ${
-                    isChartActive
-                      ? 'bg-slate-900/90 border-l-2'
-                      : row.changed
-                      ? 'bg-cyan-950/20'
-                      : idx % 2 === 0
-                      ? 'bg-slate-950'
-                      : 'bg-slate-900/30'
-                  }`}
-                  style={isChartActive && traceColor ? { borderLeftColor: traceColor } : undefined}
-                >
-                  {/* Index */}
-                  <td className="px-3 py-1.5 border-r border-slate-800/80 text-center text-slate-500 select-none">
-                    {idx + 1}
-                  </td>
-
-                  {/* Modbus Address */}
-                  <td className="px-3 py-1.5 border-r border-slate-800/80 text-cyan-400 font-bold">
-                    {row.displayAddress}
-                  </td>
-
-                  {/* Offset */}
-                  <td className="px-3 py-1.5 border-r border-slate-800/80 text-slate-400">
-                    +{idx} ({row.address})
-                  </td>
-
-                  {/* Editable Alias */}
-                  <td className="px-3 py-1.5 border-r border-slate-800/80 font-sans text-slate-200">
-                    <input
-                      type="text"
-                      value={row.alias}
-                      placeholder="Đặt tên biến..."
-                      onChange={(e) => onUpdateAlias(row.address, e.target.value)}
-                      className="w-full bg-transparent text-slate-200 placeholder-slate-600 focus:outline-none focus:bg-slate-800 focus:px-1.5 focus:rounded border border-transparent focus:border-cyan-500 transition-all"
-                    />
-                  </td>
-
-                  {/* Value (Flash highlight on update & inline editable) */}
-                  <td
-                    onClick={() => {
-                      if (editingAddress !== row.address) {
-                        startEdit(row);
-                      }
-                    }}
-                    className={`px-4 py-1.5 border-r border-slate-800/80 text-base font-bold tracking-wide transition-all select-none ${
-                      isCoil
-                        ? row.hasValue && row.rawValue
-                          ? 'text-emerald-400 font-bold'
-                          : 'text-slate-500'
-                        : row.hasValue
-                        ? 'text-amber-300'
-                        : 'text-slate-500'
-                    } ${row.changed ? 'flash-update' : ''} ${
-                      justWrittenAddress === row.address ? 'bg-emerald-950/60 ring-1 ring-emerald-500' : ''
-                    }`}
-                    title={isCoil ? "Nhấn để bật/tắt (Toggle)" : "Nhấn để nhập giá trị mới, bấm Enter để ghi"}
-                  >
-                    {editingAddress === row.address ? (
-                      <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          autoFocus
-                          value={editInput}
-                          onChange={(e) => setEditInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              commitEdit(row.address);
-                            } else if (e.key === 'Escape') {
-                              setEditingAddress(null);
-                            }
-                          }}
-                          onBlur={() => commitEdit(row.address)}
-                          className="w-full bg-slate-900 text-amber-300 font-mono font-bold px-2 py-0.5 rounded border border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400 text-sm shadow-inner"
-                          placeholder="Nhập giá trị..."
-                        />
-                        <span className="text-[10px] text-cyan-400 font-sans font-normal shrink-0">Enter ↵</span>
-                      </div>
-                    ) : isCoil ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleCoil(row.address, Boolean(row.rawValue));
-                        }}
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-xs transition-all ${
-                          !row.hasValue
-                            ? 'bg-slate-900 text-slate-500 border border-slate-800'
-                            : row.rawValue
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
-                        }`}
-                      >
-                        {!row.hasValue ? '--' : row.rawValue ? 'ON (1)' : 'OFF (0)'}
-                      </button>
-                    ) : (
-                      <div className="flex items-center justify-between group/cell cursor-pointer">
-                        {!row.hasValue ? (
-                          <span className="text-slate-500 font-mono italic tracking-widest text-sm" title="Chưa đọc được dữ liệu hoặc đọc lỗi">
-                            --
-                          </span>
-                        ) : (
-                          <span>{row.displayValue}</span>
-                        )}
-                        <span className="opacity-0 group-hover/cell:opacity-100 text-[10px] text-cyan-400/80 font-sans font-normal ml-2 transition-opacity">
-                          Sửa ↵
-                        </span>
-                      </div>
-                    )}
-                  </td>
-
-                  {/* Raw Hex */}
-                  <td className="px-3 py-1.5 border-r border-slate-800/80 font-mono">
-                    {row.hasValue ? (
-                      <span className="text-emerald-400">{row.rawHex}</span>
-                    ) : (
-                      <span className="text-slate-600 font-mono">--</span>
-                    )}
-                  </td>
-
-                  {/* Per-register Data Format Selector */}
+              {/* Multi-Column Mode Headers vs Standard Header */}
+              {isMultiColumnLive && !isCoil ? (
+                <>
+                  <th className="px-3 py-2 border-r border-slate-800 text-amber-400 bg-slate-900/90 min-w-[90px]">
+                    Hex 16
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-emerald-400 bg-slate-900/90 min-w-[90px]">
+                    UInt16
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-green-300 bg-slate-900/90 min-w-[90px]">
+                    Int16
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-blue-400 bg-slate-900/90 min-w-[110px]">
+                    Int32 (ABCD)
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-blue-300 bg-slate-900/90 min-w-[110px]">
+                    Int32 (CDAB)
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-cyan-400 bg-slate-900/90 min-w-[120px]">
+                    Float32 (ABCD)
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-cyan-300 bg-slate-900/90 min-w-[120px]">
+                    Float32 (CDAB)
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-fuchsia-400 bg-slate-900/90 min-w-[130px]">
+                    🌊 Nước 48 (BE)
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 text-pink-400 bg-slate-900/90 min-w-[130px]">
+                    🌊 Nước BCD (12 số)
+                  </th>
+                </>
+              ) : (
+                <>
+                  <th className="px-4 py-2 border-r border-slate-800 min-w-[180px] text-amber-300 font-bold">
+                    Value (Giá Trị) <span className="text-[10px] text-slate-400 font-normal font-sans">[Click để sửa & Enter]</span>
+                  </th>
+                  <th className="px-3 py-2 border-r border-slate-800 w-24 text-emerald-400">
+                    Raw Hex
+                  </th>
                   {!isCoil && (
-                    <td className="px-2 py-1.5 border-r border-slate-800/80">
-                      <select
-                        value={row.format || ''}
-                        onChange={(e) => onUpdateFormat && onUpdateFormat(row.address, e.target.value as DataFormat)}
-                        className="w-full bg-slate-900/80 border border-slate-800 rounded px-1.5 py-0.5 text-indigo-300 text-[11px] focus:outline-none focus:border-cyan-500 font-sans cursor-pointer hover:border-slate-700"
-                        title="Định dạng giải mã riêng cho thanh ghi này"
-                      >
-                        <option value="">Theo Sheet ({sheetFormat})</option>
-                        <option value="unsigned16">Unsigned 16-bit (0..65535)</option>
-                        <option value="signed16">Signed 16-bit (-32768..32767)</option>
-                        <option value="hex16">Hex (0x...)</option>
-                        <option value="bin16">Binary (16-bit)</option>
-                        <option value="float_abcd">Float 32 (ABCD - Big Endian)</option>
-                        <option value="float_cdab">Float 32 (CDAB - Word Swap)</option>
-                        <option value="float_badc">Float 32 (BADC - Byte Swap)</option>
-                        <option value="float_dcba">Float 32 (DCBA - Little Endian)</option>
-                        <option value="long_abcd">Int 32 (ABCD Signed)</option>
-                        <option value="long_cdab">Int 32 (CDAB Signed)</option>
-                        <option value="uint32_abcd">UInt 32 (ABCD Unsigned)</option>
-                        <option value="uint32_cdab">UInt 32 (CDAB Unsigned)</option>
-                        <option value="water_48_be">🌊 Đồng Hồ Nước 48-bit (Big-Endian 3 Regs)</option>
-                        <option value="water_48_le">🌊 Đồng Hồ Nước 48-bit (Little-Endian 3 Regs)</option>
-                        <option value="water_48_bcd">🌊 Đồng Hồ Nước 48-bit BCD (12 Chữ Số)</option>
-                        <option value="int64">Int 64 (4 Regs Signed)</option>
-                        <option value="uint64">UInt 64 (4 Regs Unsigned)</option>
-                        <option value="ascii">ASCII Text (2 Ký Tự)</option>
-                      </select>
-
-                    </td>
+                    <th className="px-3 py-2 border-r border-slate-800 w-32 text-indigo-400">
+                      Giải mã (Format)
+                    </th>
                   )}
+                </>
+              )}
 
-                  {/* Unit */}
-                  <td className="px-3 py-1.5 border-r border-slate-800/80 font-sans">
-                    <input
-                      type="text"
-                      value={row.unit}
-                      placeholder="-"
-                      onChange={(e) => onUpdateUnit(row.address, e.target.value)}
-                      className="w-16 bg-transparent text-slate-300 placeholder-slate-600 focus:outline-none focus:bg-slate-800 focus:px-1 focus:rounded border border-transparent focus:border-cyan-500 text-center"
-                    />
-                  </td>
+              <th className="px-3 py-2 border-r border-slate-800 w-20 text-slate-300">
+                Đơn Vị
+              </th>
+              {!isCoil && (
+                <th className="px-3 py-2 border-r border-slate-800 w-20 text-slate-400">
+                  Scale
+                </th>
+              )}
+              <th className="px-3 py-2 border-r border-slate-800 w-28 text-slate-400">
+                Cập Nhật
+              </th>
+              <th className="px-3 py-2 w-28 text-center text-slate-400">
+                Thao Tác
+              </th>
+            </tr>
+          </thead>
 
-                  {/* Scaling factor */}
-                  {!isCoil && (
-                    <td className="px-3 py-1.5 border-r border-slate-800/80 font-sans text-slate-400">
+          {/* Table Body */}
+          <tbody className={`divide-y divide-slate-800/80 ${textClass}`}>
+            {filteredRows.length === 0 ? (
+              <tr>
+                <td colSpan={isMultiColumnLive ? 16 : 11} className="text-center py-16 text-slate-500 font-sans">
+                  <div className="flex flex-col items-center justify-center space-y-2">
+                    <SlidersHorizontal className="w-8 h-8 text-slate-600" />
+                    <p className="text-sm font-medium">
+                      {filterQuery ? 'Không tìm thấy thanh ghi phù hợp bộ lọc' : 'Chưa có dữ liệu thanh ghi'}
+                    </p>
+                    {filterQuery && (
+                      <button
+                        onClick={() => setFilterQuery('')}
+                        className="text-xs text-cyan-400 hover:underline"
+                      >
+                        Xóa bộ lọc tìm kiếm
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              filteredRows.map((row, idx) => {
+                const isTracing = activeChartAddresses?.includes(row.address);
+                const traceColor = activeChartColorMap?.[row.address];
+
+                // Value flash direction color
+                let flashBg = '';
+                if (row.changed) {
+                  if (row.changeDirection === 'up') {
+                    flashBg = 'bg-emerald-500/20 text-emerald-200 transition-colors duration-500';
+                  } else if (row.changeDirection === 'down') {
+                    flashBg = 'bg-rose-500/20 text-rose-200 transition-colors duration-500';
+                  } else {
+                    flashBg = 'bg-cyan-500/20 text-cyan-200 transition-colors duration-500';
+                  }
+                }
+
+                return (
+                  <tr
+                    key={row.address}
+                    onDoubleClick={() => onRowDoubleClick(row)}
+                    className={`hover:bg-slate-900/60 transition-colors group cursor-pointer ${
+                      idx % 2 === 0 ? 'bg-slate-950' : 'bg-slate-900/25'
+                    }`}
+                  >
+                    {/* Index & Trend Indicator */}
+                    <td className={`px-2 ${padY} border-r border-slate-800/80 text-center select-none`}>
+                      <div className="flex items-center justify-center space-x-1">
+                        {isTracing && (
+                          <span
+                            className="w-2 h-2 rounded-full ring-2 ring-slate-900 shrink-0"
+                            style={{ backgroundColor: traceColor || '#06b6d4' }}
+                            title="Đang vẽ trên biểu đồ xu hướng"
+                          />
+                        )}
+                        <span className="text-slate-600 text-[10px] font-mono">{idx + 1}</span>
+                      </div>
+                    </td>
+
+                    {/* Modbus Address */}
+                    <td className={`px-3 ${padY} border-r border-slate-800/80 text-cyan-400 font-bold`}>
+                      {row.displayAddress}
+                    </td>
+
+                    {/* Offset */}
+                    <td className={`px-3 ${padY} border-r border-slate-800/80 text-slate-400`}>
+                      +{idx} ({row.address})
+                    </td>
+
+                    {/* Editable Alias */}
+                    <td className={`px-3 ${padY} border-r border-slate-800/80 font-sans text-slate-200`}>
                       <input
-                        type="number"
-                        step="any"
-                        value={row.scaling}
-                        onChange={(e) => onUpdateScaling(row.address, parseFloat(e.target.value) || 1)}
-                        className="w-16 bg-transparent text-slate-300 focus:outline-none focus:bg-slate-800 focus:px-1 focus:rounded border border-transparent focus:border-cyan-500 text-center"
+                        type="text"
+                        value={row.alias}
+                        placeholder="Đặt tên biến..."
+                        onChange={(e) => onUpdateAlias(row.address, e.target.value)}
+                        className="w-full bg-transparent text-slate-200 placeholder-slate-600 focus:outline-none focus:bg-slate-800 focus:px-1.5 focus:rounded border border-transparent focus:border-cyan-500 transition-all"
                       />
                     </td>
-                  )}
 
-                  {/* Last Updated Timestamp */}
-                  <td className="px-3 py-1.5 border-r border-slate-800/80 text-[11px] text-slate-500 font-mono">
-                    {row.lastUpdated ? (
-                      <span className={row.hasValue ? 'text-slate-400' : 'text-slate-600 italic'}>
-                        {row.lastUpdated}
-                      </span>
+                    {/* Render Columns based on isMultiColumnLive */}
+                    {isMultiColumnLive && !isCoil ? (
+                      <>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-amber-400 font-bold`}>
+                          {row.decodedMulti?.hex ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-emerald-400 font-semibold ${flashBg}`}>
+                          {row.decodedMulti?.uint16 ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-green-300`}>
+                          {row.decodedMulti?.int16 ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-blue-400`}>
+                          {row.decodedMulti?.int32_abcd ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-blue-300`}>
+                          {row.decodedMulti?.int32_cdab ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-cyan-400 font-bold`}>
+                          {row.decodedMulti?.float_abcd ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-cyan-300`}>
+                          {row.decodedMulti?.float_cdab ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-fuchsia-400 font-bold`}>
+                          {row.decodedMulti?.water_48_be ?? '--'}
+                        </td>
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 text-pink-400 font-bold`}>
+                          {row.decodedMulti?.water_48_bcd ?? '--'}
+                        </td>
+                      </>
                     ) : (
-                      '--'
-                    )}
-                  </td>
+                      <>
+                        {/* Standard Value with Flash Glow */}
+                        <td
+                          onClick={() => {
+                            if (editingAddress !== row.address) {
+                              startEdit(row);
+                            }
+                          }}
+                          className={`px-4 ${padY} border-r border-slate-800/80 text-base font-bold tracking-wide transition-all select-none ${
+                            isCoil
+                              ? row.hasValue && row.rawValue
+                                ? 'text-emerald-400 font-bold'
+                                : 'text-slate-500'
+                              : row.hasValue
+                              ? 'text-amber-300'
+                              : 'text-slate-500'
+                          } ${flashBg} ${
+                            justWrittenAddress === row.address ? 'bg-emerald-950/60 ring-1 ring-emerald-500' : ''
+                          }`}
+                          title={isCoil ? 'Nhấn để bật/tắt tiếp điểm' : 'Nhấn để nhập giá trị mới, bấm Enter để ghi'}
+                        >
+                          {editingAddress === row.address ? (
+                            <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="text"
+                                autoFocus
+                                value={editInput}
+                                onChange={(e) => setEditInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    commitEdit(row.address);
+                                  } else if (e.key === 'Escape') {
+                                    setEditingAddress(null);
+                                  }
+                                }}
+                                onBlur={() => commitEdit(row.address)}
+                                className="w-full bg-slate-900 text-amber-300 font-mono font-bold px-2 py-0.5 rounded border border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400 text-sm shadow-inner"
+                                placeholder="Nhập giá trị..."
+                              />
+                              <span className="text-[10px] text-cyan-400 font-sans font-normal shrink-0">Enter ↵</span>
+                            </div>
+                          ) : isCoil ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleCoil(row.address, Boolean(row.rawValue));
+                              }}
+                              className={`inline-flex items-center px-2 py-0.5 rounded text-xs transition-all ${
+                                !row.hasValue
+                                  ? 'bg-slate-900 text-slate-500 border border-slate-800'
+                                  : row.rawValue
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                  : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                              }`}
+                            >
+                              {!row.hasValue ? '--' : row.rawValue ? 'ON (1)' : 'OFF (0)'}
+                            </button>
+                          ) : (
+                            <div className="flex items-center justify-between group/cell cursor-pointer">
+                              {!row.hasValue ? (
+                                <span className="text-slate-500 font-mono italic tracking-widest text-sm" title="Chưa đọc được dữ liệu hoặc đọc lỗi">
+                                  --
+                                </span>
+                              ) : (
+                                <div className="flex items-center gap-1.5">
+                                  <span>{row.displayValue}</span>
+                                  {/* Small direction trend indicator */}
+                                  {row.changed && row.changeDirection === 'up' && (
+                                    <span className="text-[10px] text-emerald-400 flex items-center font-normal">
+                                      <ArrowUp className="w-3 h-3" />
+                                    </span>
+                                  )}
+                                  {row.changed && row.changeDirection === 'down' && (
+                                    <span className="text-[10px] text-rose-400 flex items-center font-normal">
+                                      <ArrowDown className="w-3 h-3" />
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              <span className="opacity-0 group-hover/cell:opacity-100 text-[10px] text-cyan-400/80 font-sans font-normal ml-2 transition-opacity">
+                                Sửa ↵
+                              </span>
+                            </div>
+                          )}
+                        </td>
 
-                  {/* Actions: Trend Chart & Write Dialog */}
-                  <td className="px-2 py-1.5 text-center flex items-center justify-center space-x-1">
-                    {/* Open / Toggle Realtime Trend Chart */}
-                    {onOpenChart && !isCoil && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenChart(row);
-                        }}
-                        className={`p-1 rounded transition-all shadow-sm ${
-                          isChartActive
-                            ? 'text-white ring-1 ring-white/30'
-                            : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-cyan-300'
-                        }`}
-                        style={isChartActive ? { backgroundColor: traceColor || '#0891b2' } : undefined}
-                        title={
-                          isChartActive
-                            ? "Đang vẽ trên biểu đồ xu hướng. Nhấp để bỏ theo dõi"
-                            : "Thêm vào biểu đồ xu hướng thời gian thực đa kênh"
-                        }
-                      >
-                        <LineChart className="w-3.5 h-3.5" />
-                      </button>
+                        {/* Raw Hex */}
+                        <td className={`px-3 ${padY} border-r border-slate-800/80 font-mono`}>
+                          {row.hasValue ? (
+                            <span className="text-emerald-400">{row.rawHex}</span>
+                          ) : (
+                            <span className="text-slate-600 font-mono">--</span>
+                          )}
+                        </td>
+
+                        {/* Format Dropdown */}
+                        {!isCoil && (
+                          <td className={`px-2 ${padY} border-r border-slate-800/80`}>
+                            <select
+                              value={row.format || ''}
+                              onChange={(e) => onUpdateFormat && onUpdateFormat(row.address, e.target.value as DataFormat)}
+                              className="w-full bg-slate-900/80 border border-slate-800 rounded px-1.5 py-0.5 text-indigo-300 text-[11px] focus:outline-none focus:border-cyan-500 font-sans cursor-pointer hover:border-slate-700"
+                              title="Định dạng giải mã riêng cho thanh ghi này"
+                            >
+                              <option value="">Theo Sheet ({sheetFormat})</option>
+                              <option value="unsigned16">Unsigned 16-bit (0..65535)</option>
+                              <option value="signed16">Signed 16-bit (-32768..32767)</option>
+                              <option value="hex16">Hex (0x...)</option>
+                              <option value="bin16">Binary (16-bit)</option>
+                              <option value="float_abcd">Float 32 (ABCD - Big Endian)</option>
+                              <option value="float_cdab">Float 32 (CDAB - Word Swap)</option>
+                              <option value="float_badc">Float 32 (BADC - Byte Swap)</option>
+                              <option value="float_dcba">Float 32 (DCBA - Little Endian)</option>
+                              <option value="long_abcd">Int 32 (ABCD Signed)</option>
+                              <option value="long_cdab">Int 32 (CDAB Signed)</option>
+                              <option value="uint32_abcd">UInt 32 (ABCD Unsigned)</option>
+                              <option value="uint32_cdab">UInt 32 (CDAB Unsigned)</option>
+                              <option value="water_48_be">🌊 Đồng Hồ Nước 48-bit (BE)</option>
+                              <option value="water_48_le">🌊 Đồng Hồ Nước 48-bit (LE)</option>
+                              <option value="water_48_bcd">🌊 Đồng Hồ Nước 48-bit BCD</option>
+                              <option value="int64">Int 64 (4 Regs Signed)</option>
+                              <option value="uint64">UInt 64 (4 Regs Unsigned)</option>
+                              <option value="ascii">ASCII Text (2 Ký Tự)</option>
+                            </select>
+                          </td>
+                        )}
+                      </>
                     )}
 
-                    {/* Advanced Write Modal */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRowDoubleClick(row);
-                      }}
-                      className="px-2 py-0.5 text-[11px] rounded bg-slate-800 hover:bg-cyan-600 text-slate-300 hover:text-white border border-slate-700 hover:border-cyan-500 transition-all font-sans"
-                      title="Mở hộp thoại ghi nâng cao"
-                    >
-                      Write...
-                    </button>
-                  </td>
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </table>
+                    {/* Unit */}
+                    <td className={`px-3 ${padY} border-r border-slate-800/80 font-sans`}>
+                      <input
+                        type="text"
+                        value={row.unit}
+                        placeholder="-"
+                        onChange={(e) => onUpdateUnit(row.address, e.target.value)}
+                        className="w-16 bg-transparent text-slate-300 placeholder-slate-600 focus:outline-none focus:bg-slate-800 focus:px-1 focus:rounded border border-transparent focus:border-cyan-500 text-center"
+                      />
+                    </td>
+
+                    {/* Scaling */}
+                    {!isCoil && (
+                      <td className={`px-3 ${padY} border-r border-slate-800/80 font-sans text-slate-400`}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={row.scaling}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            onUpdateScaling(row.address, isNaN(val) ? 1 : val);
+                          }}
+                          className="w-16 bg-transparent text-slate-400 focus:text-slate-200 focus:outline-none focus:bg-slate-800 focus:px-1 focus:rounded border border-transparent focus:border-cyan-500 text-center font-mono"
+                        />
+                      </td>
+                    )}
+
+                    {/* Last Updated */}
+                    <td className={`px-3 ${padY} border-r border-slate-800/80 text-[11px] font-mono text-slate-400 whitespace-nowrap`}>
+                      {row.lastUpdated ? (
+                        <span className="text-slate-300">{row.lastUpdated}</span>
+                      ) : (
+                        <span className="text-slate-600">--</span>
+                      )}
+                    </td>
+
+                    {/* Action buttons (Chart Trace & Edit) */}
+                    <td className={`px-3 ${padY} text-center select-none`}>
+                      <div className="flex items-center justify-center space-x-1">
+                        {onOpenChart && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenChart(row);
+                            }}
+                            className={`p-1 rounded transition-colors ${
+                              isTracing
+                                ? 'bg-cyan-950 text-cyan-300 ring-1 ring-cyan-500'
+                                : 'text-slate-500 hover:text-cyan-400 hover:bg-slate-800'
+                            }`}
+                            title={isTracing ? 'Bỏ theo dõi khỏi Biểu đồ xu hướng' : 'Theo dõi biến này trên Biểu đồ xu hướng'}
+                          >
+                            <LineChart className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => onRowDoubleClick(row)}
+                          className="text-slate-500 hover:text-slate-200 p-1 rounded hover:bg-slate-800 transition-colors"
+                          title="Mở hộp thoại ghi chi tiết (Write Register / Coil)"
+                        >
+                          <SlidersHorizontal className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };
