@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nxchieu-modbus-tool/pkg/modbus"
+	"nxchieu-modbus-tool/pkg/sniffer"
 	"nxchieu-modbus-tool/pkg/web"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -18,7 +19,8 @@ type App struct {
 	ctx          context.Context
 	mu           sync.Mutex
 	sessMgr      *modbus.SessionManager
-	defPort      *modbus.ModbusClientWrapper
+	sniffer      *sniffer.Engine
+	capture      *sniffer.SessionManager
 	remoteServer *web.RemoteServer
 
 	pendingWrites map[string]chan string // remote writes awaiting the desktop UI, by request id
@@ -26,9 +28,8 @@ type App struct {
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	app := &App{
-		defPort: modbus.NewModbusClientWrapper(),
-	}
+	app := &App{sniffer: sniffer.NewEngine(50000)}
+	app.capture = sniffer.NewSessionManager(app.sniffer)
 
 	app.remoteServer = web.NewRemoteServer(
 		app.handleRemoteWrite,
@@ -41,6 +42,18 @@ func NewApp() *App {
 
 	app.sessMgr = modbus.NewSessionManager(
 		func(sessionID string, res modbus.PollResult) {
+			// Feed the shared analyzer before notifying either UI. The current master library does
+			// not expose its transport, so these frames are explicitly marked reconstructed.
+			if res.RawTx != "" && res.RawRx != "" {
+				_ = app.sniffer.AddHexPair(sessionID, res.RawTx, res.RawRx, sniffer.QualityReconstructed, time.Duration(res.LatencyMs)*time.Millisecond)
+			} else if res.RawTx != "" {
+				frame, err := app.sniffer.AddHex(sessionID, sniffer.DirectionMasterToSlave, res.RawTx, sniffer.QualityReconstructed)
+				if err == nil && res.Error != "" {
+					app.sniffer.MarkTimedOut(frame.Sequence)
+				}
+			} else if res.RawRx != "" {
+				_, _ = app.sniffer.AddHex(sessionID, sniffer.DirectionSlaveToMaster, res.RawRx, sniffer.QualityReconstructed)
+			}
 			if app.ctx != nil {
 				runtime.EventsEmit(app.ctx, "poll-data", res)
 			}
@@ -49,6 +62,11 @@ func NewApp() *App {
 			}
 		},
 		func(act modbus.SlaveActivityEvent) {
+			// Some slave transports can provide the observed request bytes. Keep them in the same
+			// analyzer pipeline; empty HexRaw events still update the existing activity UI only.
+			if act.HexRaw != "" {
+				_, _ = app.sniffer.AddHex(act.SessionID, sniffer.DirectionMasterToSlave, act.HexRaw, sniffer.QualityWire)
+			}
 			if app.ctx != nil {
 				runtime.EventsEmit(app.ctx, "slave-activity", act)
 			}
@@ -132,9 +150,18 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
+func (a *App) shutdown(ctx context.Context) {
+	if a.capture != nil {
+		a.capture.Stop()
+	}
+	if a.remoteServer != nil {
+		a.remoteServer.Stop()
+	}
+}
+
 // ListSerialPorts returns available COM ports on the system.
 func (a *App) ListSerialPorts() []modbus.SerialPortDetail {
-	return a.defPort.ListSerialPorts()
+	return modbus.ListSerialPorts()
 }
 
 // CloseSession closes and frees resources associated with a tab session.
@@ -146,81 +173,51 @@ func (a *App) CloseSession(sessionID string) {
 
 // SessionConnect connects a tab session's Master client to Serial, TCP, RTU over TCP, or Simulator.
 func (a *App) SessionConnect(sessionID string, config modbus.ConnectionConfig) (string, error) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.MasterConnect(sessionID, config)
 }
 
 // SessionDisconnect disconnects a tab session's Master client.
 func (a *App) SessionDisconnect(sessionID string) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.MasterDisconnect(sessionID)
 }
 
 // SessionStartPolling begins polling on a session.
 func (a *App) SessionStartPolling(sessionID string, def modbus.PollDefinition) error {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.MasterStartPolling(sessionID, def)
 }
 
 // SessionStopPolling pauses polling on a session.
 func (a *App) SessionStopPolling(sessionID string) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.MasterStopPolling(sessionID)
 }
 
 // SessionReadOnce executes a single read on a session.
 func (a *App) SessionReadOnce(sessionID string, def modbus.PollDefinition) modbus.PollResult {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.MasterReadOnce(sessionID, def)
 }
 
 // SessionWriteRegister writes a 16-bit register on a session.
 func (a *App) SessionWriteRegister(sessionID string, param modbus.WriteRegisterParam) error {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.MasterWriteRegister(sessionID, param)
 }
 
 // SessionWriteRegisters writes multiple 16-bit registers on a session (FC 16).
 func (a *App) SessionWriteRegisters(sessionID string, param modbus.WriteRegistersParam) error {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.MasterWriteRegisters(sessionID, param)
 }
 
 // SessionWriteCoil writes a single coil on a session.
 func (a *App) SessionWriteCoil(sessionID string, param modbus.WriteCoilParam) error {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.MasterWriteCoil(sessionID, param)
 }
 
 // SessionResetCounters zeroes a session's TX/error counters (the toolbar's Clear counters).
 func (a *App) SessionResetCounters(sessionID string) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.MasterResetCounters(sessionID)
 }
 
 // SessionGetConnectionStatus returns true if session master is connected.
 func (a *App) SessionGetConnectionStatus(sessionID string) bool {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	sess := a.sessMgr.GetOrCreateSession(sessionID, modbus.RoleMaster)
 	return sess.Master.IsConnected()
 }
@@ -229,123 +226,43 @@ func (a *App) SessionGetConnectionStatus(sessionID string) bool {
 
 // SlaveStart launches the Modbus Slave server for a session.
 func (a *App) SlaveStart(sessionID string, config modbus.SlaveConfig) error {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.SlaveStart(sessionID, config)
 }
 
 // SlaveStop stops the Modbus Slave server for a session.
 func (a *App) SlaveStop(sessionID string) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.SlaveStop(sessionID)
-}
-
-// SlaveIsListening returns true if slave server is active.
-func (a *App) SlaveIsListening(sessionID string) bool {
-	if sessionID == "" {
-		sessionID = "default"
-	}
-	sess := a.sessMgr.GetOrCreateSession(sessionID, modbus.RoleSlave)
-	return sess.Slave.IsListening()
 }
 
 // SlaveGetSlice reads memory registers or coils from a slave session to render on the UI.
 func (a *App) SlaveGetSlice(sessionID string, table string, startAddr uint16, qty uint16) modbus.SlaveMemorySlice {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.SlaveGetSlice(sessionID, table, startAddr, qty)
 }
 
 // SlaveSetRegister modifies a holding or input register in the slave memory table.
 func (a *App) SlaveSetRegister(sessionID string, table string, addr uint16, val uint16) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.SlaveSetRegister(sessionID, table, addr, val)
 }
 
 // SlaveSetCoil modifies a coil or discrete input in the slave memory table.
 func (a *App) SlaveSetCoil(sessionID string, table string, addr uint16, val bool) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.SlaveSetCoil(sessionID, table, addr, val)
 }
 
 // SlaveStartSim triggers background automated value fluctuation.
 func (a *App) SlaveStartSim(sessionID string, config modbus.SimulationConfig) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.SlaveStartSimulation(sessionID, config)
 }
 
 // SlaveStopSim halts background simulation.
 func (a *App) SlaveStopSim(sessionID string) {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	a.sessMgr.SlaveStopSimulation(sessionID)
-}
-
-// --- Backward Compatibility Single-Session Methods ---
-
-// Connect connects default master.
-func (a *App) Connect(config modbus.ConnectionConfig) (string, error) {
-	return a.SessionConnect("default", config)
-}
-
-// Disconnect disconnects default master.
-func (a *App) Disconnect() {
-	a.SessionDisconnect("default")
-}
-
-// GetConnectionStatus returns status for default master.
-func (a *App) GetConnectionStatus() bool {
-	return a.SessionGetConnectionStatus("default")
-}
-
-// StartPolling starts polling on default master.
-func (a *App) StartPolling(def modbus.PollDefinition) error {
-	return a.SessionStartPolling("default", def)
-}
-
-// StopPolling stops polling on default master.
-func (a *App) StopPolling() {
-	a.SessionStopPolling("default")
-}
-
-// ReadOnce reads once on default master.
-func (a *App) ReadOnce(def modbus.PollDefinition) modbus.PollResult {
-	return a.SessionReadOnce("default", def)
-}
-
-// WriteSingleRegister writes on default master.
-func (a *App) WriteSingleRegister(param modbus.WriteRegisterParam) error {
-	return a.SessionWriteRegister("default", param)
-}
-
-// WriteRegisters writes multiple registers on default master.
-func (a *App) WriteRegisters(param modbus.WriteRegistersParam) error {
-	return a.SessionWriteRegisters("default", param)
-}
-
-// WriteSingleCoil writes on default master.
-func (a *App) WriteSingleCoil(param modbus.WriteCoilParam) error {
-	return a.SessionWriteCoil("default", param)
 }
 
 // --- Diagnostic & Scanning Tools ---
 
 // ScanSlaveIDs scans a range of slave IDs [startID, endID] on the given session.
 func (a *App) ScanSlaveIDs(sessionID string, startID, endID uint8, timeoutMs uint) []modbus.SlaveScanItem {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.ScanSlaveIDs(sessionID, startID, endID, timeoutMs)
 }
 
@@ -356,10 +273,87 @@ func (a *App) AutoDetectBaudrate(port string, slaveID uint8, bauds []uint, parit
 
 // ScanRegisters scans a range of register addresses to inspect availability.
 func (a *App) ScanRegisters(sessionID string, fc uint8, startAddr, endAddr uint16) []modbus.RegisterScanItem {
-	if sessionID == "" {
-		sessionID = "default"
-	}
 	return a.sessMgr.ScanRegisters(sessionID, fc, startAddr, endAddr)
+}
+
+// GetSnifferSnapshot returns a bounded page of recent decoded frames and the accumulated
+// bus/device health summary. A limit of zero returns every frame currently retained.
+func (a *App) GetSnifferSnapshot(limit int) sniffer.Snapshot {
+	return a.sniffer.Snapshot(limit)
+}
+
+// ClearSniffer clears captured frames, pending transactions and learned health statistics.
+func (a *App) ClearSniffer() {
+	a.sniffer.Clear()
+}
+
+// SetSnifferBaselineMode toggles between baseline learning ("learn"), monitoring ("monitor") and disabled ("off").
+func (a *App) SetSnifferBaselineMode(mode string) sniffer.BaselineProfile {
+	return a.sniffer.SetBaselineMode(sniffer.BaselineMode(mode))
+}
+
+// GetSnifferBaseline returns the current baseline profile including median poll intervals and P95 latencies.
+func (a *App) GetSnifferBaseline() sniffer.BaselineProfile {
+	return a.sniffer.GetBaseline()
+}
+
+// ResetSnifferBaseline clears all learned baseline statistics.
+func (a *App) ResetSnifferBaseline() sniffer.BaselineProfile {
+	return a.sniffer.ResetBaseline()
+}
+
+// StartSniffer starts a TCP proxy, RTU-over-TCP proxy or read-only serial capture session.
+func (a *App) StartSniffer(config sniffer.CaptureConfig) (sniffer.CaptureStatus, error) {
+	return a.capture.Start(config)
+}
+
+func (a *App) StopSniffer() sniffer.CaptureStatus {
+	return a.capture.Stop()
+}
+
+func (a *App) GetSnifferStatus() sniffer.CaptureStatus {
+	return a.capture.Status()
+}
+
+// SaveSnifferCapture opens a native save dialog and writes the bounded capture as .nxcap JSON.
+func (a *App) SaveSnifferCapture() (string, error) {
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Lưu Modbus capture",
+		DefaultFilename: "modbus-capture.nxcap",
+		Filters:         []runtime.FileFilter{{DisplayName: "NXChieu Capture (*.nxcap)", Pattern: "*.nxcap"}},
+	})
+	if err != nil || path == "" {
+		return path, err
+	}
+	return path, sniffer.SaveCapture(path, a.sniffer.Snapshot(0))
+}
+
+func (a *App) OpenSnifferCapture() (string, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Mở Modbus capture",
+		Filters: []runtime.FileFilter{{DisplayName: "NXChieu Capture (*.nxcap)", Pattern: "*.nxcap"}},
+	})
+	if err != nil || path == "" {
+		return path, err
+	}
+	frames, err := sniffer.LoadCapture(path)
+	if err != nil {
+		return path, err
+	}
+	a.sniffer.Replace(frames)
+	return path, nil
+}
+
+func (a *App) ExportSnifferCSV() (string, error) {
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Xuất báo cáo Modbus CSV",
+		DefaultFilename: "modbus-report.csv",
+		Filters:         []runtime.FileFilter{{DisplayName: "CSV (*.csv)", Pattern: "*.csv"}},
+	})
+	if err != nil || path == "" {
+		return path, err
+	}
+	return path, sniffer.ExportCSV(path, a.sniffer.Snapshot(0))
 }
 
 // --- Web Remote Server Operations ---
@@ -390,4 +384,3 @@ func (a *App) UpdateRemoteServerState(state map[string]interface{}) {
 		a.remoteServer.BroadcastState(state)
 	}
 }
-

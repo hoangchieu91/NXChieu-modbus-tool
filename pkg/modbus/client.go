@@ -57,7 +57,7 @@ func NewModbusClientWrapper() *ModbusClientWrapper {
 }
 
 // ListSerialPorts returns all physical or virtual COM ports available on the host OS.
-func (m *ModbusClientWrapper) ListSerialPorts() []SerialPortDetail {
+func ListSerialPorts() []SerialPortDetail {
 	ports, err := enumerator.GetDetailedPortsList()
 	if err != nil {
 		return []SerialPortDetail{
@@ -89,21 +89,6 @@ func (m *ModbusClientWrapper) ListSerialPorts() []SerialPortDetail {
 		})
 	}
 	return results
-}
-
-func (m *ModbusClientWrapper) formatPortName(port string) string {
-	p := strings.TrimSpace(port)
-	if idx := strings.Index(p, " "); idx != -1 {
-		p = p[:idx]
-	}
-	p = strings.TrimSpace(p)
-
-	if strings.HasPrefix(strings.ToUpper(p), "COM") {
-		if !strings.HasPrefix(p, `\\.\`) {
-			return `\\.\` + strings.ToUpper(p)
-		}
-	}
-	return p
 }
 
 // Connect establishes a Modbus connection to Serial RTU, TCP, or the built-in simulator.
@@ -185,16 +170,10 @@ func (m *ModbusClientWrapper) Connect(config ConnectionConfig) (string, error) {
 		if config.Port == "" {
 			return "", fmt.Errorf("Serial port cannot be empty")
 		}
-		formattedPort := m.formatPortName(config.Port)
+		formattedPort := normalizeSerialPort(config.Port)
 		clientURL = fmt.Sprintf("rtu://%s", formattedPort)
 
-		var parity uint = simonmodbus.PARITY_NONE
-		switch strings.ToLower(config.Parity) {
-		case "even":
-			parity = simonmodbus.PARITY_EVEN
-		case "odd":
-			parity = simonmodbus.PARITY_ODD
-		}
+		parity := libParity(config.Parity)
 
 		baud := config.BaudRate
 		if baud == 0 {

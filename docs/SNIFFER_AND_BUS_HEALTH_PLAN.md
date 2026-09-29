@@ -2,6 +2,40 @@
 
 > Tài liệu định hướng dùng chung cho các lập trình viên và coding agent (Codex, Claude,
 > Antigravity...). Hãy đọc tài liệu này trước khi thiết kế hoặc triển khai tính năng sniffer.
+>
+> Hướng dẫn vận hành cho người dùng nằm tại `docs/SNIFFER_USER_GUIDE.md`.
+
+## Trạng thái triển khai (cập nhật 2026-09-29)
+
+Đã có vertical slice hoàn chỉnh của Phase 0, Phase 1, Phase 2, Phase 3 và Phase 4:
+
+- `pkg/sniffer` chứa schema, decoder RTU/TCP, request-response correlation, bounded ring
+  buffer, timeout và health snapshot.
+- Decoder hỗ trợ đầy đủ FC01–06, FC07 (Read Exception Status), FC08 (Diagnostics), FC15,
+  FC16, FC17 (Report Server ID), FC22 (Mask Write Register), FC23 (Read/Write Multiple Registers),
+  FC43/14 (Read Device Identification), exception response, kiểm tra CRC RTU và MBAP TCP.
+- Internal Master capture đã đưa `RawTx`/`RawRx` vào pipeline với nhãn
+  `capture_quality=reconstructed`; Slave activity dùng `wire` khi có raw frame.
+- Đã có chế độ Baseline Learn & Monitor: học chu kỳ poll median, P50/P95 latency, function code
+  chuẩn của từng Unit ID; phát hiện bất thường `RTU_POLL_PERIOD_DRIFT`, `MODBUS_SLOW_RESPONSE`,
+  `BASELINE_NEW_DEVICE`, `BASELINE_UNEXPECTED_FC`.
+- Wails đã có API `GetSnifferSnapshot`, `ClearSniffer`, `SetSnifferBaselineMode`, `GetSnifferBaseline`,
+  `ResetSnifferBaseline`.
+- Giao diện `Protocol Analyzer` có bus health, baseline monitor badge & toggle, danh sách thiết bị
+  kèm chỉ số baseline, frame table, bộ lọc, raw hex, decoded fields chi tiết cho FC mở rộng và diagnostics.
+- Đã có Modbus TCP proxy và RTU-over-TCP proxy chuyển tiếp nguyên byte hai chiều, hỗ trợ
+  nhiều kết nối, stream framing và lifecycle start/stop.
+- Đã có Passive Serial RTU qua COM riêng, gap framing, CRC resynchronization và suy luận chiều.
+- Đã có chế độ xem transaction, lưu/mở `.nxcap` có schema version và xuất báo cáo CSV.
+- Diagnostics đã nhận biết timeout, orphan response, retry, slow response, exception, lệnh ghi,
+  CRC/MBAP sai, poll period drift, unexpected FC, new device; device state có `not_polled` và `offline`.
+- Đã có unit test và golden test đầy đủ cho decode mở rộng, baseline learn/monitor, correlation,
+  latency, timeout, CRC và giới hạn ring buffer (100% PASS).
+- Đã có integration test xác nhận TCP proxy không sửa byte và capture đủ hai chiều.
+
+Các phần còn phụ thuộc hoặc cần phát triển tiếp: passive TCP/Npcap (cần driver Npcap trên máy),
+device/register profile file, PCAPNG và báo cáo theo ca.
+Các phần này không chặn việc dùng proxy hoặc adapter Serial riêng để theo dõi và chẩn đoán hệ thống thực tế.
 
 ## 1. Bối cảnh sử dụng
 
@@ -756,4 +790,3 @@ Mỗi quyết định dưới đây nên được ghi vào ADR hoặc cập nh�
 - Không tuyên bố đo lỗi vật lý RS485 từ dữ liệu giao thức nếu không có phần cứng đo.
 - Mọi parser phải xử lý input thù địch mà không panic hoặc cấp phát mất kiểm soát.
 - Ưu tiên fixture, golden test và fuzz test trước khi tối ưu giao diện.
-

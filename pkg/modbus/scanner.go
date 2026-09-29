@@ -310,58 +310,36 @@ func AutoDetectBaudrate(port string, slaveID uint8, bauds []uint, parities []str
 		return results
 	}
 
-	formattedPort := port
-	p := strings.TrimSpace(port)
-	if idx := strings.Index(p, " "); idx != -1 {
-		p = p[:idx]
-	}
-	p = strings.TrimSpace(p)
-	if strings.HasPrefix(strings.ToUpper(p), "COM") && !strings.HasPrefix(p, `\\.\`) {
-		formattedPort = `\\.\` + strings.ToUpper(p)
-	}
+	formattedPort := normalizeSerialPort(port)
 
 	for _, baud := range bauds {
 		for _, parityStr := range parities {
-			var parity uint = simonmodbus.PARITY_NONE
-			switch strings.ToLower(parityStr) {
-			case "even":
-				parity = simonmodbus.PARITY_EVEN
-			case "odd":
-				parity = simonmodbus.PARITY_ODD
+			add := func(success bool, latency uint64, detail string) {
+				results = append(results, BaudScanItem{
+					BaudRate: baud, Parity: parityStr, StopBits: 1,
+					Success: success, LatencyMs: latency, Detail: detail,
+				})
 			}
 
-			clientConfig := simonmodbus.ClientConfiguration{
+			client, err := simonmodbus.NewClient(&simonmodbus.ClientConfiguration{
 				URL:      fmt.Sprintf("rtu://%s", formattedPort),
 				Speed:    baud,
 				DataBits: 8,
-				Parity:   parity,
+				Parity:   libParity(parityStr),
 				StopBits: 1,
 				Timeout:  160 * time.Millisecond,
-			}
-
-			client, err := simonmodbus.NewClient(&clientConfig)
+			})
 			if err != nil {
-				results = append(results, BaudScanItem{
-					BaudRate: baud,
-					Parity:   parityStr,
-					StopBits: 1,
-					Success:  false,
-					Detail:   fmt.Sprintf("Config error: %v", err),
-				})
+				add(false, 0, fmt.Sprintf("Config error: %v", err))
 				continue
 			}
 
 			startTime := time.Now()
-			openErr := client.Open()
-			if openErr != nil {
-				results = append(results, BaudScanItem{
-					BaudRate: baud,
-					Parity:   parityStr,
-					StopBits: 1,
-					Success:  false,
-					Detail:   fmt.Sprintf("Open error: %v", openErr),
-				})
-				continue
+			if err := client.Open(); err != nil {
+				// The port itself cannot be opened (missing, or held by a connected tab); other
+				// baud/parity combinations would fail the same way.
+				add(false, 0, fmt.Sprintf("Open error: %v", err))
+				return results
 			}
 
 			client.SetUnitId(slaveID)
@@ -370,35 +348,15 @@ func AutoDetectBaudrate(port string, slaveID uint8, bauds []uint, parities []str
 			latency := uint64(time.Since(startTime).Milliseconds())
 			_ = client.Close()
 
-			if readErr == nil {
-				results = append(results, BaudScanItem{
-					BaudRate:  baud,
-					Parity:    parityStr,
-					StopBits:  1,
-					Success:   true,
-					LatencyMs: latency,
-					Detail:    fmt.Sprintf("Success (Reg 0 = %d)", val),
-				})
+			switch {
+			case readErr == nil:
+				add(true, latency, fmt.Sprintf("Success (Reg 0 = %d)", val))
 				return results // Found matched baudrate!
-			} else if isModbusExceptionError(readErr) {
-				results = append(results, BaudScanItem{
-					BaudRate:  baud,
-					Parity:    parityStr,
-					StopBits:  1,
-					Success:   true,
-					LatencyMs: latency,
-					Detail:    fmt.Sprintf("Found (Exception: %s)", readErr.Error()),
-				})
+			case isModbusExceptionError(readErr):
+				add(true, latency, fmt.Sprintf("Found (Exception: %s)", readErr.Error()))
 				return results // Also valid device response!
-			} else {
-				results = append(results, BaudScanItem{
-					BaudRate:  baud,
-					Parity:    parityStr,
-					StopBits:  1,
-					Success:   false,
-					LatencyMs: latency,
-					Detail:    "No response (Timeout)",
-				})
+			default:
+				add(false, latency, "No response (Timeout)")
 			}
 		}
 	}

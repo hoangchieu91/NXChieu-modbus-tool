@@ -84,6 +84,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [regScanning, setRegScanning] = useState<boolean>(false);
   const [regResults, setRegResults] = useState<RegisterScanItem[]>([]);
   const [multiRows, setMultiRows] = useState<MultiColumnDecoded[]>([]);
+  // Range of the last completed scan; "apply" uses it, not the (possibly edited) form fields.
+  const [scannedRange, setScannedRange] = useState<{ fc: number; start: number; end: number } | null>(null);
 
   const handleToggleRegAddrMode = (mode: 'dec' | 'hex') => {
     if (mode === regAddrMode) return;
@@ -251,13 +253,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     try {
       const start = startParsed.value;
       const end = Math.max(start, endParsed.value);
-      const results = await scanRegisters(activeSession.id, regFc, start, end);
+      const fc = regFc;
+      const results = await scanRegisters(activeSession.id, fc, start, end);
       setRegResults(results);
+      setScannedRange(results.length > 0 ? { fc, start, end: results[results.length - 1].address } : null);
 
       // Generate multi-column rows from registers
       const regValues = results.map((r) => (r.valid ? r.value : 0));
       const rows: MultiColumnDecoded[] = results.map((r, i) =>
-        decodeAllColumns(regValues, i, r.address, regFc)
+        decodeAllColumns(regValues, i, r.address, fc)
       );
       setMultiRows(rows);
     } catch (err) {
@@ -1000,10 +1004,10 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     </button>
                   )}
 
-                  {multiRows.length > 0 && onApplyRange && (
+                  {multiRows.length > 0 && onApplyRange && scannedRange && (
                     <button
                       onClick={() => {
-                        onApplyRange(regFc, regStart, Math.min(100, regEnd - regStart + 1));
+                        onApplyRange(scannedRange.fc, scannedRange.start, Math.min(100, scannedRange.end - scannedRange.start + 1));
                         onClose();
                       }}
                       className="flex items-center gap-1.5 px-3 py-2 bg-cyan-900/40 hover:bg-cyan-800/60 text-cyan-300 border border-cyan-700/50 rounded-lg text-xs font-semibold transition"

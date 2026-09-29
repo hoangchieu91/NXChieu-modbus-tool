@@ -92,3 +92,9 @@ func BuildRTUCoilResponse(slaveID uint8, functionCode uint8, coils []bool) []byt
 
 	return append(frame, crcBytes...)
 }
+
+// BuildRTUExceptionResponse builds an RTU exception frame: unit, FC|0x80, code, CRC.
+func BuildRTUExceptionResponse(slaveID uint8, functionCode uint8, exceptionCode byte) []byte {
+	frame := []byte{slaveID, functionCode | 0x80, exceptionCode}
+	return binary.LittleEndian.AppendUint16(frame, CRC16Modbus(frame))
+}

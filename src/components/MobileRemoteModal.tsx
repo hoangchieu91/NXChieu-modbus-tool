@@ -405,6 +405,8 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setAllowWrite(!allowWrite)}
+                      // Applied when the server starts; toggling while running would only change the label.
+                      disabled={status?.is_running}
                       className={`w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-semibold border transition ${
                         allowWrite
                           ? 'bg-emerald-950/40 border-emerald-700 text-emerald-400'

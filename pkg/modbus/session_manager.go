@@ -43,8 +43,17 @@ func NewSessionManager(onPollData func(string, PollResult), onSlaveAct func(Slav
 	}
 }
 
+// normalizeSessionID maps an empty ID to "default" (old single-session callers).
+func normalizeSessionID(id string) string {
+	if id == "" {
+		return "default"
+	}
+	return id
+}
+
 // GetOrCreateSession retrieves an existing session or provisions a new one.
 func (sm *SessionManager) GetOrCreateSession(sessionID string, role SessionRole) *EngineSession {
+	sessionID = normalizeSessionID(sessionID)
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -71,6 +80,7 @@ func (sm *SessionManager) GetOrCreateSession(sessionID string, role SessionRole)
 
 // CloseSession gracefully tears down a session and releases serial/socket resources.
 func (sm *SessionManager) CloseSession(sessionID string) {
+	sessionID = normalizeSessionID(sessionID)
 	sm.mu.Lock()
 	sess, exists := sm.sessions[sessionID]
 	if exists {
@@ -204,6 +214,7 @@ func (sm *SessionManager) MasterReadOnce(sessionID string, def PollDefinition) P
 
 // MasterLastSlaveID returns the Slave ID last used for polling on the session (0 if unknown).
 func (sm *SessionManager) MasterLastSlaveID(sessionID string) uint8 {
+	sessionID = normalizeSessionID(sessionID)
 	sm.mu.RLock()
 	sess, exists := sm.sessions[sessionID]
 	sm.mu.RUnlock()

@@ -1,5 +1,5 @@
 export namespace modbus {
-	
+
 	export class BaudScanItem {
 	    baud_rate: number;
 	    parity: string;
@@ -7,11 +7,11 @@ export namespace modbus {
 	    success: boolean;
 	    latency_ms: number;
 	    detail: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BaudScanItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.baud_rate = source["baud_rate"];
@@ -32,11 +32,11 @@ export namespace modbus {
 	    host?: string;
 	    port_tcp?: number;
 	    timeout_ms: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ConnectionConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
@@ -56,11 +56,11 @@ export namespace modbus {
 	    start_address: number;
 	    quantity: number;
 	    scan_rate_ms: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PollDefinition(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.slave_id = source["slave_id"];
@@ -85,11 +85,11 @@ export namespace modbus {
 	    error?: string;
 	    raw_tx?: string;
 	    raw_rx?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PollResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];
@@ -114,11 +114,11 @@ export namespace modbus {
 	    value: number;
 	    hex: string;
 	    detail: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RegisterScanItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.address = source["address"];
@@ -132,11 +132,11 @@ export namespace modbus {
 	    port_name: string;
 	    description?: string;
 	    hardware_id?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SerialPortDetail(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.port_name = source["port_name"];
@@ -153,11 +153,11 @@ export namespace modbus {
 	    max: number;
 	    step: number;
 	    interval_ms: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SimulationConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];
@@ -180,11 +180,11 @@ export namespace modbus {
 	    parity?: string;
 	    stop_bits?: number;
 	    slave_id: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SlaveConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
@@ -205,11 +205,11 @@ export namespace modbus {
 	    quantity: number;
 	    values?: number[];
 	    bool_values?: boolean[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SlaveMemorySlice(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];
@@ -226,11 +226,11 @@ export namespace modbus {
 	    detail: string;
 	    latency_ms: number;
 	    raw_rx?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SlaveScanItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.slave_id = source["slave_id"];
@@ -244,11 +244,11 @@ export namespace modbus {
 	    slave_id: number;
 	    address: number;
 	    value: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new WriteCoilParam(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.slave_id = source["slave_id"];
@@ -260,11 +260,11 @@ export namespace modbus {
 	    slave_id: number;
 	    address: number;
 	    value: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new WriteRegisterParam(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.slave_id = source["slave_id"];
@@ -276,11 +276,11 @@ export namespace modbus {
 	    slave_id: number;
 	    address: number;
 	    values: number[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new WriteRegistersParam(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.slave_id = source["slave_id"];
@@ -291,19 +291,328 @@ export namespace modbus {
 
 }
 
+export namespace sniffer {
+
+	export class CaptureConfig {
+	    mode: string;
+	    listen_host?: string;
+	    listen_port?: number;
+	    target_host?: string;
+	    target_port?: number;
+	    serial_port?: string;
+	    baud_rate?: number;
+	    data_bits?: number;
+	    parity?: string;
+	    stop_bits?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new CaptureConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.listen_host = source["listen_host"];
+	        this.listen_port = source["listen_port"];
+	        this.target_host = source["target_host"];
+	        this.target_port = source["target_port"];
+	        this.serial_port = source["serial_port"];
+	        this.baud_rate = source["baud_rate"];
+	        this.data_bits = source["data_bits"];
+	        this.parity = source["parity"];
+	        this.stop_bits = source["stop_bits"];
+	    }
+	}
+	export class CaptureStatus {
+	    running: boolean;
+	    mode: string;
+	    started_at?: string;
+	    listen_address?: string;
+	    target_address?: string;
+	    active_connections: number;
+	    bytes_captured: number;
+	    dropped_chunks: number;
+	    last_error?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CaptureStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.mode = source["mode"];
+	        this.started_at = source["started_at"];
+	        this.listen_address = source["listen_address"];
+	        this.target_address = source["target_address"];
+	        this.active_connections = source["active_connections"];
+	        this.bytes_captured = source["bytes_captured"];
+	        this.dropped_chunks = source["dropped_chunks"];
+	        this.last_error = source["last_error"];
+	    }
+	}
+	export class DiagnosticItem {
+	    rule_id: string;
+	    severity: string;
+	    scope?: string;
+	    message: string;
+	    recommendation?: string;
+	    confidence: number;
+
+	    static createFrom(source: any = {}) {
+	        return new DiagnosticItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rule_id = source["rule_id"];
+	        this.severity = source["severity"];
+	        this.scope = source["scope"];
+	        this.message = source["message"];
+	        this.recommendation = source["recommendation"];
+	        this.confidence = source["confidence"];
+	    }
+	}
+	export class DecodedModbus {
+	    unit_id: number;
+	    transaction_id?: number;
+	    function_code: number;
+	    function_name: string;
+	    kind: string;
+	    address?: number;
+	    quantity?: number;
+	    values?: number[];
+	    bits?: boolean[];
+	    exception_code?: number;
+	    exception_name?: string;
+	    crc_valid?: boolean;
+	    mbap_valid?: boolean;
+	    summary: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DecodedModbus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.unit_id = source["unit_id"];
+	        this.transaction_id = source["transaction_id"];
+	        this.function_code = source["function_code"];
+	        this.function_name = source["function_name"];
+	        this.kind = source["kind"];
+	        this.address = source["address"];
+	        this.quantity = source["quantity"];
+	        this.values = source["values"];
+	        this.bits = source["bits"];
+	        this.exception_code = source["exception_code"];
+	        this.exception_name = source["exception_name"];
+	        this.crc_valid = source["crc_valid"];
+	        this.mbap_valid = source["mbap_valid"];
+	        this.summary = source["summary"];
+	    }
+	}
+	export class CapturedFrame {
+	    id: string;
+	    sequence: number;
+	    captured_at_unix_ns: number;
+	    timestamp: string;
+	    source_id: string;
+	    transport: string;
+	    direction: string;
+	    capture_source: string;
+	    capture_quality: string;
+	    raw: number[];
+	    hex: string;
+	    parsed?: DecodedModbus;
+	    conversation_id?: string;
+	    response_time_us?: number;
+	    diagnostics?: DiagnosticItem[];
+
+	    static createFrom(source: any = {}) {
+	        return new CapturedFrame(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.sequence = source["sequence"];
+	        this.captured_at_unix_ns = source["captured_at_unix_ns"];
+	        this.timestamp = source["timestamp"];
+	        this.source_id = source["source_id"];
+	        this.transport = source["transport"];
+	        this.direction = source["direction"];
+	        this.capture_source = source["capture_source"];
+	        this.capture_quality = source["capture_quality"];
+	        this.raw = source["raw"];
+	        this.hex = source["hex"];
+	        this.parsed = this.convertValues(source["parsed"], DecodedModbus);
+	        this.conversation_id = source["conversation_id"];
+	        this.response_time_us = source["response_time_us"];
+	        this.diagnostics = this.convertValues(source["diagnostics"], DiagnosticItem);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	export class DeviceHealth {
+	    unit_id: number;
+	    state: string;
+	    requests: number;
+	    responses: number;
+	    exceptions: number;
+	    timeouts: number;
+	    retries: number;
+	    success_rate: number;
+	    average_latency_us: number;
+	    p95_latency_us: number;
+	    last_request_at?: string;
+	    last_response_at?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DeviceHealth(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.unit_id = source["unit_id"];
+	        this.state = source["state"];
+	        this.requests = source["requests"];
+	        this.responses = source["responses"];
+	        this.exceptions = source["exceptions"];
+	        this.timeouts = source["timeouts"];
+	        this.retries = source["retries"];
+	        this.success_rate = source["success_rate"];
+	        this.average_latency_us = source["average_latency_us"];
+	        this.p95_latency_us = source["p95_latency_us"];
+	        this.last_request_at = source["last_request_at"];
+	        this.last_response_at = source["last_response_at"];
+	    }
+	}
+
+	export class HealthSnapshot {
+	    score: number;
+	    state: string;
+	    total_frames: number;
+	    requests: number;
+	    responses: number;
+	    exceptions: number;
+	    timeouts: number;
+	    retries: number;
+	    malformed_frames: number;
+	    crc_error_frames: number;
+	    orphan_responses: number;
+	    pending_requests: number;
+	    average_latency_us: number;
+	    p95_latency_us: number;
+	    devices: DeviceHealth[];
+
+	    static createFrom(source: any = {}) {
+	        return new HealthSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.score = source["score"];
+	        this.state = source["state"];
+	        this.total_frames = source["total_frames"];
+	        this.requests = source["requests"];
+	        this.responses = source["responses"];
+	        this.exceptions = source["exceptions"];
+	        this.timeouts = source["timeouts"];
+	        this.retries = source["retries"];
+	        this.malformed_frames = source["malformed_frames"];
+	        this.crc_error_frames = source["crc_error_frames"];
+	        this.orphan_responses = source["orphan_responses"];
+	        this.pending_requests = source["pending_requests"];
+	        this.average_latency_us = source["average_latency_us"];
+	        this.p95_latency_us = source["p95_latency_us"];
+	        this.devices = this.convertValues(source["devices"], DeviceHealth);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Snapshot {
+	    generated_at: string;
+	    frames: CapturedFrame[];
+	    health: HealthSnapshot;
+
+	    static createFrom(source: any = {}) {
+	        return new Snapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generated_at = source["generated_at"];
+	        this.frames = this.convertValues(source["frames"], CapturedFrame);
+	        this.health = this.convertValues(source["health"], HealthSnapshot);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace web {
-	
+
 	export class NetworkInterfaceInfo {
 	    name: string;
 	    ip: string;
 	    type: string;
 	    description: string;
 	    url: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new NetworkInterfaceInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -320,11 +629,11 @@ export namespace web {
 	    active_clients: number;
 	    token: string;
 	    interfaces: NetworkInterfaceInfo[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RemoteServerStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.is_running = source["is_running"];
@@ -334,7 +643,7 @@ export namespace web {
 	        this.token = source["token"];
 	        this.interfaces = this.convertValues(source["interfaces"], NetworkInterfaceInfo);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

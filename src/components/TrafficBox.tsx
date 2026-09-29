@@ -1,13 +1,14 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Terminal, Trash2, Copy, Check, ArrowDownToLine } from 'lucide-react';
+import { Terminal, Trash2, Copy, Check, ArrowDownToLine, Activity } from 'lucide-react';
 import { TrafficEntry } from '../types/modbus';
 
 interface TrafficBoxProps {
   entries: TrafficEntry[];
   onClear: () => void;
+  onOpenAnalyzer?: () => void;
 }
 
-export const TrafficBox: React.FC<TrafficBoxProps> = ({ entries, onClear }) => {
+export const TrafficBox: React.FC<TrafficBoxProps> = ({ entries, onClear, onOpenAnalyzer }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -42,6 +43,16 @@ export const TrafficBox: React.FC<TrafficBoxProps> = ({ entries, onClear }) => {
         </div>
 
         <div className="flex items-center space-x-1.5">
+          {onOpenAnalyzer && (
+            <button
+              onClick={onOpenAnalyzer}
+              className="px-2 py-0.5 rounded flex items-center space-x-1 border border-cyan-800/70 bg-cyan-950/50 text-cyan-300 hover:bg-cyan-900/50 transition-colors"
+              title="Mở Protocol Analyzer và Bus Health"
+            >
+              <Activity className="w-3 h-3" />
+              <span className="text-[11px]">Analyzer</span>
+            </button>
+          )}
           {/* Auto Scroll toggle */}
           <button
             onClick={() => setAutoScroll(!autoScroll)}

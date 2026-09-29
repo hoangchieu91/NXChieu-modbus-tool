@@ -21,17 +21,16 @@ func TestCRC16Modbus(t *testing.T) {
 }
 
 func TestSerialPortFormat(t *testing.T) {
-	wrapper := NewModbusClientWrapper()
 	// Test formatted Windows port
-	p1 := wrapper.formatPortName("COM49")
+	p1 := normalizeSerialPort("COM49")
 	if p1 != `\\.\COM49` {
 		t.Fatalf("Expected '\\\\.\\COM49', got %s", p1)
 	}
-	p2 := wrapper.formatPortName(`\\.\COM49`)
+	p2 := normalizeSerialPort(`\\.\COM49`)
 	if p2 != `\\.\COM49` {
 		t.Fatalf("Expected '\\\\.\\COM49', got %s", p2)
 	}
-	p3 := wrapper.formatPortName("COM1")
+	p3 := normalizeSerialPort("COM1")
 	if p3 != `\\.\COM1` {
 		t.Fatalf("Expected '\\\\.\\COM1', got %s", p3)
 	}

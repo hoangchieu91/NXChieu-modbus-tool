@@ -9,14 +9,67 @@ import {
   SlaveActivityEvent,
   SlaveConfig,
   SlaveMemorySlice,
+  SnifferSnapshot,
+  SnifferCaptureConfig,
+  SnifferCaptureStatus,
+  SnifferBaselineMode,
+  SnifferBaselineProfile,
   WriteCoilParam,
   WriteRegisterParam,
   WriteRegistersParam,
 } from '../types/modbus';
 
-export const isWailsApp = (): boolean => {
-  return typeof window !== 'undefined' && Boolean((window as unknown as { go?: unknown }).go);
-};
+export async function getSnifferSnapshot(limit = 1000): Promise<SnifferSnapshot> {
+  try {
+    return await (AppMethods as any).GetSnifferSnapshot(limit);
+  } catch {
+    return { generated_at: new Date().toISOString(), frames: [], health: { score: 0, state: 'unknown', total_frames: 0, requests: 0, responses: 0, exceptions: 0, timeouts: 0, retries: 0, malformed_frames: 0, crc_error_frames: 0, orphan_responses: 0, pending_requests: 0, average_latency_us: 0, p95_latency_us: 0, devices: [] } };
+  }
+}
+
+export async function clearSniffer(): Promise<void> {
+  await (AppMethods as any).ClearSniffer();
+}
+
+export async function setSnifferBaselineMode(mode: SnifferBaselineMode): Promise<SnifferBaselineProfile> {
+  return await (AppMethods as any).SetSnifferBaselineMode(mode);
+}
+
+export async function getSnifferBaseline(): Promise<SnifferBaselineProfile> {
+  return await (AppMethods as any).GetSnifferBaseline();
+}
+
+export async function resetSnifferBaseline(): Promise<SnifferBaselineProfile> {
+  return await (AppMethods as any).ResetSnifferBaseline();
+}
+
+export async function startSniffer(config: SnifferCaptureConfig): Promise<SnifferCaptureStatus> {
+  return await (AppMethods as any).StartSniffer(config);
+}
+
+export async function stopSniffer(): Promise<SnifferCaptureStatus> {
+  return await (AppMethods as any).StopSniffer();
+}
+
+export async function getSnifferStatus(): Promise<SnifferCaptureStatus> {
+  try {
+    return await (AppMethods as any).GetSnifferStatus();
+  } catch {
+    return { running: false, mode: '', active_connections: 0, bytes_captured: 0, dropped_chunks: 0 };
+  }
+}
+
+export async function saveSnifferCapture(): Promise<string> {
+  return await (AppMethods as any).SaveSnifferCapture();
+}
+
+export async function openSnifferCapture(): Promise<string> {
+  return await (AppMethods as any).OpenSnifferCapture();
+}
+
+export async function exportSnifferCSV(): Promise<string> {
+  return await (AppMethods as any).ExportSnifferCSV();
+}
 
 export async function listSerialPorts(): Promise<SerialPortDetail[]> {
   try {
@@ -76,25 +129,19 @@ export async function sessionStopPolling(sessionId: string): Promise<void> {
   await AppMethods.SessionStopPolling(sessionId);
 }
 
-export async function sessionReadOnce(sessionId: string, def: PollDefinition): Promise<PollResult> {
-  const res = await AppMethods.SessionReadOnce(sessionId, def as any);
+// Go sends nil slices as null; the request fields (slave_id, function_code, start_address) are
+// needed to map values to the right addresses and to drop stale results.
+function toPollResult(res: any): PollResult {
   return {
-    session_id: res.session_id,
-    timestamp: res.timestamp,
-    // Needed to map values to the right addresses and to drop stale results.
-    slave_id: res.slave_id,
-    function_code: res.function_code,
-    start_address: res.start_address,
+    ...res,
     values: res.values || [],
     bool_values: res.bool_values || [],
-    is_coil: res.is_coil,
-    tx_count: res.tx_count,
-    err_count: res.err_count,
-    latency_ms: res.latency_ms,
-    error: res.error,
-    raw_tx: res.raw_tx,
-    raw_rx: res.raw_rx,
   };
+}
+
+export async function sessionReadOnce(sessionId: string, def: PollDefinition): Promise<PollResult> {
+  const res = await AppMethods.SessionReadOnce(sessionId, def as any);
+  return toPollResult(res);
 }
 
 export async function sessionWriteRegister(sessionId: string, param: WriteRegisterParam): Promise<void> {
@@ -107,39 +154,6 @@ export async function sessionWriteRegisters(sessionId: string, param: WriteRegis
 
 export async function sessionWriteCoil(sessionId: string, param: WriteCoilParam): Promise<void> {
   await AppMethods.SessionWriteCoil(sessionId, param as any);
-}
-
-// Backward compatibility default master operations
-export async function connectBackend(config: ConnectionConfig): Promise<string> {
-  return sessionConnect('default', config);
-}
-
-export async function disconnectBackend(): Promise<void> {
-  return sessionDisconnect('default');
-}
-
-export async function startPollingBackend(def: PollDefinition): Promise<void> {
-  return sessionStartPolling('default', def);
-}
-
-export async function stopPollingBackend(): Promise<void> {
-  return sessionStopPolling('default');
-}
-
-export async function readOnceBackend(def: PollDefinition): Promise<PollResult> {
-  return sessionReadOnce('default', def);
-}
-
-export async function writeRegisterBackend(param: WriteRegisterParam): Promise<void> {
-  return sessionWriteRegister('default', param);
-}
-
-export async function writeRegistersBackend(param: WriteRegistersParam): Promise<void> {
-  return sessionWriteRegisters('default', param);
-}
-
-export async function writeCoilBackend(param: WriteCoilParam): Promise<void> {
-  return sessionWriteCoil('default', param);
 }
 
 // --- Modbus Slave (Server Simulator) Operations ---
@@ -164,10 +178,6 @@ export async function slaveStart(sessionId: string, config: SlaveConfig): Promis
 
 export async function slaveStop(sessionId: string): Promise<void> {
   await AppMethods.SlaveStop(sessionId);
-}
-
-export async function slaveIsListening(sessionId: string): Promise<boolean> {
-  return await AppMethods.SlaveIsListening(sessionId);
 }
 
 export async function slaveGetSlice(
@@ -209,22 +219,7 @@ export function subscribePollData(callback: (data: PollResult) => void): () => v
   try {
     const unbind = WailsRuntime.EventsOn('poll-data', (data: any) => {
       if (data) {
-        callback({
-          session_id: data.session_id,
-          timestamp: data.timestamp,
-          slave_id: data.slave_id,
-          function_code: data.function_code,
-          start_address: data.start_address,
-          values: data.values || [],
-          bool_values: data.bool_values || [],
-          is_coil: data.is_coil,
-          tx_count: data.tx_count,
-          err_count: data.err_count,
-          latency_ms: data.latency_ms,
-          error: data.error,
-          raw_tx: data.raw_tx,
-          raw_rx: data.raw_rx,
-        });
+        callback(toPollResult(data));
       }
     });
     return () => {

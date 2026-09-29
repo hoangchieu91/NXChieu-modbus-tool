@@ -362,7 +362,6 @@ type ModbusSlaveServer struct {
 	tcpListener  net.Listener
 	tcpConns     map[net.Conn]struct{}
 	serialPort   serial.Port
-	stopChan     chan struct{}
 	simCancel    context.CancelFunc
 	onActivity   func(SlaveActivityEvent)
 }
@@ -415,7 +414,6 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 		s.store.setSlaveID(slaveID)
 	}
 	s.config.SlaveID = slaveID
-	s.stopChan = make(chan struct{})
 
 	switch strings.ToLower(config.Type) {
 	case "tcp":
@@ -481,27 +479,13 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 		if dataBits == 0 {
 			dataBits = 8
 		}
-		var parity serial.Parity = serial.NoParity
-		switch strings.ToLower(config.Parity) {
-		case "even":
-			parity = serial.EvenParity
-		case "odd":
-			parity = serial.OddParity
-		}
+		parity := serialParity(config.Parity)
 		var stopBits serial.StopBits = serial.OneStopBit
 		if config.StopBits == 2 {
 			stopBits = serial.TwoStopBits
 		}
 
-		// Windows COM port name formatting
-		portName := strings.TrimSpace(config.Port)
-		if idx := strings.Index(portName, " "); idx != -1 {
-			portName = portName[:idx]
-		}
-		portName = strings.TrimSpace(portName)
-		if strings.HasPrefix(strings.ToUpper(portName), "COM") && !strings.HasPrefix(portName, `\\.\`) {
-			portName = `\\.\` + strings.ToUpper(portName)
-		}
+		portName := normalizeSerialPort(config.Port)
 
 		mode := &serial.Mode{
 			BaudRate: baud,
@@ -548,11 +532,6 @@ func (s *ModbusSlaveServer) stopLocked() {
 
 // stopListenersLocked closes the TCP/serial listeners and connections, leaving any simulation.
 func (s *ModbusSlaveServer) stopListenersLocked() {
-
-	if s.stopChan != nil {
-		close(s.stopChan)
-		s.stopChan = nil
-	}
 
 	if s.tcpServer != nil {
 		_ = s.tcpServer.Stop()
@@ -900,54 +879,24 @@ func (s *ModbusSlaveServer) buildWriteMultipleResponse(unitID, fc uint8, addr, q
 	return resp
 }
 
+// Response builders keep the protocol limits as guards (a byte count cannot exceed 250) and
+// reuse the shared RTU frame builders.
 func (s *ModbusSlaveServer) buildBitReadResponse(unitID uint8, fc uint8, bools []bool) []byte {
 	if len(bools) > 2000 {
 		return s.buildExceptionResponse(unitID, fc, 0x03)
 	}
-	byteCount := (len(bools) + 7) / 8
-	resp := make([]byte, 3+byteCount+2)
-	resp[0] = unitID
-	resp[1] = fc
-	resp[2] = byte(byteCount)
-
-	for i, b := range bools {
-		if b {
-			resp[3+(i/8)] |= (1 << (i % 8))
-		}
-	}
-
-	crc := CRC16Modbus(resp[:3+byteCount])
-	binary.LittleEndian.PutUint16(resp[3+byteCount:], crc)
-	return resp
+	return BuildRTUCoilResponse(unitID, fc, bools)
 }
 
 func (s *ModbusSlaveServer) buildRegisterReadResponse(unitID uint8, fc uint8, regs []uint16) []byte {
 	if len(regs) > 125 {
 		return s.buildExceptionResponse(unitID, fc, 0x03)
 	}
-	byteCount := len(regs) * 2
-	resp := make([]byte, 3+byteCount+2)
-	resp[0] = unitID
-	resp[1] = fc
-	resp[2] = byte(byteCount)
-
-	for i, reg := range regs {
-		binary.BigEndian.PutUint16(resp[3+(i*2):], reg)
-	}
-
-	crc := CRC16Modbus(resp[:3+byteCount])
-	binary.LittleEndian.PutUint16(resp[3+byteCount:], crc)
-	return resp
+	return BuildRTURegisterResponse(unitID, fc, regs)
 }
 
 func (s *ModbusSlaveServer) buildExceptionResponse(unitID uint8, fc uint8, exceptionCode byte) []byte {
-	resp := make([]byte, 5)
-	resp[0] = unitID
-	resp[1] = fc | 0x80
-	resp[2] = exceptionCode
-	crc := CRC16Modbus(resp[:3])
-	binary.LittleEndian.PutUint16(resp[3:], crc)
-	return resp
+	return BuildRTUExceptionResponse(unitID, fc, exceptionCode)
 }
 
 // StartSimulation activates automatic mathematical or randomized fluctuation on selected registers.

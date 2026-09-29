@@ -61,6 +61,5 @@ func buildRTUExceptionResponse(slaveID, fc uint8, err error) []byte {
 	if !ok {
 		return nil
 	}
-	frame := []byte{slaveID, fc | 0x80, code}
-	return binary.LittleEndian.AppendUint16(frame, CRC16Modbus(frame))
+	return BuildRTUExceptionResponse(slaveID, fc, code)
 }

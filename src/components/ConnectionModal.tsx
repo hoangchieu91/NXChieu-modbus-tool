@@ -121,16 +121,9 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
         stop_bits: stopBits,
         timeout_ms: serialTimeout,
       });
-    } else if (tab === 'tcp') {
+    } else if (tab === 'tcp' || tab === 'rtu_over_tcp') {
       onConnect({
-        type: 'tcp',
-        host: tcpHost.trim(),
-        port: tcpPort,
-        timeout_ms: tcpTimeout,
-      });
-    } else if (tab === 'rtu_over_tcp') {
-      onConnect({
-        type: 'rtu_over_tcp',
+        type: tab,
         host: tcpHost.trim(),
         port: tcpPort,
         timeout_ms: tcpTimeout,
@@ -343,18 +336,30 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
             </div>
           )}
 
-          {tab === 'tcp' && (
+          {(tab === 'tcp' || tab === 'rtu_over_tcp') && (
             <div className="space-y-3">
+              {tab === 'rtu_over_tcp' && (
+                <div className="p-2.5 bg-cyan-950/30 border border-cyan-800/40 rounded text-[11px] text-cyan-300/90 leading-relaxed">
+                  <strong>RTU over TCP:</strong> Dành cho bộ chuyển đổi RS-485 sang Ethernet (như Moxa NPort, USR-TCP232, Waveshare Serial Server...) đóng gói trực tiếp frame Modbus RTU (kèm CRC-16) qua TCP socket thô.
+                </div>
+              )}
+
               <div>
                 <div className="flex items-center mb-1">
                   <label className="text-slate-300 font-medium">IP Address / Hostname:</label>
-                  <FieldTooltip text="Địa chỉ IP của Modbus Gateway hoặc PLC (ví dụ 192.168.1.100)." />
+                  <FieldTooltip
+                    text={
+                      tab === 'tcp'
+                        ? 'Địa chỉ IP của Modbus Gateway hoặc PLC (ví dụ 192.168.1.100).'
+                        : 'Địa chỉ IP của bộ chuyển đổi Serial-to-Ethernet (ví dụ 192.168.1.200).'
+                    }
+                  />
                 </div>
                 <input
                   type="text"
                   value={tcpHost}
                   onChange={(e) => setTcpHost(e.target.value)}
-                  placeholder="e.g. 192.168.1.100"
+                  placeholder={tab === 'tcp' ? 'e.g. 192.168.1.100' : 'e.g. 192.168.1.200'}
                   className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
                 />
               </div>
@@ -363,7 +368,13 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                 <div>
                   <div className="flex items-center mb-1">
                     <label className="text-slate-400">TCP Port:</label>
-                    <FieldTooltip text="Cổng Modbus TCP tiêu chuẩn (mặc định luôn là cổng 502)." />
+                    <FieldTooltip
+                      text={
+                        tab === 'tcp'
+                          ? 'Cổng Modbus TCP tiêu chuẩn (mặc định luôn là cổng 502).'
+                          : 'Cổng lắng nghe trên bộ chuyển đổi (thường là 502, 5020, hoặc 4001 tuỳ hãng).'
+                      }
+                    />
                   </div>
                   <input
                     type="number"
@@ -376,59 +387,13 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                 <div>
                   <div className="flex items-center mb-1">
                     <label className="text-slate-400">Timeout (ms):</label>
-                    <FieldTooltip text="Thời gian tối đa chờ phản hồi qua mạng TCP (khuyến nghị 1000ms)." />
-                  </div>
-                  <input
-                    type="number"
-                    min={10}
-                    step="1"
-                    value={tcpTimeout}
-                    onChange={(e) => setTcpTimeout(Number(e.target.value))}
-                    className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {tab === 'rtu_over_tcp' && (
-            <div className="space-y-3">
-              <div className="p-2.5 bg-cyan-950/30 border border-cyan-800/40 rounded text-[11px] text-cyan-300/90 leading-relaxed">
-                <strong>RTU over TCP:</strong> Dành cho bộ chuyển đổi RS-485 sang Ethernet (như Moxa NPort, USR-TCP232, Waveshare Serial Server...) đóng gói trực tiếp frame Modbus RTU (kèm CRC-16) qua TCP socket thô.
-              </div>
-
-              <div>
-                <div className="flex items-center mb-1">
-                  <label className="text-slate-300 font-medium">IP Address / Hostname:</label>
-                  <FieldTooltip text="Địa chỉ IP của bộ chuyển đổi Serial-to-Ethernet (ví dụ 192.168.1.200)." />
-                </div>
-                <input
-                  type="text"
-                  value={tcpHost}
-                  onChange={(e) => setTcpHost(e.target.value)}
-                  placeholder="e.g. 192.168.1.200"
-                  className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="flex items-center mb-1">
-                    <label className="text-slate-400">TCP Port:</label>
-                    <FieldTooltip text="Cổng lắng nghe trên bộ chuyển đổi (thường là 502, 5020, hoặc 4001 tuỳ hãng)." />
-                  </div>
-                  <input
-                    type="number"
-                    value={tcpPort}
-                    onChange={(e) => setTcpPort(Number(e.target.value))}
-                    className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center mb-1">
-                    <label className="text-slate-400">Timeout (ms):</label>
-                    <FieldTooltip text="Thời gian tối đa chờ phản hồi qua mạng (khuyến nghị 1000ms)." />
+                    <FieldTooltip
+                      text={
+                        tab === 'tcp'
+                          ? 'Thời gian tối đa chờ phản hồi qua mạng TCP (khuyến nghị 1000ms).'
+                          : 'Thời gian tối đa chờ phản hồi qua mạng (khuyến nghị 1000ms).'
+                      }
+                    />
                   </div>
                   <input
                     type="number"

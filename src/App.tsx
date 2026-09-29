@@ -39,6 +39,7 @@ import { TrendChart } from './components/TrendChart';
 import { HelpModal } from './components/HelpModal';
 import { ScannerModal } from './components/ScannerModal';
 import { MobileRemoteModal } from './components/MobileRemoteModal';
+import { ProtocolAnalyzer } from './components/ProtocolAnalyzer';
 
 
 import {
@@ -74,6 +75,15 @@ import {
   exportSheetToCSV,
 } from './utils/projectStorage';
 
+// HH:MM:SS.mmm shown in the grid, traffic log and chart.
+const clockStamp = (d: Date) => d.toLocaleTimeString('vi-VN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+
+// Whether a tab shows bit values (coils / discrete inputs) rather than registers.
+const isCoilTab = (tab: TabSession) =>
+  tab.role === 'slave'
+    ? tab.slaveTable === 'coils' || tab.slaveTable === 'discrete'
+    : tab.definition.function_code === 1 || tab.definition.function_code === 2;
+
 // FC02 (Discrete Inputs) and FC04 (Input Registers) are read-only tables on a Modbus device.
 const isReadOnlyFunction = (fc: number) => fc === 2 || fc === 4;
 
@@ -93,10 +103,7 @@ const toChartValue = (values: number[], idx: number, fmt: DataFormat, scaling: n
 // multi-column decodes) are rebuilt only when data changes, not on every App render.
 
 function buildRowsForTab(tab: TabSession, state: PerTabState): { rows: RegisterRow[]; isCoil: boolean } {
-  const isCoil =
-    tab.role === 'slave'
-      ? tab.slaveTable === 'coils' || tab.slaveTable === 'discrete'
-      : tab.definition.function_code === 1 || tab.definition.function_code === 2;
+  const isCoil = isCoilTab(tab);
 
   const startAddr = tab.role === 'slave' ? tab.slaveStartAddr : tab.definition.start_address;
   const quantity = tab.role === 'slave' ? tab.slaveQuantity : tab.definition.quantity;
@@ -184,6 +191,14 @@ function buildRowsForTab(tab: TabSession, state: PerTabState): { rows: RegisterR
 }
 
 type TracePoint = { timestamp: string; timeMs: number; value: number };
+
+// Value a trace samples from a read result: a register (decoded with its format) or a coil as 0/1.
+const sampleTrace = (values: number[], bools: boolean[], idx: number, fmt: DataFormat, scaling: number): number => {
+  if (values.length === 0 && bools.length > 0) {
+    return idx >= 0 && idx < bools.length ? (bools[idx] ? 1 : 0) : NaN;
+  }
+  return idx >= 0 && idx < values.length ? toChartValue(values, idx, fmt, scaling) : NaN;
+};
 
 // Appends one point per trace in a single state update, keeping the last 300 points.
 const appendTracePoints = (prev: Record<string, TracePoint[]>, points: Record<string, TracePoint>) => {
@@ -304,6 +319,7 @@ export const App: React.FC = () => {
 
   // UI display toggles
   const [showTraffic, setShowTraffic] = useState<boolean>(true);
+  const [isProtocolAnalyzerOpen, setIsProtocolAnalyzerOpen] = useState<boolean>(false);
   const [isSplitView, setIsSplitView] = useState<boolean>(false);
   const [splitTabId, setSplitTabId] = useState<string>('');
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
@@ -410,9 +426,13 @@ export const App: React.FC = () => {
   const refreshSlaveSlice = useCallback(
     async (tabId: string, table: SlaveTable, startAddr: number, qty: number) => {
       try {
+        // Only slave tabs show slave memory; a late refresh must not overwrite a master grid.
+        const tabNow = tabsRef.current.find((t) => t.id === tabId);
+        if (tabNow && tabNow.role !== 'slave') return;
         const slice = await slaveGetSlice(tabId, table, startAddr, qty);
+        if (tabsRef.current.find((t) => t.id === tabId)?.role === 'master') return;
         const now = new Date();
-        const timeStr = now.toLocaleTimeString('vi-VN', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        const timeStr = clockStamp(now);
 
         updateTabState(tabId, (prev) => {
           const updatedMap = { ...(prev.lastUpdatedMap || {}) };
@@ -421,30 +441,30 @@ export const App: React.FC = () => {
             updatedMap[startAddr + i] = timeStr;
           }
 
+          const isBitTable = (slice.bool_values?.length ?? 0) > 0;
           return {
             ...prev,
             hasData: true,
             regs: slice.values || [],
             coils: slice.bool_values || [],
+            // Previous values drive the up/down change highlight.
+            lastValues: isBitTable ? prev.coils : prev.regs,
             lastUpdatedTime: timeStr,
             lastUpdatedMap: updatedMap,
           };
         });
 
         // Record point for any chart trace matching this tab
-        if (slice.values && chartTracesRef.current.length > 0) {
+        if (chartTracesRef.current.length > 0) {
           const targetTab = tabsRef.current.find((t) => t.id === tabId) || activeTabRef.current;
           const points: Record<string, TracePoint> = {};
           chartTracesRef.current.forEach((trace) => {
             if (trace.tabId === tabId) {
-              const relIdx = trace.address - startAddr;
-              if (relIdx >= 0 && slice.values && relIdx < slice.values.length) {
-                const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
-                const scaling = targetTab.scalings?.[trace.address] ?? 1;
-                const value = toChartValue(slice.values, relIdx, regFmt, scaling);
-                if (Number.isFinite(value)) {
-                  points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
-                }
+              const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
+              const scaling = targetTab.scalings?.[trace.address] ?? 1;
+              const value = sampleTrace(slice.values || [], slice.bool_values || [], trace.address - startAddr, regFmt, scaling);
+              if (Number.isFinite(value)) {
+                points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
               }
             }
           });
@@ -486,7 +506,7 @@ export const App: React.FC = () => {
       }
 
       const now = new Date();
-      const timeStr = now.toLocaleTimeString('vi-VN', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+      const timeStr = clockStamp(now);
 
       updateTabState(targetId, (prev) => {
         const newEntries: TrafficEntry[] = [];
@@ -544,7 +564,7 @@ export const App: React.FC = () => {
       });
 
       // Record point for any chart trace matching this tab
-      const isSuccess = !payload.error && payload.values && payload.values.length > 0;
+      const isSuccess = !payload.error && (payload.values.length > 0 || payload.bool_values.length > 0);
       if (isSuccess && chartTracesRef.current.length > 0) {
         const targetTab = tabsRef.current.find((t) => t.id === targetId) || activeTabRef.current;
         const start = payload.start_address ?? targetTab.definition.start_address;
@@ -552,14 +572,11 @@ export const App: React.FC = () => {
 
         chartTracesRef.current.forEach((trace) => {
           if (trace.tabId === targetId) {
-            const relIdx = trace.address - start;
-            if (relIdx >= 0 && relIdx < payload.values.length) {
-              const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
-              const scaling = targetTab.scalings?.[trace.address] ?? 1;
-              const value = toChartValue(payload.values, relIdx, regFmt, scaling);
-              if (Number.isFinite(value)) {
-                points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
-              }
+            const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
+            const scaling = targetTab.scalings?.[trace.address] ?? 1;
+            const value = sampleTrace(payload.values, payload.bool_values, trace.address - start, regFmt, scaling);
+            if (Number.isFinite(value)) {
+              points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
             }
           }
         });
@@ -579,6 +596,24 @@ export const App: React.FC = () => {
 
     return () => unbind();
   }, [applyPollResult]);
+
+  // The slave simulation writes memory without activity events, so simulating slave tabs are
+  // refreshed on a timer; otherwise their grids would stay frozen.
+  const simulatingTabIds = tabs
+    .filter((t) => t.role === 'slave' && tabStates[t.id]?.isSimulating)
+    .map((t) => t.id)
+    .join(',');
+  useEffect(() => {
+    if (!simulatingTabIds) return;
+    const ids = simulatingTabIds.split(',');
+    const timer = setInterval(() => {
+      for (const id of ids) {
+        const tab = tabsRef.current.find((t) => t.id === id);
+        if (tab) refreshSlaveSlice(tab.id, tab.slaveTable, tab.slaveStartAddr, tab.slaveQuantity);
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, [simulatingTabIds, refreshSlaveSlice]);
 
   // Subscribe to Slave Activity Events (Master reading/writing into our Slave server)
   useEffect(() => {
@@ -601,10 +636,10 @@ export const App: React.FC = () => {
         };
       });
 
-      // Synchronize memory table with latest changes (coalesced, see scheduleSlaveRefresh)
-      if (activeTabRef.current.id === targetId) {
-        scheduleSlaveRefresh();
-      }
+      // Synchronize memory table with latest changes (coalesced, see scheduleSlaveRefresh).
+      // Every tab with events is refreshed, so a slave shown in the split pane updates too.
+      dirtyTabs.add(targetId);
+      scheduleSlaveRefresh();
     });
 
     // A fast external master can generate hundreds of events per second. Refresh at most every
@@ -612,6 +647,7 @@ export const App: React.FC = () => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let inFlight = false;
     let pending = false;
+    const dirtyTabs = new Set<string>();
     const runRefresh = async () => {
       timer = null;
       if (inFlight) {
@@ -619,9 +655,15 @@ export const App: React.FC = () => {
         return;
       }
       inFlight = true;
-      const tab = activeTabRef.current;
+      const ids = [...dirtyTabs];
+      dirtyTabs.clear();
       try {
-        await refreshSlaveSlice(tab.id, tab.slaveTable, tab.slaveStartAddr, tab.slaveQuantity);
+        for (const id of ids) {
+          const tab = tabsRef.current.find((t) => t.id === id);
+          if (tab?.role === 'slave') {
+            await refreshSlaveSlice(tab.id, tab.slaveTable, tab.slaveStartAddr, tab.slaveQuantity);
+          }
+        }
       } finally {
         inFlight = false;
         if (pending) {
@@ -786,8 +828,7 @@ export const App: React.FC = () => {
         if (state?.isPolling) await sessionStopPolling(tabId);
         if (state?.isConnected) await sessionDisconnect(tabId);
       } else if (state?.isListening || state?.isSimulating || activeTab.isListening) {
-        await slaveStopSim(tabId);
-        await slaveStop(tabId);
+        await slaveStop(tabId); // also stops the simulation
       }
     } catch (err) {
       console.error('Lỗi dừng chế độ cũ khi đổi vai trò:', err);
@@ -869,40 +910,13 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleApplyScannerRange = async (fc: number, startAddr: number, qty: number) => {
-    const tabId = activeTabId;
-    const currentState = tabStates[tabId];
-    const newDef: PollDefinition = {
+  const handleApplyScannerRange = (fc: number, startAddr: number, qty: number) =>
+    handleSaveDefinition({
       ...activeTab.definition,
       function_code: fc,
       start_address: startAddr,
       quantity: Math.min(100, Math.max(1, qty), 65536 - startAddr),
-    };
-
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, definition: newDef } : t))
-    );
-
-    updateTabState(tabId, (prev) => ({
-      ...prev,
-      regs: [],
-      coils: [],
-      lastValues: [],
-      hasData: false,
-    }));
-
-    if (currentState?.isPolling) {
-      try {
-        await sessionStopPolling(tabId);
-        await sessionStartPolling(tabId, newDef);
-      } catch (err) {
-        console.error('Lỗi cập nhật polling sau khi quét:', err);
-        // Polling was stopped and did not restart: never keep showing "Polling".
-        updateTabState(tabId, (prev) => ({ ...prev, isPolling: false }));
-        alert(`Không khởi động lại được Polling với cấu hình mới: ${err}`);
-      }
-    }
-  };
+    });
 
   // --- Inline Write & Coil Toggle Handlers ---
 
@@ -917,10 +931,7 @@ export const App: React.FC = () => {
         return 'FC02/FC04 là bảng chỉ đọc, không thể ghi.';
       }
 
-      const isCoilType =
-        targetTab.role === 'slave'
-          ? targetTab.slaveTable === 'coils' || targetTab.slaveTable === 'discrete'
-          : targetTab.definition.function_code === 1 || targetTab.definition.function_code === 2;
+      const isCoilType = isCoilTab(targetTab);
 
       if (isCoilType) {
         const valLower = valueStr.trim().toLowerCase();
@@ -1038,7 +1049,8 @@ export const App: React.FC = () => {
       scalings: {},
       slaveConfig: {
         ...DEFAULT_SLAVE_CONFIG,
-        port_tcp: 5020 + tabs.length,
+        // Next free port: tabs.length would repeat a port after a tab is closed.
+        port_tcp: Math.max(5019, ...tabs.map((t) => t.slaveConfig?.port_tcp ?? 0)) + 1,
         slave_id: tabs.length + 1,
       },
       slaveTable: 'holding',
@@ -1056,24 +1068,24 @@ export const App: React.FC = () => {
     if (tabs.length <= 1) return;
 
     // Clean up background session resources in Go backend
+    // CloseSession stops polling, disconnects the master and stops the slave + simulation.
     try {
-      await sessionStopPolling(id);
-      await sessionDisconnect(id);
-      await slaveStop(id);
       await closeSession(id);
     } catch (err) {
       console.error(`Lỗi dọn dẹp session khi đóng tab ${id}:`, err);
     }
 
-    const remaining = tabs.filter((t) => t.id !== id);
-    setTabs(remaining);
+    // Backend teardown above can take a while (serial close); derive everything from the latest
+    // state so a second close or an edit meanwhile is not lost.
+    setTabs((prev) => prev.filter((t) => t.id !== id));
+    const remaining = tabsRef.current.filter((t) => t.id !== id);
     setTabStates((prev) => {
       const next = { ...prev };
       delete next[id];
       return next;
     });
     // Drop the closed tab's chart traces and their history; they could no longer be toggled.
-    const closedTraceIds = new Set(chartTraces.filter((t) => t.tabId === id).map((t) => t.id));
+    const closedTraceIds = new Set(chartTracesRef.current.filter((t) => t.tabId === id).map((t) => t.id));
     if (closedTraceIds.size > 0) {
       setChartTraces((prev) => prev.filter((t) => t.tabId !== id));
       setTraceData((prev) => {
@@ -1083,13 +1095,13 @@ export const App: React.FC = () => {
       });
     }
 
-    if (activeTabId === id) {
-      setActiveTabId(remaining[0].id);
-    }
-    if (splitTabId === id) {
-      const nextSplit = remaining.find((t) => t.id !== (activeTabId === id ? remaining[0].id : activeTabId));
-      setSplitTabId(nextSplit ? nextSplit.id : '');
-    }
+    if (remaining.length === 0) return;
+    setActiveTabId((cur) => (cur === id ? remaining[0].id : cur));
+    setSplitTabId((cur) => {
+      if (cur !== id) return cur;
+      const active = activeTabRef.current.id === id ? remaining[0].id : activeTabRef.current.id;
+      return remaining.find((t) => t.id !== active)?.id ?? '';
+    });
   };
 
   const handleRenameTab = (id: string, newTitle: string) => {
@@ -1115,9 +1127,6 @@ export const App: React.FC = () => {
 
       for (const t of tabs) {
         try {
-          await sessionStopPolling(t.id);
-          await sessionDisconnect(t.id);
-          await slaveStop(t.id);
           await closeSession(t.id);
         } catch (err) {
           console.error(`Lỗi dọn dẹp session cũ ${t.id}:`, err);
@@ -1145,28 +1154,24 @@ export const App: React.FC = () => {
 
   // --- Cell Metadata Updaters ---
 
-  const handleUpdateAlias = (tabId: string, address: number, alias: string) => {
+  // Per-row settings (alias, unit, scaling) live in one map per tab keyed by address.
+  const updateRowSetting = <K extends 'aliases' | 'units' | 'scalings'>(
+    tabId: string,
+    key: K,
+    address: number,
+    value: TabSession[K][number]
+  ) => {
     setTabs((prev) =>
-      prev.map((t) =>
-        t.id === tabId ? { ...t, aliases: { ...t.aliases, [address]: alias } } : t
-      )
+      prev.map((t) => (t.id === tabId ? { ...t, [key]: { ...t[key], [address]: value } } : t))
     );
   };
-
-  const handleUpdateUnit = (tabId: string, address: number, unit: string) => {
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === tabId ? { ...t, units: { ...t.units, [address]: unit } } : t
-      )
-    );
-  };
-
+  const handleUpdateAlias = (tabId: string, address: number, alias: string) =>
+    updateRowSetting(tabId, 'aliases', address, alias);
+  const handleUpdateUnit = (tabId: string, address: number, unit: string) =>
+    updateRowSetting(tabId, 'units', address, unit);
   const handleUpdateScaling = (tabId: string, address: number, scaling: number) => {
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === tabId ? { ...t, scalings: { ...t.scalings, [address]: scaling } } : t
-      )
-    );
+    // A cleared or invalid factor (NaN, 0) would blank or zero every value of the row.
+    if (Number.isFinite(scaling) && scaling !== 0) updateRowSetting(tabId, 'scalings', address, scaling);
   };
 
   const handleUpdateFormat = (tabId: string, address: number, format: DataFormat) => {
@@ -1234,7 +1239,9 @@ export const App: React.FC = () => {
       }
     } else {
       // Add new trace with auto-cycling color
-      const nextColor = TRACE_PALETTE[chartTraces.length % TRACE_PALETTE.length];
+      // First colour not in use; length-based picking repeats colours after a removal.
+      const used = new Set(chartTraces.map((t) => t.color));
+      const nextColor = TRACE_PALETTE.find((c) => !used.has(c)) ?? TRACE_PALETTE[chartTraces.length % TRACE_PALETTE.length];
       const newTrace: ChartTrace = {
         id: traceId,
         tabId: tab.id,
@@ -1251,15 +1258,21 @@ export const App: React.FC = () => {
       setIsChartVisible(true);
 
       // Seed initial data point if row has value
-      if (row.hasValue && typeof row.rawValue === 'number') {
-        const timeNow = new Date();
-        const timeStr = timeNow.toLocaleTimeString('vi-VN', { hour12: false }) + '.' + String(timeNow.getMilliseconds()).padStart(3, '0');
-        const parsed = parseFloat(row.displayValue.replace(/,/g, ''));
-        const val = isNaN(parsed) ? Number(row.rawValue) : parsed;
-        setTraceData((prev) => ({
-          ...prev,
-          [traceId]: [{ timestamp: timeStr, timeMs: timeNow.getTime(), value: val }],
-        }));
+      if (row.hasValue) {
+        const state = tabStates[tab.id];
+        const start = tab.role === 'slave' ? tab.slaveStartAddr : tab.definition.start_address;
+        const fmt = tab.formats?.[row.address] || tab.format;
+        const val = state
+          ? sampleTrace(state.regs, state.coils, row.address - start, fmt, tab.scalings?.[row.address] ?? 1)
+          : NaN;
+        if (Number.isFinite(val)) {
+          const timeNow = new Date();
+          const timeStr = clockStamp(timeNow);
+          setTraceData((prev) => ({
+            ...prev,
+            [traceId]: [{ timestamp: timeStr, timeMs: timeNow.getTime(), value: val }],
+          }));
+        }
       }
     }
   };
@@ -1602,8 +1615,11 @@ export const App: React.FC = () => {
         <TrafficBox
           entries={activeState.traffic}
           onClear={() => updateTabState(activeTab.id, (prev) => ({ ...prev, traffic: [] }))}
+          onOpenAnalyzer={() => setIsProtocolAnalyzerOpen(true)}
         />
       )}
+
+      <ProtocolAnalyzer isOpen={isProtocolAnalyzerOpen} onClose={() => setIsProtocolAnalyzerOpen(false)} />
 
       {/* 6. Status Bar */}
       <StatusBar
@@ -1648,13 +1664,7 @@ export const App: React.FC = () => {
         row={selectedRowForWrite}
         slaveId={modalTab.definition.slave_id}
         readOnly={modalTab.role !== 'slave' && isReadOnlyFunction(modalTab.definition.function_code)}
-        isCoil={
-          selectedRowForWrite
-            ? modalTab.role === 'slave'
-              ? modalTab.slaveTable === 'coils' || modalTab.slaveTable === 'discrete'
-              : modalTab.definition.function_code === 1 || modalTab.definition.function_code === 2
-            : false
-        }
+        isCoil={selectedRowForWrite ? isCoilTab(modalTab) : false}
         onWriteRegister={async (sId, addr, val) => {
           if (modalTab.role === 'slave') {
             await slaveSetRegister(modalTab.id, modalTab.slaveTable, addr, val);

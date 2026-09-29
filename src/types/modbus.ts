@@ -82,6 +82,144 @@ export interface TrafficEntry {
   description?: string;
 }
 
+export type SnifferDirection = 'master_to_slave' | 'slave_to_master' | 'unknown';
+
+export interface SnifferDiagnostic {
+  rule_id: string;
+  severity: 'info' | 'warning' | 'error';
+  scope?: string;
+  message: string;
+  recommendation?: string;
+  confidence: number;
+}
+
+export interface DecodedModbusFrame {
+  unit_id: number;
+  transaction_id?: number;
+  function_code: number;
+  function_name: string;
+  kind: 'request' | 'response' | 'exception' | 'unknown';
+  address?: number;
+  quantity?: number;
+  values?: number[];
+  bits?: boolean[];
+  exception_code?: number;
+  exception_name?: string;
+  crc_valid?: boolean;
+  mbap_valid?: boolean;
+  summary: string;
+  sub_function?: number;
+  write_address?: number;
+  write_quantity?: number;
+  write_values?: number[];
+  and_mask?: number;
+  or_mask?: number;
+  text_data?: string;
+}
+
+export interface CapturedModbusFrame {
+  id: string;
+  sequence: number;
+  captured_at_unix_ns: number;
+  timestamp: string;
+  source_id: string;
+  transport: 'rtu' | 'tcp';
+  direction: SnifferDirection;
+  capture_source: string;
+  capture_quality: 'wire' | 'reconstructed' | 'partial';
+  raw: number[];
+  hex: string;
+  parsed?: DecodedModbusFrame;
+  conversation_id?: string;
+  response_time_us?: number;
+  diagnostics?: SnifferDiagnostic[];
+}
+
+export interface ModbusDeviceHealth {
+  unit_id: number;
+  state: 'unknown' | 'healthy' | 'degraded' | 'suspected_offline' | 'offline' | 'not_polled';
+  requests: number;
+  responses: number;
+  exceptions: number;
+  timeouts: number;
+  retries: number;
+  success_rate: number;
+  average_latency_us: number;
+  p95_latency_us: number;
+  last_request_at?: string;
+  last_response_at?: string;
+}
+
+export interface SnifferHealthSnapshot {
+  score: number;
+  state: 'unknown' | 'healthy' | 'degraded' | 'critical';
+  total_frames: number;
+  requests: number;
+  responses: number;
+  exceptions: number;
+  timeouts: number;
+  retries: number;
+  malformed_frames: number;
+  crc_error_frames: number;
+  orphan_responses: number;
+  pending_requests: number;
+  average_latency_us: number;
+  p95_latency_us: number;
+  devices: ModbusDeviceHealth[];
+}
+
+export type SnifferBaselineMode = 'off' | 'learn' | 'monitor';
+
+export interface SnifferDeviceBaseline {
+  unit_id: number;
+  sample_count: number;
+  median_poll_interval_ms: number;
+  p50_latency_us: number;
+  p95_latency_us: number;
+  observed_function_codes: number[];
+}
+
+export interface SnifferBaselineProfile {
+  mode: SnifferBaselineMode;
+  learned_at?: string;
+  sample_frames: number;
+  devices: Record<number, SnifferDeviceBaseline>;
+}
+
+export interface SnifferSnapshot {
+  generated_at: string;
+  frames: CapturedModbusFrame[];
+  health: SnifferHealthSnapshot;
+  baseline?: SnifferBaselineProfile;
+}
+
+export type SnifferCaptureMode = 'tcp_proxy' | 'rtu_over_tcp_proxy' | 'passive_serial';
+
+export interface SnifferCaptureConfig {
+  mode: SnifferCaptureMode;
+  listen_host?: string;
+  listen_port?: number;
+  target_host?: string;
+  target_port?: number;
+  serial_port?: string;
+  baud_rate?: number;
+  data_bits?: number;
+  parity?: string;
+  stop_bits?: number;
+}
+
+export interface SnifferCaptureStatus {
+  running: boolean;
+  mode: SnifferCaptureMode | '';
+  started_at?: string;
+  listen_address?: string;
+  target_address?: string;
+  active_connections: number;
+  bytes_captured: number;
+  dropped_chunks: number;
+  last_error?: string;
+}
+
 export interface RegisterRow {
   address: number;
   displayAddress: string;
@@ -278,4 +416,3 @@ export interface RemoteServerStatus {
   token: string;
   interfaces: NetworkInterfaceInfo[];
 }
-

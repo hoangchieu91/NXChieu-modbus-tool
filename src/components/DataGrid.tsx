@@ -22,7 +22,6 @@ interface DataGridProps {
   onInlineWrite: (address: number, valueStr: string) => void;
   onToggleCoil: (address: number, currentVal: boolean) => void;
   onOpenChart?: (row: RegisterRow) => void;
-  activeChartAddresses?: number[];
   activeChartColorMap?: Record<number, string>;
 }
 
@@ -38,7 +37,6 @@ const DataGridView: React.FC<DataGridProps> = ({
   onInlineWrite,
   onToggleCoil,
   onOpenChart,
-  activeChartAddresses,
   activeChartColorMap,
 }) => {
   // Inline edit state
@@ -313,8 +311,8 @@ const DataGridView: React.FC<DataGridProps> = ({
               </tr>
             ) : (
               filteredRows.map((row, idx) => {
-                const isTracing = activeChartAddresses?.includes(row.address);
                 const traceColor = activeChartColorMap?.[row.address];
+                const isTracing = traceColor !== undefined;
 
                 // Value flash direction color
                 let flashBg = '';

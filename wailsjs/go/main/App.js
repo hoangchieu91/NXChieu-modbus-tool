@@ -6,6 +6,10 @@ export function AutoDetectBaudrate(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['AutoDetectBaudrate'](arg1, arg2, arg3, arg4);
 }
 
+export function ClearSniffer() {
+  return window['go']['main']['App']['ClearSniffer']();
+}
+
 export function CloseSession(arg1) {
   return window['go']['main']['App']['CloseSession'](arg1);
 }
@@ -14,28 +18,44 @@ export function CompleteRemoteWrite(arg1, arg2) {
   return window['go']['main']['App']['CompleteRemoteWrite'](arg1, arg2);
 }
 
-export function Connect(arg1) {
-  return window['go']['main']['App']['Connect'](arg1);
-}
-
-export function Disconnect() {
-  return window['go']['main']['App']['Disconnect']();
-}
-
-export function GetConnectionStatus() {
-  return window['go']['main']['App']['GetConnectionStatus']();
+export function ExportSnifferCSV() {
+  return window['go']['main']['App']['ExportSnifferCSV']();
 }
 
 export function GetRemoteServerStatus() {
   return window['go']['main']['App']['GetRemoteServerStatus']();
 }
 
+export function GetSnifferBaseline() {
+  return window['go']['main']['App']['GetSnifferBaseline']();
+}
+
+export function GetSnifferSnapshot(arg1) {
+  return window['go']['main']['App']['GetSnifferSnapshot'](arg1);
+}
+
+export function GetSnifferStatus() {
+  return window['go']['main']['App']['GetSnifferStatus']();
+}
+
 export function ListSerialPorts() {
   return window['go']['main']['App']['ListSerialPorts']();
 }
 
-export function ReadOnce(arg1) {
-  return window['go']['main']['App']['ReadOnce'](arg1);
+export function OpenSnifferCapture() {
+  return window['go']['main']['App']['OpenSnifferCapture']();
+}
+
+export function ResetSnifferBaseline() {
+  return window['go']['main']['App']['ResetSnifferBaseline']();
+}
+
+export function SaveSnifferCapture() {
+  return window['go']['main']['App']['SaveSnifferCapture']();
+}
+
+export function SetSnifferBaselineMode(arg1) {
+  return window['go']['main']['App']['SetSnifferBaselineMode'](arg1);
 }
 
 export function ScanRegisters(arg1, arg2, arg3, arg4) {
@@ -90,10 +110,6 @@ export function SlaveGetSlice(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SlaveGetSlice'](arg1, arg2, arg3, arg4);
 }
 
-export function SlaveIsListening(arg1) {
-  return window['go']['main']['App']['SlaveIsListening'](arg1);
-}
-
 export function SlaveSetCoil(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SlaveSetCoil'](arg1, arg2, arg3, arg4);
 }
@@ -118,34 +134,22 @@ export function SlaveStopSim(arg1) {
   return window['go']['main']['App']['SlaveStopSim'](arg1);
 }
 
-export function StartPolling(arg1) {
-  return window['go']['main']['App']['StartPolling'](arg1);
-}
-
 export function StartRemoteServer(arg1, arg2) {
   return window['go']['main']['App']['StartRemoteServer'](arg1, arg2);
 }
 
-export function StopPolling() {
-  return window['go']['main']['App']['StopPolling']();
+export function StartSniffer(arg1) {
+  return window['go']['main']['App']['StartSniffer'](arg1);
 }
 
 export function StopRemoteServer() {
   return window['go']['main']['App']['StopRemoteServer']();
 }
 
+export function StopSniffer() {
+  return window['go']['main']['App']['StopSniffer']();
+}
+
 export function UpdateRemoteServerState(arg1) {
   return window['go']['main']['App']['UpdateRemoteServerState'](arg1);
-}
-
-export function WriteRegisters(arg1) {
-  return window['go']['main']['App']['WriteRegisters'](arg1);
-}
-
-export function WriteSingleCoil(arg1) {
-  return window['go']['main']['App']['WriteSingleCoil'](arg1);
-}
-
-export function WriteSingleRegister(arg1) {
-  return window['go']['main']['App']['WriteSingleRegister'](arg1);
 }
