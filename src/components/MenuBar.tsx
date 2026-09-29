@@ -14,6 +14,7 @@ import {
   FileSpreadsheet,
   HelpCircle,
   Search,
+  Smartphone,
 } from 'lucide-react';
 import { SessionRole } from '../types/modbus';
 
@@ -37,6 +38,7 @@ interface MenuBarProps {
   onExportCSV: () => void;
   onOpenHelp?: () => void;
   onOpenScanner?: () => void;
+  onOpenMobileRemote?: () => void;
 }
 
 
@@ -60,6 +62,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onExportCSV,
   onOpenHelp,
   onOpenScanner,
+  onOpenMobileRemote,
 }) => {
   return (
     <div className="flex items-center justify-between px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 select-none">
@@ -227,6 +230,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({
         <span className="text-slate-300 font-medium">Modbus RTU / TCP / RTU over TCP</span>
         <span className="text-slate-600">|</span>
         <span className="text-slate-400 font-mono">Master + Slave 2-in-1</span>
+
+        {onOpenMobileRemote && (
+          <>
+            <span className="text-slate-600">|</span>
+            <button
+              onClick={onOpenMobileRemote}
+              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-950/70 hover:bg-purple-900 text-purple-300 border border-purple-700/60 font-semibold transition-all shadow-sm"
+              title="Mở Giám sát từ xa trên Điện thoại & Mã QR (F9)"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-purple-400" />
+              <span>Xem Trên ĐT (F9)</span>
+            </button>
+          </>
+        )}
 
         {onOpenHelp && (
           <>

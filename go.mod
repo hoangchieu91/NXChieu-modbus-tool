@@ -3,6 +3,7 @@ module nxchieu-modbus-tool
 go 1.25.3
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/simonvetter/modbus v1.6.4
 	github.com/wailsapp/wails/v2 v2.16.0
 	go.bug.st/serial v1.8.0
@@ -15,7 +16,6 @@ require (
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
 	github.com/labstack/echo/v4 v4.13.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect

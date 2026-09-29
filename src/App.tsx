@@ -32,6 +32,7 @@ import { SlaveModal } from './components/SlaveModal';
 import { TrendChart } from './components/TrendChart';
 import { HelpModal } from './components/HelpModal';
 import { ScannerModal } from './components/ScannerModal';
+import { MobileRemoteModal } from './components/MobileRemoteModal';
 
 
 import {
@@ -183,7 +184,7 @@ export const App: React.FC = () => {
     []
   );
 
-  // Global Hotkeys: F1 (Help), F4 (Scanner)
+  // Global Hotkeys: F1 (Help), F4 (Scanner), F9 (Mobile Remote)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F1') {
@@ -192,6 +193,9 @@ export const App: React.FC = () => {
       } else if (e.key === 'F4') {
         e.preventDefault();
         setIsScannerModalOpen((prev) => !prev);
+      } else if (e.key === 'F9') {
+        e.preventDefault();
+        setIsMobileModalOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -209,6 +213,7 @@ export const App: React.FC = () => {
   const [isWriteModalOpen, setIsWriteModalOpen] = useState<boolean>(false);
   const [isSlaveModalOpen, setIsSlaveModalOpen] = useState<boolean>(false);
   const [isScannerModalOpen, setIsScannerModalOpen] = useState<boolean>(false);
+  const [isMobileModalOpen, setIsMobileModalOpen] = useState<boolean>(false);
   const [selectedRowForWrite, setSelectedRowForWrite] = useState<RegisterRow | null>(null);
   const [selectedTabForWrite, setSelectedTabForWrite] = useState<TabSession | null>(null);
 
@@ -1084,6 +1089,7 @@ export const App: React.FC = () => {
         onExportCSV={handleExportCSV}
         onOpenHelp={() => setIsHelpModalOpen(true)}
         onOpenScanner={() => setIsScannerModalOpen(true)}
+        onOpenMobileRemote={() => setIsMobileModalOpen(true)}
       />
 
       {/* 2. Toolbar */}
@@ -1118,6 +1124,7 @@ export const App: React.FC = () => {
         onToggleChart={() => setIsChartVisible(!isChartVisible)}
         onOpenHelp={() => setIsHelpModalOpen(true)}
         onOpenScanner={() => setIsScannerModalOpen(true)}
+        onOpenMobileRemote={() => setIsMobileModalOpen(true)}
       />
 
 
@@ -1348,6 +1355,15 @@ export const App: React.FC = () => {
         onApplySlaveId={handleApplySlaveId}
         onApplyConnection={handleApplyScannerConnection}
         onApplyRange={handleApplyScannerRange}
+      />
+
+      {/* 9. Mobile Phone Live Remote Monitor & QR Code Modal */}
+      <MobileRemoteModal
+        isOpen={isMobileModalOpen}
+        onClose={() => setIsMobileModalOpen(false)}
+        sessions={tabs}
+        activeSessionId={activeTabId}
+        activeRows={activeRowsObj.rows}
       />
     </div>
 

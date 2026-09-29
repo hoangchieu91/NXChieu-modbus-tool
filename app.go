@@ -3,18 +3,21 @@ package main
 import (
 	"context"
 	"sync"
+	"time"
 
 	"nxchieu-modbus-tool/pkg/modbus"
+	"nxchieu-modbus-tool/pkg/web"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct manages application state and bridges Wails frontend calls.
 type App struct {
-	ctx      context.Context
-	mu       sync.Mutex
-	sessMgr  *modbus.SessionManager
-	defPort  *modbus.ModbusClientWrapper
+	ctx          context.Context
+	mu           sync.Mutex
+	sessMgr      *modbus.SessionManager
+	defPort      *modbus.ModbusClientWrapper
+	remoteServer *web.RemoteServer
 }
 
 // NewApp creates a new App application struct
@@ -23,10 +26,36 @@ func NewApp() *App {
 		defPort: modbus.NewModbusClientWrapper(),
 	}
 
+	app.remoteServer = web.NewRemoteServer(
+		func(tabID string, isCoil bool, addr uint16, val uint16, boolVal bool) error {
+			if tabID == "" {
+				tabID = "default"
+			}
+			if isCoil {
+				return app.sessMgr.MasterWriteCoil(tabID, modbus.WriteCoilParam{
+					Address: addr,
+					Value:   boolVal,
+				})
+			}
+			return app.sessMgr.MasterWriteRegister(tabID, modbus.WriteRegisterParam{
+				Address: addr,
+				Value:   val,
+			})
+		},
+		func() map[string]interface{} {
+			return map[string]interface{}{
+				"timestamp": time.Now().Format(time.RFC3339),
+			}
+		},
+	)
+
 	app.sessMgr = modbus.NewSessionManager(
 		func(sessionID string, res modbus.PollResult) {
 			if app.ctx != nil {
 				runtime.EventsEmit(app.ctx, "poll-data", res)
+			}
+			if app.remoteServer != nil {
+				app.remoteServer.BroadcastPollResult(sessionID, res)
 			}
 		},
 		func(act modbus.SlaveActivityEvent) {
@@ -251,5 +280,34 @@ func (a *App) ScanRegisters(sessionID string, fc uint8, startAddr, endAddr uint1
 		sessionID = "default"
 	}
 	return a.sessMgr.ScanRegisters(sessionID, fc, startAddr, endAddr)
+}
+
+// --- Web Remote Server Operations ---
+
+// StartRemoteServer starts the HTTP & WebSocket server for mobile phone live monitoring.
+func (a *App) StartRemoteServer(port uint16, allowWrite bool) (web.RemoteServerStatus, error) {
+	err := a.remoteServer.Start(web.RemoteServerConfig{
+		Port:       port,
+		AllowWrite: allowWrite,
+	})
+	return a.remoteServer.GetStatus(), err
+}
+
+// StopRemoteServer stops the Web Remote Server.
+func (a *App) StopRemoteServer() web.RemoteServerStatus {
+	a.remoteServer.Stop()
+	return a.remoteServer.GetStatus()
+}
+
+// GetRemoteServerStatus returns the status of Web Remote Server and network adapters.
+func (a *App) GetRemoteServerStatus() web.RemoteServerStatus {
+	return a.remoteServer.GetStatus()
+}
+
+// UpdateRemoteServerState pushes active UI state (tabs/sheets info) to connected phones.
+func (a *App) UpdateRemoteServerState(state map[string]interface{}) {
+	if a.remoteServer != nil {
+		a.remoteServer.BroadcastState(state)
+	}
 }
 

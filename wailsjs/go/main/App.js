@@ -22,6 +22,10 @@ export function GetConnectionStatus() {
   return window['go']['main']['App']['GetConnectionStatus']();
 }
 
+export function GetRemoteServerStatus() {
+  return window['go']['main']['App']['GetRemoteServerStatus']();
+}
+
 export function ListSerialPorts() {
   return window['go']['main']['App']['ListSerialPorts']();
 }
@@ -106,8 +110,20 @@ export function StartPolling(arg1) {
   return window['go']['main']['App']['StartPolling'](arg1);
 }
 
+export function StartRemoteServer(arg1, arg2) {
+  return window['go']['main']['App']['StartRemoteServer'](arg1, arg2);
+}
+
 export function StopPolling() {
   return window['go']['main']['App']['StopPolling']();
+}
+
+export function StopRemoteServer() {
+  return window['go']['main']['App']['StopRemoteServer']();
+}
+
+export function UpdateRemoteServerState(arg1) {
+  return window['go']['main']['App']['UpdateRemoteServerState'](arg1);
 }
 
 export function WriteSingleCoil(arg1) {

@@ -250,3 +250,19 @@ export interface MultiColumnDecoded {
   ascii: string;
 }
 
+export interface NetworkInterfaceInfo {
+  name: string;
+  ip: string;
+  type: 'vpn_tailscale' | 'vpn' | 'lan' | 'wifi' | 'other' | string;
+  description: string;
+  url: string;
+}
+
+export interface RemoteServerStatus {
+  is_running: boolean;
+  port: number;
+  allow_write: boolean;
+  active_clients: number;
+  interfaces: NetworkInterfaceInfo[];
+}
+

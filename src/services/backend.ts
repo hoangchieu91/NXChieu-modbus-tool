@@ -306,3 +306,64 @@ export async function scanRegisters(
   }
 }
 
+// --- Web Remote Server Operations ---
+
+export async function startRemoteServer(
+  port: number = 8088,
+  allowWrite: boolean = true
+): Promise<import('../types/modbus').RemoteServerStatus> {
+  try {
+    const res = await (AppMethods as any).StartRemoteServer(port, allowWrite);
+    return res;
+  } catch (e: any) {
+    console.error('startRemoteServer error:', e);
+    return {
+      is_running: false,
+      port,
+      allow_write: allowWrite,
+      active_clients: 0,
+      interfaces: [],
+    };
+  }
+}
+
+export async function stopRemoteServer(): Promise<import('../types/modbus').RemoteServerStatus> {
+  try {
+    const res = await (AppMethods as any).StopRemoteServer();
+    return res;
+  } catch (e: any) {
+    console.error('stopRemoteServer error:', e);
+    return {
+      is_running: false,
+      port: 8088,
+      allow_write: true,
+      active_clients: 0,
+      interfaces: [],
+    };
+  }
+}
+
+export async function getRemoteServerStatus(): Promise<import('../types/modbus').RemoteServerStatus> {
+  try {
+    const res = await (AppMethods as any).GetRemoteServerStatus();
+    return res;
+  } catch (e: any) {
+    console.error('getRemoteServerStatus error:', e);
+    return {
+      is_running: false,
+      port: 8088,
+      allow_write: true,
+      active_clients: 0,
+      interfaces: [],
+    };
+  }
+}
+
+export async function updateRemoteServerState(state: any): Promise<void> {
+  try {
+    await (AppMethods as any).UpdateRemoteServerState(state);
+  } catch (e: any) {
+    console.error('updateRemoteServerState error:', e);
+  }
+}
+

@@ -19,6 +19,7 @@ import {
   LineChart,
   HelpCircle,
   Search,
+  Smartphone,
 } from 'lucide-react';
 import { DataFormat, SessionRole, SlaveTable } from '../types/modbus';
 
@@ -52,6 +53,7 @@ interface ToolbarProps {
   onToggleChart?: () => void;
   onOpenHelp?: () => void;
   onOpenScanner?: () => void;
+  onOpenMobileRemote?: () => void;
 }
 
 
@@ -82,6 +84,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleChart,
   onOpenHelp,
   onOpenScanner,
+  onOpenMobileRemote,
 }) => {
   return (
     <div className="flex flex-wrap items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs gap-2">
@@ -284,6 +287,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             <Search className="w-3.5 h-3.5 text-cyan-400" />
             <span>Bộ Quét (Scanner)</span>
+          </button>
+        )}
+
+        {/* Mobile Remote Live Monitor Trigger */}
+        {onOpenMobileRemote && (
+          <button
+            onClick={onOpenMobileRemote}
+            className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-gradient-to-r from-purple-950/70 to-indigo-950/70 hover:from-purple-900 hover:to-indigo-900 text-purple-300 border border-purple-500/50 shadow-sm transition-all font-semibold"
+            title="Xem Modbus trực tiếp trên điện thoại qua Wi-Fi hoặc 4G Tailscale VPN (F9)"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-purple-400" />
+            <span>Xem Trên ĐT (F9)</span>
           </button>
         )}
 

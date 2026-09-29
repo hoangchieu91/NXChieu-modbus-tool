@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   FileSpreadsheet,
   Search,
+  Smartphone,
 } from 'lucide-react';
 
 interface HelpModalProps {
@@ -18,7 +19,7 @@ interface HelpModalProps {
   onClose: () => void;
 }
 
-type HelpTab = 'quickstart' | 'master' | 'slave' | 'splitview' | 'chart' | 'scanner' | 'hotkeys';
+type HelpTab = 'quickstart' | 'master' | 'slave' | 'splitview' | 'chart' | 'scanner' | 'mobile' | 'hotkeys';
 
 
 export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
@@ -130,10 +131,22 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
           </button>
 
           <button
+            onClick={() => setActiveTab('mobile')}
+            className={`flex items-center space-x-1.5 px-3 py-2 border-b-2 font-medium transition-all ${
+              activeTab === 'mobile'
+                ? 'border-purple-400 text-purple-300 bg-purple-950/30 rounded-t'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Smartphone className="w-3.5 h-3.5" />
+            <span>Xem Trên ĐT (F9)</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('hotkeys')}
             className={`flex items-center space-x-1.5 px-3 py-2 border-b-2 font-medium transition-all ${
               activeTab === 'hotkeys'
-                ? 'border-purple-400 text-purple-300 bg-purple-950/30 rounded-t'
+                ? 'border-amber-400 text-amber-300 bg-amber-950/30 rounded-t'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -532,7 +545,64 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
             </div>
           )}
 
-          {/* TAB 7: HOTKEYS */}
+          {/* TAB 7: MOBILE REMOTE MONITOR */}
+          {activeTab === 'mobile' && (
+            <div className="space-y-4">
+              <div className="bg-slate-950/60 p-4 rounded-lg border border-slate-800">
+                <h3 className="text-base font-semibold text-purple-400 flex items-center space-x-2">
+                  <Smartphone className="w-5 h-5 text-purple-400" />
+                  <span>Giám Sát Modbus Từ Xa Trên Điện Thoại (4G VPN & Wi-Fi)</span>
+                </h3>
+                <p className="text-slate-300 mt-1 text-xs leading-relaxed">
+                  Tính năng Web Remote Monitor cho phép xem trực tiếp số liệu Modbus trên trình duyệt di động mà không cần cài đặt thêm bất kỳ phần mềm nào. Cực kỳ tiện lợi khi kỹ sư thao tác ngoài tủ điện hoặc giám sát từ xa qua điện thoại 4G.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div className="bg-slate-950/40 p-3.5 rounded-lg border border-slate-800 space-y-2">
+                  <h4 className="font-semibold text-cyan-400 flex items-center space-x-1.5">
+                    <span>📶</span>
+                    <span>1. Xem Trong Mạng Nội Bộ (Wi-Fi Xưởng / Văn Phòng)</span>
+                  </h4>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Máy tính và điện thoại cùng kết nối vào một mạng Wi-Fi hoặc Router nội bộ. Bấm <strong>F9</strong> để mở bảng QR Code, chọn card mạng Wi-Fi hoặc Ethernet LAN và mở camera điện thoại quét mã là truy cập ngay với độ trễ siêu thấp (&lt; 10ms).
+                  </p>
+                </div>
+
+                <div className="bg-slate-950/40 p-3.5 rounded-lg border border-slate-800 space-y-2">
+                  <h4 className="font-semibold text-purple-400 flex items-center space-x-1.5">
+                    <span>🌐</span>
+                    <span>2. Xem Qua Sóng 4G/5G Từ Xa (Tailscale / WireGuard)</span>
+                  </h4>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Khi đi công tác hoặc ra ngoài hiện trường chỉ có sóng 4G: Bật ứng dụng Tailscale / WireGuard trên điện thoại để gia nhập mạng riêng ảo. Bấm <strong>F9</strong> trên phần mềm, chọn card <strong>Tailscale VPN (IP 100.x.x.x)</strong> và quét mã QR để giám sát từ bất kỳ đâu trên thế giới.
+                  </p>
+                </div>
+
+                <div className="bg-slate-950/40 p-3.5 rounded-lg border border-slate-800 space-y-2">
+                  <h4 className="font-semibold text-emerald-400 flex items-center space-x-1.5">
+                    <span>⚡</span>
+                    <span>3. Giao Diện Mobile Độc Lập Siêu Nhẹ</span>
+                  </h4>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Tích hợp sẵn thẻ KPI số lớn cho 4 thanh ghi đầu tiên, hiệu ứng chớp màu xanh/đỏ khi giá trị biến thiên, danh sách cuộn mượt mà, chuyển đổi giữa các Sheet làm việc linh hoạt và cơ chế tự động kết nối lại (Auto-Reconnect).
+                  </p>
+                </div>
+
+                <div className="bg-slate-950/40 p-3.5 rounded-lg border border-slate-800 space-y-2">
+                  <h4 className="font-semibold text-amber-400 flex items-center space-x-1.5">
+                    <span>🍓</span>
+                    <span>4. Sẵn Sàng Kiến Trúc Raspberry Pi Headless</span>
+                  </h4>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Backend Web Server bằng Go siêu nhẹ (&lt; 20MB RAM, không tải CPU) được chuẩn bị sẵn để triển khai trên Raspberry Pi gắn RS485 trong tủ điện công nghiệp, hoạt động 24/7 phục vụ giám sát trên điện thoại của kỹ sư vận hành.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 8: HOTKEYS */}
           {activeTab === 'hotkeys' && (
             <div className="space-y-4">
               <div className="bg-slate-950/60 p-4 rounded-lg border border-slate-800">
@@ -564,6 +634,10 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                   <div className="py-2.5 flex items-center justify-between">
                     <span className="text-slate-300">Cài đặt khung đọc (Setup Definition)</span>
                     <kbd className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-cyan-400 font-mono font-bold">F8</kbd>
+                  </div>
+                  <div className="py-2.5 flex items-center justify-between">
+                    <span className="text-slate-300 font-semibold text-purple-400">Mở Giám Sát Từ Xa Trên Điện Thoại & Mã QR</span>
+                    <kbd className="px-2 py-1 bg-purple-950 border border-purple-700 rounded text-purple-300 font-mono font-bold">F9</kbd>
                   </div>
                   <div className="py-2.5 flex items-center justify-between">
                     <span className="text-slate-300">Ghi giá trị thanh ghi (khi đang nhập ô Value)</span>
