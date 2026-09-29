@@ -1,0 +1,3 @@
+/* Source for the offline mobile page stylesheet. Rebuild with: npm run build:mobile-css */
+@import "tailwindcss" source(none);
+@source "./index.html";

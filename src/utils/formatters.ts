@@ -120,6 +120,57 @@ export function decodeFloat32(
 /**
  * Format a 16-bit or multi-word value based on chosen DataFormat
  */
+/** Number of registers a value in this format occupies. */
+export function formatWidth(format: DataFormat): number {
+  switch (format) {
+    case 'float_abcd':
+    case 'float_cdab':
+    case 'float_badc':
+    case 'float_dcba':
+    case 'long_abcd':
+    case 'long_cdab':
+    case 'uint32_abcd':
+    case 'uint32_cdab':
+      return 2;
+    case 'water_48_be':
+    case 'water_48_le':
+    case 'water_48_bcd':
+      return 3;
+    case 'int64':
+    case 'uint64':
+      return 4;
+    default:
+      return 1;
+  }
+}
+
+/** Decimals implied by a scale factor: 0.1 -> 1, 0.001 -> 3, 0.25 -> 2, 10 -> 0. */
+export function scaleDecimals(scaling: number): number {
+  if (!Number.isFinite(scaling) || Number.isInteger(scaling)) return 0;
+  const text = scaling.toFixed(10).replace(/0+$/, '');
+  const dot = text.indexOf('.');
+  return dot < 0 ? 0 : Math.min(10, text.length - dot - 1);
+}
+
+/** Applies a scale factor and shows exactly the precision the factor gives. */
+function formatScaled(raw: number, scaling: number): string {
+  if (scaling === 1) return raw.toString();
+  return (raw * scaling).toFixed(scaleDecimals(scaling));
+}
+
+/** Same for 48/64-bit values; exact below 2^53 (all 48-bit meters). */
+function formatScaledBig(raw: bigint, scaling: number): string {
+  if (scaling === 1) return raw.toString();
+  return (Number(raw) * scaling).toFixed(scaleDecimals(scaling));
+}
+
+/** float32 carries ~7 significant digits; toFixed(4) would show 1e-5 as "0". */
+function formatFloat(v: number): string {
+  if (isNaN(v)) return 'NaN';
+  if (!Number.isFinite(v)) return v > 0 ? 'Inf' : '-Inf';
+  return Number(v.toPrecision(7)).toString();
+}
+
 export function formatValue(
   values: number[],
   index: number,
@@ -129,20 +180,24 @@ export function formatValue(
   const v16 = values[index] ?? 0;
   const hex16 = `0x${v16.toString(16).toUpperCase().padStart(4, '0')}`;
 
+  // A multi-register value on the last rows would read missing registers as 0 and show a
+  // plausible but wrong number.
+  if (index + formatWidth(format) > values.length) {
+    return { display: '--', hex: hex16 };
+  }
+
   switch (format) {
     case 'unsigned16': {
-      const val = v16 * scaling;
       return {
-        display: scaling === 1 ? val.toString() : val.toFixed(2),
+        display: formatScaled(v16, scaling),
         hex: hex16,
       };
     }
 
     case 'signed16': {
       const s16 = v16 > 32767 ? v16 - 65536 : v16;
-      const val = s16 * scaling;
       return {
-        display: scaling === 1 ? val.toString() : val.toFixed(2),
+        display: formatScaled(s16, scaling),
         hex: hex16,
       };
     }
@@ -175,9 +230,8 @@ export function formatValue(
       if (isNaN(f32)) {
         return { display: 'NaN', hex: combinedHex };
       }
-      const val = f32 * scaling;
       return {
-        display: val.toFixed(4).replace(/\.?0+$/, ''),
+        display: scaling === 1 ? formatFloat(f32) : (f32 * scaling).toFixed(Math.max(scaleDecimals(scaling), 3)),
         hex: combinedHex,
       };
     }
@@ -185,10 +239,9 @@ export function formatValue(
     case 'long_abcd': {
       const high = v16;
       const low = values[index + 1] ?? 0;
-      let int32 = ((high << 16) | low) | 0;
-      const val = int32 * scaling;
+      const int32 = ((high << 16) | low) | 0;
       return {
-        display: scaling === 1 ? val.toString() : val.toFixed(2),
+        display: formatScaled(int32, scaling),
         hex: `${hex16} 0x${low.toString(16).toUpperCase().padStart(4, '0')}`,
       };
     }
@@ -196,10 +249,9 @@ export function formatValue(
     case 'long_cdab': {
       const high = v16;
       const low = values[index + 1] ?? 0;
-      let int32 = ((low << 16) | high) | 0;
-      const val = int32 * scaling;
+      const int32 = ((low << 16) | high) | 0;
       return {
-        display: scaling === 1 ? val.toString() : val.toFixed(2),
+        display: formatScaled(int32, scaling),
         hex: `${hex16} 0x${low.toString(16).toUpperCase().padStart(4, '0')}`,
       };
     }
@@ -207,10 +259,9 @@ export function formatValue(
     case 'uint32_abcd': {
       const high = v16;
       const low = values[index + 1] ?? 0;
-      const u32 = ((high >>> 0) << 16) | (low & 0xffff);
-      const val = (u32 >>> 0) * scaling;
+      const u32 = (((high >>> 0) << 16) | (low & 0xffff)) >>> 0;
       return {
-        display: scaling === 1 ? val.toString() : val.toFixed(2),
+        display: formatScaled(u32, scaling),
         hex: `${hex16} 0x${low.toString(16).toUpperCase().padStart(4, '0')}`,
       };
     }
@@ -218,10 +269,9 @@ export function formatValue(
     case 'uint32_cdab': {
       const high = v16;
       const low = values[index + 1] ?? 0;
-      const u32 = ((low >>> 0) << 16) | (high & 0xffff);
-      const val = (u32 >>> 0) * scaling;
+      const u32 = (((low >>> 0) << 16) | (high & 0xffff)) >>> 0;
       return {
-        display: scaling === 1 ? val.toString() : val.toFixed(2),
+        display: formatScaled(u32, scaling),
         hex: `${hex16} 0x${low.toString(16).toUpperCase().padStart(4, '0')}`,
       };
     }
@@ -233,7 +283,7 @@ export function formatValue(
       const r3 = values[index + 3] ?? 0;
       const i64 = decodeInt64(r0, r1, r2, r3);
       return {
-        display: i64.toString(),
+        display: formatScaledBig(i64, scaling),
         hex: `${hex16} 0x${r1.toString(16).padStart(4, '0')} 0x${r2.toString(16).padStart(4, '0')} 0x${r3.toString(16).padStart(4, '0')}`,
       };
     }
@@ -245,7 +295,7 @@ export function formatValue(
       const r3 = values[index + 3] ?? 0;
       const u64 = decodeUInt64(r0, r1, r2, r3);
       return {
-        display: u64.toString(),
+        display: formatScaledBig(u64, scaling),
         hex: `${hex16} 0x${r1.toString(16).padStart(4, '0')} 0x${r2.toString(16).padStart(4, '0')} 0x${r3.toString(16).padStart(4, '0')}`,
       };
     }
@@ -257,7 +307,7 @@ export function formatValue(
       const r2 = values[index + 2] ?? 0;
       const u48 = decodeUInt48BE(r0, r1, r2);
       return {
-        display: u48.toString(),
+        display: formatScaledBig(u48, scaling),
         hex: `${hex16} 0x${r1.toString(16).padStart(4, '0')} 0x${r2.toString(16).padStart(4, '0')}`,
       };
     }
@@ -269,7 +319,7 @@ export function formatValue(
       const r2 = values[index + 2] ?? 0;
       const u48 = decodeUInt48LE(r0, r1, r2);
       return {
-        display: u48.toString(),
+        display: formatScaledBig(u48, scaling),
         hex: `${hex16} 0x${r1.toString(16).padStart(4, '0')} 0x${r2.toString(16).padStart(4, '0')}`,
       };
     }
@@ -281,7 +331,7 @@ export function formatValue(
       const r2 = values[index + 2] ?? 0;
       const bcd = decodeBCD48(r0, r1, r2, false);
       return {
-        display: bcd.text,
+        display: bcd.valid && scaling !== 1 ? formatScaled(bcd.num, scaling) : bcd.text,
         hex: `${hex16} 0x${r1.toString(16).padStart(4, '0')} 0x${r2.toString(16).padStart(4, '0')}`,
       };
     }
@@ -310,15 +360,15 @@ export function parseModbusAddress(
   mode: 'dec' | 'hex' = 'dec'
 ): { value: number; isValid: boolean; error?: string } {
   if (typeof input === 'number') {
-    if (isNaN(input) || input < 0 || input > 65535) {
-      return { value: 0, isValid: false, error: 'Địa chỉ phải từ 0 đến 65535' };
+    if (!Number.isInteger(input) || input < 0 || input > 65535) {
+      return { value: 0, isValid: false, error: 'Địa chỉ phải là số nguyên từ 0 đến 65535' };
     }
-    return { value: Math.floor(input), isValid: true };
+    return { value: input, isValid: true };
   }
 
   const raw = String(input).trim();
   if (!raw) {
-    return { value: 0, isValid: true };
+    return { value: 0, isValid: false, error: 'Chưa nhập địa chỉ' };
   }
 
   // Check for explicit Hex syntax: 0x..., 0X..., ...h, ...H, $...
@@ -337,7 +387,9 @@ export function parseModbusAddress(
     cleanStr = raw.slice(0, -1);
   }
 
-  const parsed = parseInt(cleanStr, isHex ? 16 : 10);
+  // The whole string must be digits: parseInt("123abc") would silently return 123.
+  const wellFormed = isHex ? /^[0-9a-f]{1,4}$/i.test(cleanStr) : /^\d{1,5}$/.test(cleanStr);
+  const parsed = wellFormed ? parseInt(cleanStr, isHex ? 16 : 10) : NaN;
   if (isNaN(parsed) || parsed < 0 || parsed > 65535) {
     return {
       value: 0,
@@ -366,11 +418,34 @@ export function formatModbusAddress(
 }
 
 /**
- * Standard Modbus register address display string:
- * FC 01: 00001 + offset
- * FC 02: 10001 + offset
- * FC 03: 40001 + offset
- * FC 04: 30001 + offset
+ * Modicon-style reference number: table digit + (address + 1), 5 digits (40001..49999) up to
+ * address 9998 and 6 digits (410000..465536) above, so 10000 is never shown as 40001-like
+ * labels of another table.
+ */
+export function modiconAddress(tableDigit: 0 | 1 | 3 | 4, address: number): string {
+  return `${tableDigit}${String(address + 1).padStart(4, '0')}`;
+}
+
+/** Modicon table digit for a function code or slave table. */
+export function modiconTableDigit(fcOrTable: number | string): 0 | 1 | 3 | 4 {
+  switch (fcOrTable) {
+    case 1:
+    case 'coils':
+      return 0;
+    case 2:
+    case 'discrete':
+      return 1;
+    case 4:
+    case 'input':
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+/**
+ * Standard Modbus register address display string (FC01 0xxxx, FC02 1xxxx, FC03 4xxxx,
+ * FC04 3xxxx; 6 digits from address 9999 up), or 0x-hex in hex mode.
  */
 export function getModbusAddressLabel(
   functionCode: number,
@@ -380,18 +455,8 @@ export function getModbusAddressLabel(
   if (mode === 'hex') {
     return `0x${(address & 0xffff).toString(16).toUpperCase().padStart(4, '0')}`;
   }
-  switch (functionCode) {
-    case 1:
-      return `${(1 + address).toString().padStart(5, '0')}`;
-    case 2:
-      return `${(10001 + address).toString()}`;
-    case 3:
-      return `${(40001 + address).toString()}`;
-    case 4:
-      return `${(30001 + address).toString()}`;
-    default:
-      return `${address}`;
-  }
+  if (functionCode < 1 || functionCode > 4) return `${address}`;
+  return modiconAddress(modiconTableDigit(functionCode), address);
 }
 
 /**
@@ -428,7 +493,10 @@ export function decodeAllColumns(
   const f_badc = decodeFloat32(r0, r1, 'float_badc');
   const f_dcba = decodeFloat32(r0, r1, 'float_dcba');
 
-  const formatF = (v: number) => (isNaN(v) ? 'NaN' : v.toFixed(4).replace(/\.?0+$/, ''));
+  const formatF = formatFloat;
+  // Columns wider than the registers left in the block show '--' instead of reading zeros.
+  const left = values.length - index;
+  const need = <T,>(width: number, v: T): T | string => (left >= width ? v : '--');
 
   // 64-bit Integers
   const i64 = decodeInt64(r0, r1, r2, r3);
@@ -452,19 +520,19 @@ export function decodeAllColumns(
     bin,
     int16,
     uint16,
-    int32_abcd,
-    int32_cdab,
-    uint32_abcd,
-    uint32_cdab,
-    float_abcd: formatF(f_abcd),
-    float_cdab: formatF(f_cdab),
-    float_badc: formatF(f_badc),
-    float_dcba: formatF(f_dcba),
-    int64: i64.toString(),
-    uint64: u64.toString(),
-    water_48_be: w48_be.toString(),
-    water_48_le: w48_le.toString(),
-    water_48_bcd: bcdRes.text,
+    int32_abcd: need(2, int32_abcd),
+    int32_cdab: need(2, int32_cdab),
+    uint32_abcd: need(2, uint32_abcd),
+    uint32_cdab: need(2, uint32_cdab),
+    float_abcd: need(2, formatF(f_abcd)),
+    float_cdab: need(2, formatF(f_cdab)),
+    float_badc: need(2, formatF(f_badc)),
+    float_dcba: need(2, formatF(f_dcba)),
+    int64: need(4, i64.toString()),
+    uint64: need(4, u64.toString()),
+    water_48_be: need(3, w48_be.toString()),
+    water_48_le: need(3, w48_le.toString()),
+    water_48_bcd: need(3, bcdRes.text),
     ascii,
   };
 }
@@ -486,9 +554,30 @@ export type EncodedRegisters = { ok: true; values: number[] } | { ok: false; err
  * - 32-bit Int: long_abcd, long_cdab -> 2 registers
  * - 32-bit UInt: uint32_abcd, uint32_cdab -> 2 registers
  */
+// Parses a decimal number and applies scaling. Integer targets reject fractions unless a scale
+// factor is set (then the scaled value is rounded to the nearest raw step).
+function parseScaled(trimmed: string, scaling: number, integer: boolean): { ok: true; value: number } | { ok: false; error: string } {
+  const parsed = Number(trimmed);
+  if (trimmed === '' || !Number.isFinite(parsed)) {
+    return { ok: false, error: `Giá trị "${trimmed}" không hợp lệ.` };
+  }
+  const scaled = scaling !== 1 && scaling !== 0 ? parsed / scaling : parsed;
+  if (!integer) return { ok: true, value: scaled };
+  if (scaling === 1 || scaling === 0) {
+    if (!Number.isInteger(parsed)) return { ok: false, error: 'Định dạng số nguyên không nhận số thập phân.' };
+    return { ok: true, value: parsed };
+  }
+  return { ok: true, value: Math.round(scaled) };
+}
+
+/**
+ * `format` undefined means a raw 16-bit write (Write dialog): -32768..65535 is accepted and
+ * negatives are stored as two's complement. Typed formats enforce their own range, checked on
+ * the raw value after scaling.
+ */
 export function encodeRegisterInput(
   input: string,
-  format: DataFormat = 'unsigned16',
+  format: DataFormat | undefined,
   scaling = 1
 ): EncodedRegisters {
   const trimmed = input.trim();
@@ -506,32 +595,34 @@ export function encodeRegisterInput(
     } else if (/^0b[01]{1,16}$/i.test(compactBin) || (format === 'bin16' && /^[01]{1,16}$/.test(compactBin))) {
       num = parseInt(compactBin.replace(/^0b/i, ''), 2);
     } else {
-      const parsed = Number(trimmed);
-      if (!Number.isFinite(parsed)) {
-        return { ok: false, error: `Giá trị "${trimmed}" không hợp lệ.` };
-      }
-      if (scaling !== 1 && scaling !== 0) {
-        num = Math.round(parsed / scaling);
-      } else if (!Number.isInteger(parsed)) {
-        return { ok: false, error: 'Thanh ghi 16-bit chỉ nhận số nguyên.' };
-      } else {
-        num = parsed;
-      }
+      const res = parseScaled(trimmed, scaling, true);
+      if (!res.ok) return res;
+      num = res.value;
     }
 
-    if (num < -32768 || num > 65535) {
-      return { ok: false, error: `Giá trị ${num} nằm ngoài phạm vi 16-bit (-32768 đến 65535).` };
+    // Hex/binary literals are raw bit patterns and always fit; decimal values must fit the format.
+    const isLiteral = /^0x/i.test(trimmed) || /^0b/i.test(compactBin) || (format === 'bin16' && /^[01]{1,16}$/.test(compactBin));
+    const [min, max] =
+      isLiteral ? [0, 65535] :
+      format === 'signed16' ? [-32768, 32767] :
+      format === 'unsigned16' || format === 'hex16' || format === 'bin16' ? [0, 65535] :
+      [-32768, 65535];
+    if (num < min || num > max) {
+      const label = format ? `định dạng ${format}` : 'thanh ghi 16-bit';
+      return { ok: false, error: `Giá trị raw ${num} nằm ngoài phạm vi ${label} (${min} đến ${max}).` };
     }
     return { ok: true, values: [num & 0xffff] };
   }
 
   // 2. 32-bit Float formats (2 registers)
   if (format === 'float_abcd' || format === 'float_cdab' || format === 'float_badc' || format === 'float_dcba') {
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
-      return { ok: false, error: `Giá trị số thực "${trimmed}" không hợp lệ.` };
+    const res = parseScaled(trimmed, scaling, false);
+    if (!res.ok) return res;
+    const fVal = res.value;
+    // float32 overflows to Infinity above ~3.4e38; never write that silently.
+    if (!Number.isFinite(Math.fround(fVal))) {
+      return { ok: false, error: `Giá trị ${fVal} vượt phạm vi float32 (±3.4e38).` };
     }
-    const fVal = scaling !== 1 && scaling !== 0 ? parsed / scaling : parsed;
 
     const buf = new ArrayBuffer(4);
     const view = new DataView(buf);
@@ -563,11 +654,9 @@ export function encodeRegisterInput(
 
   // 3. 32-bit Signed Integer formats (2 registers)
   if (format === 'long_abcd' || format === 'long_cdab') {
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
-      return { ok: false, error: `Giá trị số nguyên 32-bit "${trimmed}" không hợp lệ.` };
-    }
-    const iVal = scaling !== 1 && scaling !== 0 ? Math.round(parsed / scaling) : Math.round(parsed);
+    const res = parseScaled(trimmed, scaling, true);
+    if (!res.ok) return res;
+    const iVal = res.value;
     if (iVal < -2147483648 || iVal > 2147483647) {
       return { ok: false, error: `Giá trị ${iVal} nằm ngoài phạm vi 32-bit (-2147483648 đến 2147483647).` };
     }
@@ -588,11 +677,13 @@ export function encodeRegisterInput(
 
   // 4. 32-bit Unsigned Integer formats (2 registers)
   if (format === 'uint32_abcd' || format === 'uint32_cdab') {
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 4294967295) {
-      return { ok: false, error: `Giá trị unsigned 32-bit "${trimmed}" không hợp lệ (0 đến 4294967295).` };
+    const res = parseScaled(trimmed, scaling, true);
+    if (!res.ok) return res;
+    const uVal = res.value;
+    // Check the raw value after scaling: `>>> 0` would silently wrap anything outside uint32.
+    if (uVal < 0 || uVal > 4294967295) {
+      return { ok: false, error: `Giá trị raw ${uVal} nằm ngoài phạm vi UInt32 (0 đến 4294967295).` };
     }
-    const uVal = scaling !== 1 && scaling !== 0 ? Math.round(parsed / scaling) : Math.round(parsed);
     const u32 = uVal >>> 0;
 
     let high = 0;
@@ -620,7 +711,11 @@ export type ParsedRegister = { ok: true; value: number } | { ok: false; error: s
  * Parse user input into a raw 16-bit register value (for modals or single-cell edits).
  */
 export function parseRegisterInput(input: string, format?: DataFormat, scaling = 1): ParsedRegister {
-  const res = encodeRegisterInput(input, format || 'unsigned16', scaling);
+  if (format && !isSingleRegisterFormat(format)) {
+    // Returning only values[0] would silently write half of a 32-bit value.
+    return { ok: false, error: `Định dạng ${format} chiếm nhiều thanh ghi; dùng encodeRegisterInput.` };
+  }
+  const res = encodeRegisterInput(input, format, scaling);
   if (!res.ok) {
     return { ok: false, error: res.error };
   }

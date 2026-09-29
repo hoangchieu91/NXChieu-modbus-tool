@@ -68,6 +68,10 @@ export async function sessionStartPolling(sessionId: string, def: PollDefinition
   await AppMethods.SessionStartPolling(sessionId, def as any);
 }
 
+export async function sessionResetCounters(sessionId: string): Promise<void> {
+  await (AppMethods as any).SessionResetCounters(sessionId);
+}
+
 export async function sessionStopPolling(sessionId: string): Promise<void> {
   await AppMethods.SessionStopPolling(sessionId);
 }
@@ -77,6 +81,10 @@ export async function sessionReadOnce(sessionId: string, def: PollDefinition): P
   return {
     session_id: res.session_id,
     timestamp: res.timestamp,
+    // Needed to map values to the right addresses and to drop stale results.
+    slave_id: res.slave_id,
+    function_code: res.function_code,
+    start_address: res.start_address,
     values: res.values || [],
     bool_values: res.bool_values || [],
     is_coil: res.is_coil,
@@ -204,6 +212,9 @@ export function subscribePollData(callback: (data: PollResult) => void): () => v
         callback({
           session_id: data.session_id,
           timestamp: data.timestamp,
+          slave_id: data.slave_id,
+          function_code: data.function_code,
+          start_address: data.start_address,
           values: data.values || [],
           bool_values: data.bool_values || [],
           is_coil: data.is_coil,
@@ -261,19 +272,15 @@ export async function scanSlaveIDs(
   endId: number,
   timeoutMs: number = 100
 ): Promise<import('../types/modbus').SlaveScanItem[]> {
-  try {
-    const results = await AppMethods.ScanSlaveIDs(sessionId, startId, endId, timeoutMs);
-    return (results || []).map((r) => ({
-      slave_id: r.slave_id,
-      status: r.status,
-      detail: r.detail,
-      latency_ms: r.latency_ms,
-      raw_rx: r.raw_rx,
-    }));
-  } catch (e: any) {
-    console.error('scanSlaveIDs error:', e);
-    return [];
-  }
+  // Errors propagate so the scanner can record the ID as failed instead of silently skipping it.
+  const results = await AppMethods.ScanSlaveIDs(sessionId, startId, endId, timeoutMs);
+  return (results || []).map((r) => ({
+    slave_id: r.slave_id,
+    status: r.status,
+    detail: r.detail,
+    latency_ms: r.latency_ms,
+    raw_rx: r.raw_rx,
+  }));
 }
 
 export async function autoDetectBaudrate(
@@ -371,3 +378,32 @@ export async function updateRemoteServerState(state: any): Promise<void> {
   }
 }
 
+export interface RemoteWriteEvent {
+  id: string;
+  tab_id: string;
+  address: number;
+  is_coil: boolean;
+  bool_value: boolean;
+  text: string;
+}
+
+/** A phone asked to write a value; the desktop performs it and must call completeRemoteWrite. */
+export function subscribeRemoteWrite(callback: (req: RemoteWriteEvent) => void): () => void {
+  try {
+    const unbind = WailsRuntime.EventsOn('remote-write', (data: any) => {
+      if (data && typeof data.id === 'string') callback(data as RemoteWriteEvent);
+    });
+    return () => unbind();
+  } catch (e) {
+    console.error('Failed to subscribe to Wails remote-write:', e);
+    return () => {};
+  }
+}
+
+export async function completeRemoteWrite(id: string, errorMessage: string): Promise<void> {
+  try {
+    await (AppMethods as any).CompleteRemoteWrite(id, errorMessage);
+  } catch (e: any) {
+    console.error('completeRemoteWrite error:', e);
+  }
+}

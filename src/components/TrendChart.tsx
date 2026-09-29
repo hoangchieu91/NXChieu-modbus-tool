@@ -88,13 +88,24 @@ export const TrendChart: React.FC<TrendChartProps> = ({
     return { startIdx: start, endIdx: end };
   }, [maxAvailablePoints, panOffset, viewPointsCount]);
 
+  // Traces are right-aligned: the newest point of every trace sits at the right edge, so a trace
+  // added later (fewer points) is still visible and stays aligned in time with the others.
+  const sliceWindow = useCallback(
+    (pts: ChartDataPoint[]) => {
+      const offset = maxAvailablePoints - pts.length;
+      const from = Math.max(0, windowSliceRange.startIdx - offset);
+      const to = Math.max(0, windowSliceRange.endIdx - offset);
+      return { pts: pts.slice(from, to), firstGlobalIdx: from + offset };
+    },
+    [maxAvailablePoints, windowSliceRange]
+  );
+
   // Compute Stats for each trace in current window
   const traceStats = useMemo(() => {
     const stats: Record<string, { current: number; min: number; max: number; avg: number }> = {};
 
     traces.forEach((t) => {
-      const allPts = activeData[t.id] || [];
-      const windowPts = allPts.slice(windowSliceRange.startIdx, windowSliceRange.endIdx);
+      const windowPts = sliceWindow(activeData[t.id] || []).pts;
       if (windowPts.length === 0) {
         stats[t.id] = { current: 0, min: 0, max: 0, avg: 0 };
       } else {
@@ -108,7 +119,7 @@ export const TrendChart: React.FC<TrendChartProps> = ({
     });
 
     return stats;
-  }, [traces, activeData, windowSliceRange]);
+  }, [traces, activeData, sliceWindow]);
 
   // Overall Global Min/Max for chart Y-axis
   const globalYRange = useMemo(() => {
@@ -116,8 +127,7 @@ export const TrendChart: React.FC<TrendChartProps> = ({
     let globalMax = -Infinity;
 
     visibleTraces.forEach((t) => {
-      const allPts = activeData[t.id] || [];
-      const windowPts = allPts.slice(windowSliceRange.startIdx, windowSliceRange.endIdx);
+      const windowPts = sliceWindow(activeData[t.id] || []).pts;
       windowPts.forEach((p) => {
         if (p.value < globalMin) globalMin = p.value;
         if (p.value > globalMax) globalMax = p.value;
@@ -138,7 +148,7 @@ export const TrendChart: React.FC<TrendChartProps> = ({
     }
 
     return { min: globalMin, max: globalMax, range: globalMax - globalMin };
-  }, [visibleTraces, activeData, windowSliceRange]);
+  }, [visibleTraces, activeData, sliceWindow]);
 
   // Main Canvas Render
   const drawChart = useCallback(() => {
@@ -149,9 +159,14 @@ export const TrendChart: React.FC<TrendChartProps> = ({
 
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
+    // Reallocate the backing store only when the size changes; resetting it every frame is costly.
+    const pixelW = Math.round(rect.width * dpr);
+    const pixelH = Math.round(rect.height * dpr);
+    if (canvas.width !== pixelW || canvas.height !== pixelH) {
+      canvas.width = pixelW;
+      canvas.height = pixelH;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const width = rect.width;
     const height = rect.height;
@@ -204,9 +219,9 @@ export const TrendChart: React.FC<TrendChartProps> = ({
     const xStep = totalPointsInWindow > 1 ? chartW / (totalPointsInWindow - 1) : chartW;
 
     visibleTraces.forEach((trace) => {
-      const allPts = activeData[trace.id] || [];
-      const windowPts = allPts.slice(windowSliceRange.startIdx, windowSliceRange.endIdx);
+      const { pts: windowPts, firstGlobalIdx } = sliceWindow(activeData[trace.id] || []);
       if (windowPts.length === 0) return;
+      const xOffset = firstGlobalIdx - windowSliceRange.startIdx;
 
       // Calculate trace-specific range if Normalized Mode is active
       let traceMin = globalYRange.min;
@@ -226,7 +241,7 @@ export const TrendChart: React.FC<TrendChartProps> = ({
 
       const coords: { x: number; y: number; val: number; time: string }[] = [];
       windowPts.forEach((p, idx) => {
-        const x = padding.left + idx * xStep;
+        const x = padding.left + (xOffset + idx) * xStep;
         const normalizedY = (p.value - traceMin) / traceRange;
         const y = padding.top + chartH - normalizedY * chartH;
         coords.push({ x, y, val: p.value, time: p.timestamp });
@@ -317,10 +332,19 @@ export const TrendChart: React.FC<TrendChartProps> = ({
       ctx.textAlign = 'center';
       ctx.fillText(hoverInfo.timestamp, hoverInfo.x, padding.top + chartH + 16);
     }
-  }, [activeData, visibleTraces, maxAvailablePoints, windowSliceRange, globalYRange, hoverInfo]);
+  }, [activeData, visibleTraces, maxAvailablePoints, windowSliceRange, sliceWindow, globalYRange, hoverInfo, isNormalizedScale]);
 
   useEffect(() => {
     drawChart();
+  }, [drawChart]);
+
+  // Redraw when the canvas is resized (window resize, expand/collapse, split view).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => drawChart());
+    observer.observe(canvas);
+    return () => observer.disconnect();
   }, [drawChart]);
 
   // Handle Mouse Hover / Crosshair on Canvas
@@ -363,8 +387,9 @@ export const TrendChart: React.FC<TrendChartProps> = ({
 
     visibleTraces.forEach((trace) => {
       const pts = activeData[trace.id] || [];
-      if (targetIdx >= 0 && targetIdx < pts.length) {
-        const pt = pts[targetIdx];
+      const localIdx = targetIdx - (maxAvailablePoints - pts.length);
+      if (localIdx >= 0 && localIdx < pts.length) {
+        const pt = pts[localIdx];
         if (!sampleTime) sampleTime = pt.timestamp;
         sampledPoints.push({
           label: `${trace.displayAddress} ${trace.label}`,

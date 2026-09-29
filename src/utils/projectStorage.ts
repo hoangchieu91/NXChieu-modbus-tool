@@ -2,6 +2,68 @@ import { TabSession, RegisterRow } from '../types/modbus';
 
 const STORAGE_KEY = 'nxchieu_modbus_workspace_v1';
 
+const isRecord = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+// Integer in [min, max]; fractions (e.g. Slave ID 1.5) cannot be passed to the Go uint APIs.
+const int = (v: unknown, fallback: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, Math.round(num(v, fallback))));
+
+/**
+ * Fills missing or malformed fields of a saved/imported tab with defaults. A corrupted file
+ * would otherwise crash rendering, and since the workspace is auto-saved it would crash again
+ * on every launch.
+ */
+function normalizeTab(raw: unknown, index: number, usedIds: Set<string>): TabSession | null {
+  if (!isRecord(raw)) return null;
+
+  let id = typeof raw.id === 'string' && raw.id ? raw.id : `tab-${Date.now()}-${index}`;
+  if (usedIds.has(id)) id = `${id}-${index}`;
+  usedIds.add(id);
+
+  const def = isRecord(raw.definition) ? raw.definition : {};
+  const fc = num(def.function_code, 3);
+  const startAddr = int(def.start_address, 0, 0, 65535);
+  const slaveStart = int(raw.slaveStartAddr, 0, 0, 65535);
+
+  return {
+    ...(raw as Partial<TabSession>),
+    id,
+    title: typeof raw.title === 'string' && raw.title ? raw.title : `Sheet ${index + 1}`,
+    role: raw.role === 'slave' ? 'slave' : 'master',
+    definition: {
+      slave_id: int(def.slave_id, 1, 1, 247),
+      function_code: [1, 2, 3, 4].includes(fc) ? fc : 3,
+      start_address: startAddr,
+      // The read range must end at or before address 65535.
+      quantity: Math.min(int(def.quantity, 10, 1, 125), 65536 - startAddr),
+      scan_rate_ms: int(def.scan_rate_ms, 1000, 50, 3600000),
+    },
+    format: typeof raw.format === 'string' ? raw.format : 'unsigned16',
+    formats: isRecord(raw.formats) ? raw.formats : {},
+    aliases: isRecord(raw.aliases) ? raw.aliases : {},
+    units: isRecord(raw.units) ? raw.units : {},
+    scalings: isRecord(raw.scalings) ? raw.scalings : {},
+    slaveConfig: isRecord(raw.slaveConfig) ? (raw.slaveConfig as TabSession['slaveConfig']) : undefined,
+    slaveTable: ['holding', 'coils', 'discrete', 'input'].includes(raw.slaveTable) ? raw.slaveTable : 'holding',
+    slaveStartAddr: slaveStart,
+    // Go takes the quantity as uint16, and the view must not run past address 65535.
+    slaveQuantity: Math.min(int(raw.slaveQuantity, 10, 1, 65535), 65536 - slaveStart),
+    // Servers and simulations never survive a restart or an import.
+    isListening: false,
+    isSimulating: false,
+  } as TabSession;
+}
+
+function normalizeTabs(raw: unknown): TabSession[] {
+  if (!Array.isArray(raw)) return [];
+  const usedIds = new Set<string>();
+  return raw.map((t, i) => normalizeTab(t, i, usedIds)).filter((t): t is TabSession => t !== null);
+}
+
+function pickActiveTabId(tabs: TabSession[], wanted: unknown): string {
+  return typeof wanted === 'string' && tabs.some((t) => t.id === wanted) ? wanted : tabs[0].id;
+}
+
 export interface ProjectData {
   app: string;
   version: string;
@@ -37,12 +99,10 @@ export function loadWorkspace(): { tabs: TabSession[]; activeTabId: string } | n
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const data: ProjectData = JSON.parse(raw);
-    if (data && Array.isArray(data.tabs) && data.tabs.length > 0) {
-      return {
-        tabs: data.tabs,
-        activeTabId: data.activeTabId || data.tabs[0].id,
-      };
+    const data = JSON.parse(raw);
+    const tabs = normalizeTabs(data?.tabs);
+    if (tabs.length > 0) {
+      return { tabs, activeTabId: pickActiveTabId(tabs, data.activeTabId) };
     }
   } catch (err) {
     console.warn('Failed to load workspace from localStorage:', err);
@@ -90,13 +150,14 @@ export function importProjectFromFile(file: File): Promise<{ tabs: TabSession[];
         const content = e.target?.result as string;
         const data = JSON.parse(content);
 
-        if (!data || !Array.isArray(data.tabs) || data.tabs.length === 0) {
+        const tabs = normalizeTabs(data?.tabs);
+        if (tabs.length === 0) {
           throw new Error('File không đúng định dạng cấu hình dự án Modbus (thiếu danh sách tabs).');
         }
 
         resolve({
-          tabs: data.tabs,
-          activeTabId: data.activeTabId || data.tabs[0].id,
+          tabs,
+          activeTabId: pickActiveTabId(tabs, data.activeTabId),
           projectName: data.projectName || file.name.replace(/\.[^/.]+$/, ''),
         });
       } catch (err) {

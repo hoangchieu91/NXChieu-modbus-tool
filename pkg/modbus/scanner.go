@@ -97,11 +97,21 @@ func (m *ModbusClientWrapper) ProbeSlave(slaveID uint8, timeoutMs uint) SlaveSca
 		}
 	}
 
-	// 2. Hardware Live Client
-	m.client.SetUnitId(slaveID)
+	// 2. Hardware Live Client, using the timeout chosen in the scanner.
+	m.lastProbeTime = time.Now()
+	if timeoutMs > 0 {
+		if err := m.setTimeoutLocked(time.Duration(timeoutMs) * time.Millisecond); err != nil {
+			return SlaveScanItem{SlaveID: slaveID, Status: "offline", Detail: err.Error()}
+		}
+	}
 
 	// Try reading Holding Register 0
-	val, err := m.client.ReadRegister(0, simonmodbus.HOLDING_REGISTER)
+	var val uint16
+	err := m.hardwareCallLocked(slaveID, func() (err error) {
+		val, err = m.client.ReadRegister(0, simonmodbus.HOLDING_REGISTER)
+		return err
+	})
+	m.lastProbeTime = time.Now()
 	latency := uint64(time.Since(startTime).Milliseconds())
 
 	if err == nil {
@@ -205,8 +215,11 @@ func (m *ModbusClientWrapper) ScanRegisters(slaveID uint8, fc uint8, startAddr, 
 			continue
 		}
 
-		m.client.SetUnitId(slaveID)
-		vals, err := m.client.ReadRegisters(uint16(blockStart), qty, regType)
+		var vals []uint16
+		err := m.hardwareCallLocked(slaveID, func() (err error) {
+			vals, err = m.client.ReadRegisters(uint16(blockStart), qty, regType)
+			return err
+		})
 		m.mu.Unlock()
 
 		if err == nil && len(vals) == int(qty) {
@@ -225,8 +238,11 @@ func (m *ModbusClientWrapper) ScanRegisters(slaveID uint8, fc uint8, startAddr, 
 				results = append(results, RegisterScanItem{Address: uAddr, Valid: false, Detail: "Not connected"})
 				continue
 			}
-			m.client.SetUnitId(slaveID)
-			val, err := m.client.ReadRegister(uAddr, regType)
+			var val uint16
+			err := m.hardwareCallLocked(slaveID, func() (err error) {
+				val, err = m.client.ReadRegister(uAddr, regType)
+				return err
+			})
 			m.mu.Unlock()
 
 			if err == nil {

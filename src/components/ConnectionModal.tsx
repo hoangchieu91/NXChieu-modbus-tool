@@ -44,11 +44,19 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
   const [tcpPort, setTcpPort] = useState<number>(502);
   const [tcpTimeout, setTcpTimeout] = useState<number>(1000);
 
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // The <select> can only show listed ports. If the selected one is not listed (never scanned,
+  // or unplugged), pick the first listed port so what is shown is what gets opened.
   useEffect(() => {
-    if (availablePorts.length > 0 && (!selectedPort || selectedPort === 'COM1')) {
+    if (availablePorts.length > 0 && !availablePorts.some((p) => p.port_name === selectedPort)) {
       setSelectedPort(availablePorts[0].port_name);
     }
-  }, [availablePorts]);
+  }, [availablePorts, selectedPort]);
+
+  useEffect(() => {
+    if (isOpen) setFormError(null);
+  }, [isOpen]);
 
   useEffect(() => {
     if (currentConfig) {
@@ -59,7 +67,7 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
           setTab('serial');
           setSelectedPort(currentConfig.port);
           setBaudRate(currentConfig.baud_rate);
-          setDataBits(currentConfig.data_bits);
+          setDataBits(8); // Modbus RTU always uses 8 data bits
           setParity(currentConfig.parity);
           setStopBits(currentConfig.stop_bits);
           setSerialTimeout(currentConfig.timeout_ms);
@@ -80,7 +88,29 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
 
   if (!isOpen) return null;
 
+  const isIntIn = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
+
+  // Go receives these as unsigned integers; reject what it cannot decode, with a clear message.
+  const validate = (): string | null => {
+    if (tab === 'serial') {
+      if (!selectedPort) return 'Chưa chọn cổng COM.';
+      if (!isIntIn(baudRate, 300, 4000000)) return 'Baudrate không hợp lệ.';
+      if (!isIntIn(serialTimeout, 20, 60000)) return 'Timeout phải là số nguyên từ 20 đến 60000 ms.';
+    } else if (tab === 'tcp' || tab === 'rtu_over_tcp') {
+      const host = tcpHost.trim();
+      if (!host || /\s/.test(host)) return 'Địa chỉ IP / Host không hợp lệ.';
+      if (!isIntIn(tcpPort, 1, 65535)) return 'Port TCP phải là số nguyên từ 1 đến 65535.';
+      if (!isIntIn(tcpTimeout, 20, 60000)) return 'Timeout phải là số nguyên từ 20 đến 60000 ms.';
+    }
+    return null;
+  };
+
   const handleConnect = () => {
+    const error = validate();
+    if (error) {
+      setFormError(error);
+      return;
+    }
     if (tab === 'serial') {
       onConnect({
         type: 'serial',
@@ -94,14 +124,14 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
     } else if (tab === 'tcp') {
       onConnect({
         type: 'tcp',
-        host: tcpHost,
+        host: tcpHost.trim(),
         port: tcpPort,
         timeout_ms: tcpTimeout,
       });
     } else if (tab === 'rtu_over_tcp') {
       onConnect({
         type: 'rtu_over_tcp',
-        host: tcpHost,
+        host: tcpHost.trim(),
         port: tcpPort,
         timeout_ms: tcpTimeout,
       });
@@ -258,7 +288,6 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                     className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
                   >
                     <option value={8}>8 bits</option>
-                    <option value={7}>7 bits</option>
                   </select>
                 </div>
 
@@ -305,7 +334,7 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                 <input
                   type="number"
                   min={10}
-                  step="any"
+                  step="1"
                   value={serialTimeout}
                   onChange={(e) => setSerialTimeout(Number(e.target.value))}
                   className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
@@ -352,7 +381,7 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                   <input
                     type="number"
                     min={10}
-                    step="any"
+                    step="1"
                     value={tcpTimeout}
                     onChange={(e) => setTcpTimeout(Number(e.target.value))}
                     className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
@@ -404,7 +433,7 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                   <input
                     type="number"
                     min={10}
-                    step="any"
+                    step="1"
                     value={tcpTimeout}
                     onChange={(e) => setTcpTimeout(Number(e.target.value))}
                     className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
@@ -434,6 +463,12 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
             </div>
           )}
         </div>
+
+        {formError && (
+          <div className="mx-4 mb-2 p-2.5 rounded bg-rose-950/60 border border-rose-700/60 text-rose-300 text-[11px]">
+            {formError}
+          </div>
+        )}
 
         {/* Footer actions */}
         <div className="flex items-center justify-end px-4 py-2.5 bg-slate-800/80 border-t border-slate-700 space-x-2">

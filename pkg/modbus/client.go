@@ -1,6 +1,7 @@
 package modbus
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -23,6 +24,21 @@ type ModbusClientWrapper struct {
 	simRegisters map[uint16]uint16
 	simCoils     map[uint16]bool
 	simTick      uint64
+
+	// clientConfig is the configuration of the live client; timeout is its current request
+	// timeout, which the Slave ID scanner may temporarily override.
+	clientConfig  simonmodbus.ClientConfiguration
+	baseTimeout   time.Duration
+	lastProbeTime time.Time
+
+	// txnID mirrors the library's Modbus TCP transaction counter (reset on every Open) so the
+	// traffic sniffer can show the real MBAP header.
+	txnID uint16
+
+	// Link health: after an I/O error the connection is reopened on the next request.
+	needsReopen    bool
+	consecTimeouts int
+	lastReopenTry  time.Time
 
 	// Metrics
 	txCount  uint64
@@ -210,8 +226,13 @@ func (m *ModbusClientWrapper) Connect(config ConnectionConfig) (string, error) {
 	}
 
 	m.client = client
+	m.txnID = 0
+	m.clientConfig = clientConfig
+	m.baseTimeout = clientConfig.Timeout
 	m.isSimulator = false
 	m.isConnected = true
+	m.needsReopen = false
+	m.consecTimeouts = 0
 	m.activeConfig = &config
 	atomic.StoreUint64(&m.txCount, 0)
 	atomic.StoreUint64(&m.errCount, 0)
@@ -234,6 +255,126 @@ func (m *ModbusClientWrapper) disconnectLocked() {
 	m.isConnected = false
 	m.isSimulator = false
 	m.activeConfig = nil
+}
+
+// tcpTimeoutsBeforeReopen is how many consecutive timeouts on a TCP link are treated as a dead
+// socket (e.g. a gateway that rebooted without closing the connection).
+const tcpTimeoutsBeforeReopen = 3
+
+// reopenInterval limits reconnect attempts so a missing device is not hammered every poll.
+const reopenInterval = time.Second
+
+func (m *ModbusClientWrapper) isTCPLinkLocked() bool {
+	if m.activeConfig == nil {
+		return false
+	}
+	switch m.activeConfig.Type {
+	case "tcp", "rtu_over_tcp", "rtuovertcp":
+		return true
+	}
+	return false
+}
+
+// scanTimeoutHold is how long after the last scanner probe the scan timeout stays active, so
+// polls interleaved with a running scan do not reopen the port on every request.
+var scanTimeoutHold = 2 * time.Second
+
+// setTimeoutLocked reopens the live client with a different request timeout. The library has
+// no way to change the timeout of an open client, so a new client is created on the same link.
+func (m *ModbusClientWrapper) setTimeoutLocked(timeout time.Duration) error {
+	if m.client == nil || timeout == m.clientConfig.Timeout {
+		return nil
+	}
+	cfg := m.clientConfig
+	cfg.Timeout = timeout
+	next, err := simonmodbus.NewClient(&cfg)
+	if err != nil {
+		return err
+	}
+	_ = m.client.Close()
+	if err := next.Open(); err != nil {
+		// Keep the old client object so ensureLinkLocked can retry on the next request.
+		m.needsReopen = true
+		return fmt.Errorf("failed to reopen link with %v timeout: %w", timeout, err)
+	}
+	m.client = next
+	m.txnID = 0
+	m.clientConfig = cfg
+	m.needsReopen = false
+	m.consecTimeouts = 0
+	return nil
+}
+
+// ensureLinkLocked reopens the transport if a previous request failed with an I/O error, and
+// restores the connection timeout once a Slave ID scan has finished.
+func (m *ModbusClientWrapper) ensureLinkLocked() error {
+	if m.clientConfig.Timeout != m.baseTimeout && time.Since(m.lastProbeTime) > scanTimeoutHold {
+		if err := m.setTimeoutLocked(m.baseTimeout); err != nil {
+			return err
+		}
+	}
+	if !m.needsReopen {
+		return nil
+	}
+	if time.Since(m.lastReopenTry) < reopenInterval {
+		return fmt.Errorf("connection lost, reconnecting")
+	}
+	m.lastReopenTry = time.Now()
+	_ = m.client.Close()
+	if err := m.client.Open(); err != nil {
+		return fmt.Errorf("connection lost, reconnect failed: %w", err)
+	}
+	m.txnID = 0
+	m.needsReopen = false
+	m.consecTimeouts = 0
+	return nil
+}
+
+// noteResultLocked records the outcome of a request to decide whether the link must be reopened.
+// Modbus exceptions and protocol errors mean the link works; raw I/O errors (reset socket,
+// unplugged USB adapter) mean it does not.
+func (m *ModbusClientWrapper) noteResultLocked(err error) {
+	if err == nil {
+		m.consecTimeouts = 0
+		return
+	}
+	var mbErr simonmodbus.Error
+	if errors.As(err, &mbErr) {
+		if mbErr != simonmodbus.ErrRequestTimedOut {
+			// An exception or protocol error is still an answer: the link is alive.
+			m.consecTimeouts = 0
+			return
+		}
+		if m.isTCPLinkLocked() {
+			m.consecTimeouts++
+			if m.consecTimeouts >= tcpTimeoutsBeforeReopen {
+				m.needsReopen = true
+			}
+		}
+		return
+	}
+	m.needsReopen = true
+}
+
+// hardwareCallLocked runs one request on the live client with reconnect handling.
+func (m *ModbusClientWrapper) hardwareCallLocked(slaveID uint8, call func() error) error {
+	if err := m.ensureLinkLocked(); err != nil {
+		return err
+	}
+	m.client.SetUnitId(slaveID)
+	err := call()
+	// The library rejects bad parameters before sending; every other outcome sent a request.
+	if !errors.Is(err, simonmodbus.ErrUnexpectedParameters) {
+		m.txnID++
+	}
+	m.noteResultLocked(err)
+	return err
+}
+
+// ResetCounters zeroes the TX/error counters reported with every poll result.
+func (m *ModbusClientWrapper) ResetCounters() {
+	atomic.StoreUint64(&m.txCount, 0)
+	atomic.StoreUint64(&m.errCount, 0)
 }
 
 // IsConnected returns connection status.
@@ -261,18 +402,17 @@ func (m *ModbusClientWrapper) executeRead(def PollDefinition) PollResult {
 	tx := atomic.AddUint64(&m.txCount, 1)
 	errCount := atomic.LoadUint64(&m.errCount)
 
-	rawTx := FormatHex(BuildRTUReadRequest(def.SlaveID, def.FunctionCode, def.StartAddress, def.Quantity))
+	rtuRequest := BuildRTUReadRequest(def.SlaveID, def.FunctionCode, def.StartAddress, def.Quantity)
+	rawTx := FormatHex(rtuRequest) // simulator frames are shown in RTU format
 	isCoil := def.FunctionCode == 1 || def.FunctionCode == 2
 
+	// Nothing is sent in these cases, so no TX frame is reported.
 	if !m.isConnected {
-		return PollResult{
-			Timestamp: timestamp,
-			TxCount:   tx,
-			ErrCount:  errCount,
-			LatencyMs: 0,
-			Error:     "Not connected to device",
-			RawTx:     rawTx,
-		}
+		return PollResult{Timestamp: timestamp, TxCount: tx, ErrCount: errCount, Error: "Not connected to device"}
+	}
+	if err := def.Validate(); err != nil {
+		errCount = atomic.AddUint64(&m.errCount, 1)
+		return PollResult{Timestamp: timestamp, IsCoil: isCoil, TxCount: tx, ErrCount: errCount, Error: err.Error()}
 	}
 
 	// 1. Simulation Handler
@@ -332,30 +472,36 @@ func (m *ModbusClientWrapper) executeRead(def PollDefinition) PollResult {
 	}
 
 	// 2. Hardware Live Client
-	m.client.SetUnitId(def.SlaveID)
-
 	var regVals []uint16
 	var coilVals []bool
 	var readErr error
 
-	switch def.FunctionCode {
-	case 1:
-		coilVals, readErr = m.client.ReadCoils(def.StartAddress, def.Quantity)
-	case 2:
-		coilVals, readErr = m.client.ReadDiscreteInputs(def.StartAddress, def.Quantity)
-	case 3:
-		regVals, readErr = m.client.ReadRegisters(def.StartAddress, def.Quantity, simonmodbus.HOLDING_REGISTER)
-	case 4:
-		regVals, readErr = m.client.ReadRegisters(def.StartAddress, def.Quantity, simonmodbus.INPUT_REGISTER)
-	default:
-		readErr = fmt.Errorf("unsupported function code: %d", def.FunctionCode)
+	txnBefore := m.txnID
+	readErr = m.hardwareCallLocked(def.SlaveID, func() (err error) {
+		switch def.FunctionCode {
+		case 1:
+			coilVals, err = m.client.ReadCoils(def.StartAddress, def.Quantity)
+		case 2:
+			coilVals, err = m.client.ReadDiscreteInputs(def.StartAddress, def.Quantity)
+		case 3:
+			regVals, err = m.client.ReadRegisters(def.StartAddress, def.Quantity, simonmodbus.HOLDING_REGISTER)
+		case 4:
+			regVals, err = m.client.ReadRegisters(def.StartAddress, def.Quantity, simonmodbus.INPUT_REGISTER)
+		}
+		return err
+	})
+	sent := m.txnID != txnBefore
+	isTCP := m.activeConfig != nil && m.activeConfig.Type == "tcp"
+	rawTx = ""
+	if sent {
+		rawTx = FormatHex(wireFrame(rtuRequest, isTCP, m.txnID))
 	}
 
 	latency := uint64(time.Since(startTime).Milliseconds())
 
 	if readErr != nil {
 		errCount = atomic.AddUint64(&m.errCount, 1)
-		return PollResult{
+		res := PollResult{
 			Timestamp: timestamp,
 			IsCoil:    isCoil,
 			TxCount:   tx,
@@ -364,14 +510,20 @@ func (m *ModbusClientWrapper) executeRead(def PollDefinition) PollResult {
 			Error:     readErr.Error(),
 			RawTx:     rawTx,
 		}
+		// A Modbus exception is a real response: show it. Timeouts/I/O errors received nothing.
+		if exc := buildRTUExceptionResponse(def.SlaveID, def.FunctionCode, readErr); exc != nil && sent {
+			res.RawRx = FormatHex(wireFrame(exc, isTCP, m.txnID))
+		}
+		return res
 	}
 
-	var rawRx string
+	var rtuResponse []byte
 	if isCoil {
-		rawRx = FormatHex(BuildRTUCoilResponse(def.SlaveID, def.FunctionCode, coilVals))
+		rtuResponse = BuildRTUCoilResponse(def.SlaveID, def.FunctionCode, coilVals)
 	} else {
-		rawRx = FormatHex(BuildRTURegisterResponse(def.SlaveID, def.FunctionCode, regVals))
+		rtuResponse = BuildRTURegisterResponse(def.SlaveID, def.FunctionCode, regVals)
 	}
+	rawRx := FormatHex(wireFrame(rtuResponse, isTCP, m.txnID))
 
 	return PollResult{
 		Timestamp:  timestamp,
@@ -400,8 +552,9 @@ func (m *ModbusClientWrapper) WriteRegister(param WriteRegisterParam) error {
 		return nil
 	}
 
-	m.client.SetUnitId(param.SlaveID)
-	return m.client.WriteRegister(param.Address, param.Value)
+	return m.hardwareCallLocked(param.SlaveID, func() error {
+		return m.client.WriteRegister(param.Address, param.Value)
+	})
 }
 
 // WriteRegisters writes multiple 16-bit registers (FC 16).
@@ -420,8 +573,9 @@ func (m *ModbusClientWrapper) WriteRegisters(param WriteRegistersParam) error {
 		return nil
 	}
 
-	m.client.SetUnitId(param.SlaveID)
-	return m.client.WriteRegisters(param.Address, param.Values)
+	return m.hardwareCallLocked(param.SlaveID, func() error {
+		return m.client.WriteRegisters(param.Address, param.Values)
+	})
 }
 
 // WriteCoil writes a single coil (FC 05).
@@ -438,6 +592,7 @@ func (m *ModbusClientWrapper) WriteCoil(param WriteCoilParam) error {
 		return nil
 	}
 
-	m.client.SetUnitId(param.SlaveID)
-	return m.client.WriteCoil(param.Address, param.Value)
+	return m.hardwareCallLocked(param.SlaveID, func() error {
+		return m.client.WriteCoil(param.Address, param.Value)
+	})
 }

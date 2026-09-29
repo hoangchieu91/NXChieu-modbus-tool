@@ -61,7 +61,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [slaveScanning, setSlaveScanning] = useState<boolean>(false);
   const [slaveResults, setSlaveResults] = useState<SlaveScanItem[]>([]);
   const [slaveProgress, setSlaveProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
-  const slaveCancelRef = useRef<boolean>(false);
+  // Each scan gets its own token, so a stopped scan can never resume alongside a new one.
+  const slaveScanRef = useRef<{ cancelled: boolean } | null>(null);
 
   // --- Tab 2: Baudrate Auto-detect State ---
   const [availablePorts, setAvailablePorts] = useState<SerialPortDetail[]>([]);
@@ -134,6 +135,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     ascii: false,
   });
 
+  // Closing the modal cancels a running Slave ID scan.
+  useEffect(() => {
+    if (!isOpen && slaveScanRef.current) {
+      slaveScanRef.current.cancelled = true;
+      slaveScanRef.current = null;
+      setSlaveScanning(false);
+    }
+  }, [isOpen]);
+
   // Load serial ports on modal open
   useEffect(() => {
     if (isOpen) {
@@ -151,9 +161,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   // --- Handlers Tab 1: Slave ID Scanner ---
   const handleStartSlaveScan = async () => {
     if (!activeSession) return;
+    if (slaveScanRef.current) slaveScanRef.current.cancelled = true;
+    const scan = { cancelled: false };
+    slaveScanRef.current = scan;
     setSlaveScanning(true);
     setSlaveResults([]);
-    slaveCancelRef.current = false;
 
     const start = Math.max(1, slaveStart);
     const end = Math.min(247, Math.max(start, slaveEnd));
@@ -164,11 +176,12 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
     // Scan sequentially with progressive UI update
     for (let id = start; id <= end; id++) {
-      if (slaveCancelRef.current) break;
+      if (scan.cancelled) break;
       setSlaveProgress({ current: id - start + 1, total });
 
       try {
         const batch = await scanSlaveIDs(activeSession.id, id, id, slaveTimeout);
+        if (scan.cancelled) break;
         if (batch && batch.length > 0) {
           collected.push(batch[0]);
           setSlaveResults([...collected]);
@@ -184,11 +197,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       }
     }
 
-    setSlaveScanning(false);
+    if (slaveScanRef.current === scan) {
+      slaveScanRef.current = null;
+      setSlaveScanning(false);
+    }
   };
 
   const handleStopSlaveScan = () => {
-    slaveCancelRef.current = true;
+    if (slaveScanRef.current) slaveScanRef.current.cancelled = true;
+    slaveScanRef.current = null;
     setSlaveScanning(false);
   };
 
@@ -220,13 +237,20 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   // --- Handlers Tab 3: Register Explorer & Multi-Column ---
   const handleStartRegScan = async () => {
     if (!activeSession) return;
+    // Re-validate the typed addresses; an invalid field must not silently scan the last valid range.
+    const startParsed = parseModbusAddress(regStartInput, regAddrMode);
+    const endParsed = parseModbusAddress(regEndInput, regAddrMode);
+    if (!startParsed.isValid || !endParsed.isValid) {
+      alert(`Địa chỉ quét không hợp lệ: ${startParsed.error || endParsed.error}`);
+      return;
+    }
     setRegScanning(true);
     setRegResults([]);
     setMultiRows([]);
 
     try {
-      const start = Math.max(0, regStart);
-      const end = Math.max(start, regEnd);
+      const start = startParsed.value;
+      const end = Math.max(start, endParsed.value);
       const results = await scanRegisters(activeSession.id, regFc, start, end);
       setRegResults(results);
 

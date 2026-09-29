@@ -7,6 +7,8 @@ export function AutoDetectBaudrate(arg1:string,arg2:number,arg3:Array<number>,ar
 
 export function CloseSession(arg1:string):Promise<void>;
 
+export function CompleteRemoteWrite(arg1:string,arg2:string):Promise<void>;
+
 export function Connect(arg1:modbus.ConnectionConfig):Promise<string>;
 
 export function Disconnect():Promise<void>;
@@ -30,6 +32,8 @@ export function SessionDisconnect(arg1:string):Promise<void>;
 export function SessionGetConnectionStatus(arg1:string):Promise<boolean>;
 
 export function SessionReadOnce(arg1:string,arg2:modbus.PollDefinition):Promise<modbus.PollResult>;
+
+export function SessionResetCounters(arg1:string):Promise<void>;
 
 export function SessionStartPolling(arg1:string,arg2:modbus.PollDefinition):Promise<void>;
 

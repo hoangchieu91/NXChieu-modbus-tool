@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto/rand"
+	_ "embed"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -75,13 +76,13 @@ type RemoteServer struct {
 	clients       map[*remoteClient]bool
 	lastState     []byte
 	upgrader      websocket.Upgrader
-	onRemoteWrite func(tabID string, isCoil bool, addr uint16, val uint16, boolVal bool) error
+	onRemoteWrite func(req RemoteWriteRequest) error
 	activeStateFn func() map[string]interface{}
 }
 
 // NewRemoteServer creates an instance of RemoteServer.
 func NewRemoteServer(
-	onRemoteWrite func(tabID string, isCoil bool, addr uint16, val uint16, boolVal bool) error,
+	onRemoteWrite func(req RemoteWriteRequest) error,
 	activeStateFn func() map[string]interface{},
 ) *RemoteServer {
 	return &RemoteServer{
@@ -225,6 +226,7 @@ func (s *RemoteServer) Start(cfg RemoteServerConfig) error {
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/info", s.handleAPIInfo)
 	mux.HandleFunc("/api/write", s.handleAPIWrite)
+	mux.HandleFunc("/mobile.css", s.handleMobileCSS)
 	mux.HandleFunc("/", s.handleMobileWeb)
 
 	server := &http.Server{
@@ -325,8 +327,9 @@ func (s *RemoteServer) BroadcastPollResult(sessionID string, res modbus.PollResu
 // BroadcastState sends full app state snapshot to clients and caches it for phones that connect later.
 func (s *RemoteServer) BroadcastState(state map[string]interface{}) {
 	payload, err := json.Marshal(map[string]interface{}{
-		"type":  "state_snapshot",
-		"state": state,
+		"type":        "state_snapshot",
+		"state":       state,
+		"allow_write": s.allowWrite(),
 	})
 	if err != nil {
 		return
@@ -375,13 +378,15 @@ func (s *RemoteServer) writePump(c *remoteClient) {
 	}
 }
 
-// remoteWriteRequest is the payload of a remote write command (WebSocket or HTTP).
-type remoteWriteRequest struct {
+// RemoteWriteRequest is the payload of a remote write command (WebSocket or HTTP). Text is the
+// value as typed on the phone; the desktop app encodes it with the row's format and scaling.
+type RemoteWriteRequest struct {
 	Type      string  `json:"type"`
 	TabID     string  `json:"tab_id"`
 	IsCoil    bool    `json:"is_coil"`
 	Address   *uint16 `json:"address"`
 	Value     uint16  `json:"value"`
+	Text      string  `json:"text"`
 	BoolValue bool    `json:"bool_value"`
 }
 
@@ -426,7 +431,7 @@ func (s *RemoteServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			var req remoteWriteRequest
+			var req RemoteWriteRequest
 			if err := json.Unmarshal(msg, &req); err != nil {
 				continue
 			}
@@ -438,8 +443,8 @@ func (s *RemoteServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if !s.allowWrite() || s.onRemoteWrite == nil || req.Address == nil {
 					continue
 				}
-				result := map[string]interface{}{"type": "write_result", "success": true}
-				if err := s.onRemoteWrite(req.TabID, req.IsCoil, *req.Address, req.Value, req.BoolValue); err != nil {
+				result := map[string]interface{}{"type": "write_result", "success": true, "address": *req.Address}
+				if err := s.onRemoteWrite(req); err != nil {
 					result["success"] = false
 					result["error"] = err.Error()
 				}
@@ -484,7 +489,7 @@ func (s *RemoteServer) handleAPIWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req remoteWriteRequest
+	var req RemoteWriteRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -495,7 +500,7 @@ func (s *RemoteServer) handleAPIWrite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.onRemoteWrite != nil {
-		if err := s.onRemoteWrite(req.TabID, req.IsCoil, *req.Address, req.Value, req.BoolValue); err != nil {
+		if err := s.onRemoteWrite(req); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -505,203 +510,29 @@ func (s *RemoteServer) handleAPIWrite(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+// Mobile web monitor, embedded into the binary so it works on isolated plant networks
+// without internet access. mobile.css is prebuilt Tailwind: run `npm run build:mobile-css`
+// after changing classes in mobile/index.html.
+var (
+	//go:embed mobile/index.html
+	mobileHTML []byte
+	//go:embed mobile/mobile.css
+	mobileCSS []byte
+)
+
 // handleMobileWeb serves the embedded mobile web monitor application.
 func (s *RemoteServer) handleMobileWeb(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(embeddedMobileHTML))
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(mobileHTML)
 }
 
-// embeddedMobileHTML provides a beautiful, modern Dark Mode responsive Web App for phones.
-const embeddedMobileHTML = `<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>NXChieu Modbus Remote Monitor</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    body { background-color: #020617; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
-    .flash-up { animation: flashUp 0.6s ease-out; }
-    .flash-down { animation: flashDown 0.6s ease-out; }
-    @keyframes flashUp { 0% { background-color: rgba(16, 185, 129, 0.4); } 100% { background-color: transparent; } }
-    @keyframes flashDown { 0% { background-color: rgba(244, 63, 94, 0.4); } 100% { background-color: transparent; } }
-  </style>
-</head>
-<body class="flex flex-col h-screen overflow-hidden select-none">
-  <!-- Top Mobile Bar -->
-  <header class="bg-slate-900/90 border-b border-slate-800 px-4 py-3 flex items-center justify-between shrink-0 shadow-lg">
-    <div class="flex items-center space-x-2">
-      <div class="w-3 h-3 rounded-full bg-cyan-400 animate-pulse"></div>
-      <div>
-        <h1 class="text-sm font-bold tracking-wide text-white flex items-center gap-1.5">
-          NXChieu Modbus <span class="text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800 font-mono">Mobile</span>
-        </h1>
-        <p id="subStatus" class="text-[10px] text-slate-400 font-mono">Đang kết nối WebSocket...</p>
-      </div>
-    </div>
-    <div class="flex items-center space-x-2">
-      <span id="connBadge" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-rose-950 text-rose-400 border border-rose-800">
-        OFFLINE
-      </span>
-    </div>
-  </header>
-
-  <!-- Sheet Switcher Tabs -->
-  <nav id="sheetTabs" class="bg-slate-950 px-3 py-2 border-b border-slate-800/80 flex space-x-2 overflow-x-auto shrink-0 text-xs font-semibold">
-    <button class="px-3 py-1.5 rounded-lg bg-cyan-600 text-white shadow-sm shrink-0">Sheet 1</button>
-  </nav>
-
-  <!-- KPI Top Cards (First 4 Registers Big View) -->
-  <section id="kpiCards" class="grid grid-cols-2 gap-2 p-3 bg-slate-900/40 shrink-0 border-b border-slate-800/60">
-    <!-- Populated by JS -->
-  </section>
-
-  <!-- Registers List (Mobile Card Table) -->
-  <main class="flex-1 overflow-y-auto p-3 space-y-2" id="regContainer">
-    <div class="text-center py-12 text-slate-500 text-xs">
-      Đang chờ dữ liệu truyền về từ laptop...
-    </div>
-  </main>
-
-  <!-- Bottom Mobile Status Footer -->
-  <footer class="bg-slate-900 border-t border-slate-800 px-4 py-2 flex items-center justify-between text-[11px] text-slate-400 shrink-0 font-mono">
-    <div class="flex items-center space-x-2">
-      <span id="pingInfo">Ping: -- ms</span>
-      <span>•</span>
-      <span id="packetCount">Rx: 0</span>
-    </div>
-    <div id="lastUpdate">--:--:--</div>
-  </footer>
-
-  <script>
-    let ws = null;
-    let rxCount = 0;
-    let prevValues = {};
-    let currentTabId = '';
-    let appSnapshot = null;
-
-    const accessToken = new URLSearchParams(window.location.search).get('t') || '';
-
-    function esc(v) {
-      return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    }
-
-    function connectWS() {
-      const loc = window.location;
-      const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/ws?t=' + encodeURIComponent(accessToken);
-      ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        document.getElementById('connBadge').className = 'px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800';
-        document.getElementById('connBadge').innerText = 'ONLINE';
-        document.getElementById('subStatus').innerText = 'Đã kết nối trực tiếp';
-      };
-
-      ws.onclose = () => {
-        document.getElementById('connBadge').className = 'px-2 py-0.5 text-[10px] font-bold rounded-full bg-rose-950 text-rose-400 border border-rose-800';
-        document.getElementById('connBadge').innerText = 'RECONNECTING';
-        document.getElementById('subStatus').innerText = 'Mất kết nối. Tự thử lại sau 2s...';
-        setTimeout(connectWS, 2000);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          rxCount++;
-          document.getElementById('packetCount').innerText = 'Rx: ' + rxCount;
-
-          if (msg.type === 'state_snapshot') {
-            appSnapshot = msg.state;
-            renderTabs(msg.state.tabs || []);
-            renderRows(msg.state.rows || []);
-          } else if (msg.type === 'poll_data') {
-            document.getElementById('lastUpdate').innerText = msg.data.timestamp || '--:--:--';
-            document.getElementById('pingInfo').innerText = 'Độ trễ: ' + (msg.data.latency_ms || 0) + ' ms';
-            if (msg.data.rows) {
-              renderRows(msg.data.rows);
-            }
-          }
-        } catch (e) {
-          console.error(e);
-        }
-      };
-    }
-
-    function renderTabs(tabs) {
-      const bar = document.getElementById('sheetTabs');
-      if (!tabs || tabs.length === 0) return;
-      bar.innerHTML = '';
-      tabs.forEach((t, i) => {
-        const btn = document.createElement('button');
-        const isActive = t.id === currentTabId || (i === 0 && !currentTabId);
-        if (isActive) currentTabId = t.id;
-        btn.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition ' + 
-          (isActive ? 'bg-cyan-600 text-white shadow-sm' : 'bg-slate-800 text-slate-400 hover:text-white');
-        btn.innerText = t.title || ('Sheet ' + (i + 1));
-        btn.onclick = () => {
-          currentTabId = t.id;
-          renderTabs(tabs);
-        };
-        bar.appendChild(btn);
-      });
-    }
-
-    function renderRows(rows) {
-      if (!rows || rows.length === 0) return;
-      const kpi = document.getElementById('kpiCards');
-      const list = document.getElementById('regContainer');
-
-      // 1. Render First 4 Rows as KPI Cards
-      const kpiItems = rows.slice(0, 4);
-      kpi.innerHTML = '';
-      kpiItems.forEach((r) => {
-        const prev = prevValues[r.address] ?? r.rawValue;
-        let changeClass = '';
-        if (typeof r.rawValue === 'number' && typeof prev === 'number' && r.rawValue !== prev) {
-          changeClass = r.rawValue > prev ? 'flash-up' : 'flash-down';
-        }
-        prevValues[r.address] = r.rawValue;
-
-        const card = document.createElement('div');
-        card.className = 'p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 relative overflow-hidden ' + changeClass;
-        card.innerHTML = 
-          '<div class="text-[10px] text-slate-400 truncate font-sans font-medium">' + esc(r.alias || ('Reg ' + r.address)) + '</div>' +
-          '<div class="text-lg font-bold font-mono text-cyan-300 mt-0.5 truncate">' + esc(r.displayValue || '--') + ' <span class="text-xs text-slate-400 font-sans font-normal">' + esc(r.unit || '') + '</span></div>' +
-          '<div class="text-[9px] text-slate-600 font-mono mt-0.5">' + esc(r.displayAddress || '') + '</div>';
-        kpi.appendChild(card);
-      });
-
-      // 2. Render Full List
-      list.innerHTML = '';
-      rows.forEach((r) => {
-        const item = document.createElement('div');
-        item.className = 'p-3 bg-slate-900/90 rounded-xl border border-slate-800 flex items-center justify-between shadow-sm';
-        item.innerHTML = 
-          '<div class="flex-1 min-w-0 pr-3">' +
-            '<div class="flex items-center space-x-1.5">' +
-              '<span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-bold">' + esc(r.displayAddress || r.address) + '</span>' +
-              '<span class="text-xs font-semibold text-slate-200 truncate font-sans">' + esc(r.alias || 'Chưa đặt tên') + '</span>' +
-            '</div>' +
-            '<div class="text-[10px] text-slate-500 font-mono mt-1">Hex: <span class="text-emerald-400">' + esc(r.rawHex || '--') + '</span></div>' +
-          '</div>' +
-          '<div class="text-right">' +
-            '<div class="text-base font-bold font-mono text-amber-300">' + esc(r.displayValue || '--') + '</div>' +
-            '<div class="text-[10px] text-slate-400 font-sans">' + esc(r.unit || '') + '</div>' +
-          '</div>';
-        list.appendChild(item);
-      });
-    }
-
-    // Ping interval every 5s to keep WebSocket alive through mobile NAT
-    setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }));
-      }
-    }, 5000);
-
-    connectWS();
-  </script>
-</body>
-</html>
-`
+func (s *RemoteServer) handleMobileCSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(mobileCSS)
+}

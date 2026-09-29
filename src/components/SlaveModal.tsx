@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Server, Play, Square, Radio, Cpu, Globe, Activity, HelpCircle } from 'lucide-react';
 import { SerialPortDetail, SlaveConfig, SimulationConfig } from '../types/modbus';
 
@@ -18,7 +18,8 @@ interface SlaveModalProps {
   isListening: boolean;
   currentConfig?: SlaveConfig;
   availablePorts: SerialPortDetail[];
-  onStartServer: (config: SlaveConfig) => void;
+  /** Resolves true when the server started successfully. */
+  onStartServer: (config: SlaveConfig) => Promise<boolean>;
   onStopServer: () => void;
   onStartSim?: (config: SimulationConfig) => void;
   onStopSim?: () => void;
@@ -57,9 +58,22 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
   const [simMode, setSimMode] = useState<'none' | 'random' | 'increment' | 'sine'>('none');
   const [simAddr, setSimAddr] = useState<number>(0);
 
+  // The modal stays mounted across tabs, so re-sync the form with the active tab's config each
+  // time it opens; otherwise it shows the previous tab's port/ID and risks a port conflict.
+  useEffect(() => {
+    if (!isOpen) return;
+    setTab(currentConfig?.type || 'tcp');
+    setTcpHost(currentConfig?.host || '0.0.0.0');
+    setTcpPort(currentConfig?.port_tcp || 5020);
+    setSelectedPort(currentConfig?.port || 'COM2');
+    setBaudRate(currentConfig?.baud_rate || 9600);
+    setParity(currentConfig?.parity || 'none');
+    setSlaveId(currentConfig?.slave_id || 1);
+  }, [isOpen, currentConfig]);
+
   if (!isOpen) return null;
 
-  const handleStart = () => {
+  const handleStart = async () => {
     const cfg: SlaveConfig = {
       type: tab,
       slave_id: slaveId,
@@ -74,7 +88,8 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
       cfg.host = tcpHost;
       cfg.port_tcp = tcpPort;
     }
-    onStartServer(cfg);
+    const started = await onStartServer(cfg);
+    if (!started) return; // keep the modal open so the user can fix the settings
 
     if (simMode !== 'none' && onStartSim) {
       onStartSim({

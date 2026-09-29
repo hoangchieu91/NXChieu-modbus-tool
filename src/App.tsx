@@ -19,6 +19,9 @@ import {
   slaveStopSim,
   subscribePollData,
   subscribeSlaveActivity,
+  subscribeRemoteWrite,
+  sessionResetCounters,
+  completeRemoteWrite,
   updateRemoteServerState,
 } from './services/backend';
 
@@ -43,6 +46,7 @@ import {
   ChartTrace,
   ConnectionConfig,
   DataFormat,
+  PollResult,
   PollDefinition,
   RegisterRow,
   SerialPortDetail,
@@ -53,7 +57,14 @@ import {
   TabSession,
   TrafficEntry,
 } from './types/modbus';
-import { formatValue, getModbusAddressLabel, decodeAllColumns, encodeRegisterInput } from './utils/formatters';
+import {
+  formatValue,
+  getModbusAddressLabel,
+  decodeAllColumns,
+  encodeRegisterInput,
+  modiconAddress,
+  modiconTableDigit,
+} from './utils/formatters';
 
 import {
   loadWorkspace,
@@ -70,9 +81,107 @@ const isReadOnlyFunction = (fc: number) => fc === 2 || fc === 4;
 // so they fall back to the scaled raw register instead of a flat 0.
 const toChartValue = (values: number[], idx: number, fmt: DataFormat, scaling: number): number => {
   if (fmt === 'hex16' || fmt === 'bin16' || fmt === 'ascii') return values[idx] * scaling;
-  const parsed = parseFloat(formatValue(values, idx, fmt, scaling).display.replace(/,/g, ''));
+  const display = formatValue(values, idx, fmt, scaling).display;
+  if (display === '--') return NaN; // value spans registers outside the read block
+  const parsed = parseFloat(display.replace(/,/g, ''));
   return isNaN(parsed) ? values[idx] * scaling : parsed;
 };
+
+// --- Grid Row Construction Helper ---
+
+// Pure function of the tab config and its live state; memoized by callers so rows (and the
+// multi-column decodes) are rebuilt only when data changes, not on every App render.
+
+function buildRowsForTab(tab: TabSession, state: PerTabState): { rows: RegisterRow[]; isCoil: boolean } {
+  const isCoil =
+    tab.role === 'slave'
+      ? tab.slaveTable === 'coils' || tab.slaveTable === 'discrete'
+      : tab.definition.function_code === 1 || tab.definition.function_code === 2;
+
+  const startAddr = tab.role === 'slave' ? tab.slaveStartAddr : tab.definition.start_address;
+  const quantity = tab.role === 'slave' ? tab.slaveQuantity : tab.definition.quantity;
+
+  const resultRows: RegisterRow[] = [];
+  for (let i = 0; i < quantity; i++) {
+    const addr = startAddr + i;
+    const alias = tab.aliases[addr] || '';
+    const unit = tab.units[addr] || '';
+    const scaling = tab.scalings[addr] ?? 1;
+    const rowFormat = tab.formats?.[addr];
+
+    let rawVal: number | boolean | null = null;
+    let displayVal = '--';
+    let rawHex = '--';
+    let changed = false;
+    let changeDirection: 'up' | 'down' | null = null;
+    let decodedMulti: import('./types/modbus').MultiColumnDecoded | undefined = undefined;
+
+    const hasData = tab.role === 'slave' ? true : state.hasData;
+    let cellHasValue = false;
+
+    if (hasData) {
+      if (isCoil) {
+        if (i < state.coils.length) {
+          const bit = state.coils[i];
+          const prevBit = (state.lastValues[i] as boolean) ?? bit;
+          rawVal = bit;
+          displayVal = bit ? 'ON' : 'OFF';
+          rawHex = bit ? '0x01' : '0x00';
+          changed = bit !== prevBit;
+          if (changed) {
+            changeDirection = bit ? 'up' : 'down';
+          }
+          cellHasValue = true;
+        }
+      } else {
+        if (i < state.regs.length) {
+          const v = state.regs[i];
+          const prevV = (state.lastValues[i] as number) ?? v;
+          rawVal = v;
+          const effectiveFmt = rowFormat || tab.format;
+          const fmtRes = formatValue(state.regs, i, effectiveFmt, scaling);
+          displayVal = fmtRes.display;
+          rawHex = fmtRes.hex;
+          changed = v !== prevV;
+          if (changed) {
+            changeDirection = v > prevV ? 'up' : 'down';
+          }
+          cellHasValue = true;
+          decodedMulti = decodeAllColumns(state.regs, i, addr, tab.definition.function_code);
+        }
+      }
+    }
+
+    let displayAddress = '';
+    if (tab.role === 'slave') {
+      displayAddress = `${modiconAddress(modiconTableDigit(tab.slaveTable), addr)} (${addr})`;
+    } else {
+      displayAddress = getModbusAddressLabel(tab.definition.function_code, addr);
+    }
+
+    const lastUpdated = state.lastUpdatedMap?.[addr] || (cellHasValue ? state.lastUpdatedTime : undefined);
+
+    resultRows.push({
+      address: addr,
+      displayAddress,
+      alias,
+      rawValue: rawVal,
+      displayValue: displayVal,
+      rawHex,
+      unit,
+      scaling,
+      format: rowFormat,
+      lastUpdated,
+      changed,
+      changeDirection,
+      hasValue: cellHasValue,
+      decodedMulti,
+    });
+  }
+
+
+  return { rows: resultRows, isCoil };
+}
 
 type TracePoint = { timestamp: string; timeMs: number; value: number };
 
@@ -209,10 +318,24 @@ export const App: React.FC = () => {
     []
   );
 
-  // Global Hotkeys: F1 (Help), F4 (Scanner), F9 (Mobile Remote)
+  // Handlers for hotkeys that are defined further down; assigned on every render.
+  const hotkeyActionsRef = useRef<{ connectToggle: () => void; readOnce: () => void; definition: () => void } | null>(null);
+
+  // Global Hotkeys: F1 (Help), F3 (Connect/Disconnect), F4 (Scanner), F7 (Read Once),
+  // F8 (Definition), F9 (Mobile Remote)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F1') {
+      const actions = hotkeyActionsRef.current;
+      if (e.key === 'F3' && actions) {
+        e.preventDefault();
+        actions.connectToggle();
+      } else if (e.key === 'F7' && actions) {
+        e.preventDefault();
+        actions.readOnce();
+      } else if (e.key === 'F8' && actions) {
+        e.preventDefault();
+        actions.definition();
+      } else if (e.key === 'F1') {
         e.preventDefault();
         setIsHelpModalOpen((prev) => !prev);
       } else if (e.key === 'F4') {
@@ -318,11 +441,10 @@ export const App: React.FC = () => {
               if (relIdx >= 0 && slice.values && relIdx < slice.values.length) {
                 const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
                 const scaling = targetTab.scalings?.[trace.address] ?? 1;
-                points[trace.id] = {
-                  timestamp: timeStr,
-                  timeMs: now.getTime(),
-                  value: toChartValue(slice.values, relIdx, regFmt, scaling),
-                };
+                const value = toChartValue(slice.values, relIdx, regFmt, scaling);
+                if (Number.isFinite(value)) {
+                  points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
+                }
               }
             }
           });
@@ -344,10 +466,25 @@ export const App: React.FC = () => {
     }
   }, [activeTab.id, activeTab.role, activeTab.slaveTable, activeTab.slaveStartAddr, activeTab.slaveQuantity, refreshSlaveSlice]);
 
-  // Subscribe to Master Poll-Data Events
-  useEffect(() => {
-    const unbind = subscribePollData((payload) => {
-      const targetId = payload.session_id || activeTabRef.current.id;
+  // Applies a master read result (polling event or Read Once) to a tab: values, counters,
+  // traffic log, per-row timestamps and chart traces.
+  const applyPollResult = useCallback(
+    (targetId: string, payload: PollResult) => {
+      const resultTab = tabsRef.current.find((t) => t.id === targetId);
+      // Drop results that no longer match the tab: the tab switched to Slave mode, or the
+      // definition changed while this request was in flight.
+      if (resultTab) {
+        const def = resultTab.definition;
+        if (
+          resultTab.role !== 'master' ||
+          (payload.slave_id !== undefined && payload.slave_id !== def.slave_id) ||
+          (payload.function_code !== undefined && payload.function_code !== def.function_code) ||
+          (payload.start_address !== undefined && payload.start_address !== def.start_address)
+        ) {
+          return;
+        }
+      }
+
       const now = new Date();
       const timeStr = now.toLocaleTimeString('vi-VN', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
 
@@ -361,12 +498,20 @@ export const App: React.FC = () => {
             hex: payload.raw_tx,
           });
         }
-        if (payload.raw_rx) {
+        // Failed reads carry no raw_rx, so the error needs its own entry to be visible.
+        if (payload.error) {
+          newEntries.push({
+            id: `err-${Date.now()}-${Math.random()}`,
+            timestamp: payload.timestamp,
+            direction: 'err',
+            hex: `Error: ${payload.error}`,
+          });
+        } else if (payload.raw_rx) {
           newEntries.push({
             id: `rx-${Date.now()}-${Math.random()}`,
             timestamp: payload.timestamp,
-            direction: payload.error ? 'err' : 'rx',
-            hex: payload.error ? `Error: ${payload.error}` : payload.raw_rx,
+            direction: 'rx',
+            hex: payload.raw_rx,
           });
         }
 
@@ -411,11 +556,10 @@ export const App: React.FC = () => {
             if (relIdx >= 0 && relIdx < payload.values.length) {
               const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
               const scaling = targetTab.scalings?.[trace.address] ?? 1;
-              points[trace.id] = {
-                timestamp: timeStr,
-                timeMs: now.getTime(),
-                value: toChartValue(payload.values, relIdx, regFmt, scaling),
-              };
+              const value = toChartValue(payload.values, relIdx, regFmt, scaling);
+              if (Number.isFinite(value)) {
+                points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
+              }
             }
           }
         });
@@ -423,10 +567,18 @@ export const App: React.FC = () => {
           setTraceData((prev) => appendTracePoints(prev, points));
         }
       }
+    },
+    [updateTabState]
+  );
+
+  // Subscribe to Master Poll-Data Events
+  useEffect(() => {
+    const unbind = subscribePollData((payload) => {
+      applyPollResult(payload.session_id || activeTabRef.current.id, payload);
     });
 
     return () => unbind();
-  }, [updateTabState]);
+  }, [applyPollResult]);
 
   // Subscribe to Slave Activity Events (Master reading/writing into our Slave server)
   useEffect(() => {
@@ -449,14 +601,43 @@ export const App: React.FC = () => {
         };
       });
 
-      // Synchronize memory table with latest changes
-      const currentTab = activeTabRef.current;
-      if (currentTab.id === targetId) {
-        refreshSlaveSlice(currentTab.id, currentTab.slaveTable, currentTab.slaveStartAddr, currentTab.slaveQuantity);
+      // Synchronize memory table with latest changes (coalesced, see scheduleSlaveRefresh)
+      if (activeTabRef.current.id === targetId) {
+        scheduleSlaveRefresh();
       }
     });
 
-    return () => unbind();
+    // A fast external master can generate hundreds of events per second. Refresh at most every
+    // 100ms with a single request in flight, so responses cannot arrive out of order.
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let inFlight = false;
+    let pending = false;
+    const runRefresh = async () => {
+      timer = null;
+      if (inFlight) {
+        pending = true;
+        return;
+      }
+      inFlight = true;
+      const tab = activeTabRef.current;
+      try {
+        await refreshSlaveSlice(tab.id, tab.slaveTable, tab.slaveStartAddr, tab.slaveQuantity);
+      } finally {
+        inFlight = false;
+        if (pending) {
+          pending = false;
+          scheduleSlaveRefresh();
+        }
+      }
+    };
+    function scheduleSlaveRefresh() {
+      if (!timer) timer = setTimeout(runRefresh, 100);
+    }
+
+    return () => {
+      unbind();
+      if (timer) clearTimeout(timer);
+    };
   }, [updateTabState, refreshSlaveSlice]);
 
   // --- Master Connection Handlers ---
@@ -477,6 +658,9 @@ export const App: React.FC = () => {
         latencyMs: 0,
       }));
     } catch (err) {
+      // The backend closes the previous link before opening the new one, and its poll loop
+      // stops once disconnected, so the tab is no longer connected nor polling.
+      updateTabState(activeTab.id, (prev) => ({ ...prev, isConnected: false, isPolling: false }));
       alert(`Kết nối thất bại: ${err}`);
     }
   };
@@ -517,18 +701,10 @@ export const App: React.FC = () => {
     if (!activeState.isConnected || activeState.isPolling) return;
     try {
       const res = await sessionReadOnce(activeTab.id, activeTab.definition);
-      updateTabState(activeTab.id, (prev) => {
-        const isSuccess = !res.error && (res.values.length > 0 || res.bool_values.length > 0);
-        return {
-          ...prev,
-          txCount: res.tx_count,
-          errCount: res.err_count,
-          latencyMs: res.latency_ms,
-          hasData: isSuccess,
-          regs: isSuccess ? res.values : [],
-          coils: isSuccess ? res.bool_values : [],
-        };
-      });
+      applyPollResult(activeTab.id, res);
+      if (res.error) {
+        alert(`Đọc thất bại: ${res.error}`);
+      }
     } catch (err) {
       alert(`Lỗi đọc: ${err}`);
     }
@@ -536,7 +712,7 @@ export const App: React.FC = () => {
 
   // --- Slave Handlers ---
 
-  const handleStartSlaveServer = async (cfg: SlaveConfig) => {
+  const handleStartSlaveServer = async (cfg: SlaveConfig): Promise<boolean> => {
     try {
       await slaveStart(activeTab.id, cfg);
       setTabs((prev) =>
@@ -547,8 +723,10 @@ export const App: React.FC = () => {
         isListening: true,
       }));
       await refreshSlaveSlice(activeTab.id, activeTab.slaveTable, activeTab.slaveStartAddr, activeTab.slaveQuantity);
+      return true;
     } catch (err) {
       alert(`Khởi động Slave Server thất bại: ${err}`);
+      return false;
     }
   };
 
@@ -596,9 +774,38 @@ export const App: React.FC = () => {
   };
 
   // Switch role between Master & Slave
-  const handleRoleChange = (role: SessionRole) => {
+  const handleRoleChange = async (role: SessionRole) => {
+    if (role === activeTab.role) return;
+    const tabId = activeTab.id;
+    const state = tabStates[tabId];
+
+    // Stop whatever the previous role was doing, so it does not keep a COM port / socket open
+    // or keep emitting events in the background.
+    try {
+      if (role === 'slave') {
+        if (state?.isPolling) await sessionStopPolling(tabId);
+        if (state?.isConnected) await sessionDisconnect(tabId);
+      } else if (state?.isListening || state?.isSimulating || activeTab.isListening) {
+        await slaveStopSim(tabId);
+        await slaveStop(tabId);
+      }
+    } catch (err) {
+      console.error('Lỗi dừng chế độ cũ khi đổi vai trò:', err);
+    }
+
+    updateTabState(tabId, (prev) => ({
+      ...prev,
+      isPolling: false,
+      isConnected: false,
+      isListening: false,
+      isSimulating: false,
+      hasData: false,
+      regs: [],
+      coils: [],
+      lastValues: [],
+    }));
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab.id ? { ...t, role } : t))
+      prev.map((t) => (t.id === tabId ? { ...t, role, isListening: false, isSimulating: false } : t))
     );
     if (role === 'slave') {
       refreshSlaveSlice(activeTab.id, activeTab.slaveTable, activeTab.slaveStartAddr, activeTab.slaveQuantity);
@@ -614,14 +821,9 @@ export const App: React.FC = () => {
 
   // --- Scanner Apply Handlers ---
 
+  // Goes through handleSaveDefinition so a running poll is restarted with the new Slave ID.
   const handleApplySlaveId = (slaveId: number) => {
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === activeTabId
-          ? { ...t, definition: { ...t.definition, slave_id: slaveId } }
-          : t
-      )
-    );
+    handleSaveDefinition({ ...activeTab.definition, slave_id: slaveId });
   };
 
   const handleApplyScannerConnection = async (port: string, baud: number, parity: string) => {
@@ -660,6 +862,9 @@ export const App: React.FC = () => {
         await sessionStartPolling(tabId, newDef);
       } catch (err) {
         console.error('Lỗi khởi động lại polling khi đổi cấu hình:', err);
+        // Polling was stopped and did not restart: never keep showing "Polling".
+        updateTabState(tabId, (prev) => ({ ...prev, isPolling: false }));
+        alert(`Không khởi động lại được Polling với cấu hình mới: ${err}`);
       }
     }
   };
@@ -671,7 +876,7 @@ export const App: React.FC = () => {
       ...activeTab.definition,
       function_code: fc,
       start_address: startAddr,
-      quantity: Math.min(100, Math.max(1, qty)),
+      quantity: Math.min(100, Math.max(1, qty), 65536 - startAddr),
     };
 
     setTabs((prev) =>
@@ -692,18 +897,24 @@ export const App: React.FC = () => {
         await sessionStartPolling(tabId, newDef);
       } catch (err) {
         console.error('Lỗi cập nhật polling sau khi quét:', err);
+        // Polling was stopped and did not restart: never keep showing "Polling".
+        updateTabState(tabId, (prev) => ({ ...prev, isPolling: false }));
+        alert(`Không khởi động lại được Polling với cấu hình mới: ${err}`);
       }
     }
   };
 
   // --- Inline Write & Coil Toggle Handlers ---
 
-  const handleInlineWriteForTab = async (tabId: string, address: number, valueStr: string) => {
-    const targetTab = tabs.find((t) => t.id === tabId) || activeTab;
+  // Writes a typed value to one row of a tab, with every check (read-only tables, format range,
+  // scaling, FC06/FC16). Returns an error message, or null on success. Used by inline edits on
+  // the desktop and by writes coming from the phone.
+  const performWrite = async (tabId: string, address: number, valueStr: string): Promise<string | null> => {
+    const targetTab = tabsRef.current.find((t) => t.id === tabId);
+    if (!targetTab) return `Không tìm thấy sheet ${tabId}.`;
     try {
       if (targetTab.role !== 'slave' && isReadOnlyFunction(targetTab.definition.function_code)) {
-        alert('FC02/FC04 là bảng chỉ đọc, không thể ghi.');
-        return;
+        return 'FC02/FC04 là bảng chỉ đọc, không thể ghi.';
       }
 
       const isCoilType =
@@ -713,6 +924,10 @@ export const App: React.FC = () => {
 
       if (isCoilType) {
         const valLower = valueStr.trim().toLowerCase();
+        // Unknown text must not silently become OFF.
+        if (!['1', '0', 'true', 'false', 'on', 'off'].includes(valLower)) {
+          return `Giá trị coil "${valueStr}" không hợp lệ (dùng 1/0, ON/OFF, true/false).`;
+        }
         const boolVal = valLower === '1' || valLower === 'true' || valLower === 'on';
         if (targetTab.role === 'slave') {
           await slaveSetCoil(targetTab.id, targetTab.slaveTable, address, boolVal);
@@ -724,7 +939,7 @@ export const App: React.FC = () => {
             value: boolVal,
           });
         }
-        return;
+        return null;
       }
 
       // Register write supporting Signed16, Float32, Long, UInt32 multi-registers
@@ -732,8 +947,7 @@ export const App: React.FC = () => {
       const scaling = targetTab.scalings?.[address] ?? 1;
       const encoded = encodeRegisterInput(valueStr, format, scaling);
       if (!encoded.ok) {
-        alert(encoded.error);
-        return;
+        return encoded.error;
       }
 
       if (targetTab.role === 'slave') {
@@ -756,10 +970,28 @@ export const App: React.FC = () => {
           });
         }
       }
+      return null;
     } catch (err) {
-      alert(`Lỗi ghi dữ liệu: ${err}`);
+      return `Lỗi ghi dữ liệu: ${err}`;
     }
   };
+
+  const handleInlineWriteForTab = async (tabId: string, address: number, valueStr: string) => {
+    const error = await performWrite(tabId, address, valueStr);
+    if (error) alert(error);
+  };
+
+  // Phone writes go through the same performWrite as desktop edits.
+  const performWriteRef = useRef(performWrite);
+  performWriteRef.current = performWrite;
+  useEffect(() => {
+    return subscribeRemoteWrite(async (req) => {
+      const text = req.is_coil ? (req.bool_value ? '1' : '0') : req.text;
+      const tabId = req.tab_id || activeTabRef.current.id;
+      const error = await performWriteRef.current(tabId, req.address, text);
+      await completeRemoteWrite(req.id, error || '');
+    });
+  }, []);
 
   const handleToggleCoilForTab = async (tabId: string, address: number, currentVal: boolean) => {
     const targetTab = tabs.find((t) => t.id === tabId) || activeTab;
@@ -835,6 +1067,16 @@ export const App: React.FC = () => {
       delete next[id];
       return next;
     });
+    // Drop the closed tab's chart traces and their history; they could no longer be toggled.
+    const closedTraceIds = new Set(chartTraces.filter((t) => t.tabId === id).map((t) => t.id));
+    if (closedTraceIds.size > 0) {
+      setChartTraces((prev) => prev.filter((t) => t.tabId !== id));
+      setTraceData((prev) => {
+        const next = { ...prev };
+        closedTraceIds.forEach((traceId) => delete next[traceId]);
+        return next;
+      });
+    }
 
     if (activeTabId === id) {
       setActiveTabId(remaining[0].id);
@@ -863,7 +1105,9 @@ export const App: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      // Clean up previous sessions before importing new project
+      // Parse and validate first: a bad file must not tear down the current workspace.
+      const imported = await importProjectFromFile(file);
+
       for (const t of tabs) {
         try {
           await sessionStopPolling(t.id);
@@ -875,7 +1119,13 @@ export const App: React.FC = () => {
         }
       }
 
-      const imported = await importProjectFromFile(file);
+      // Imported tabs may reuse IDs such as tab-1; drop every old runtime state so nothing shows
+      // Connected/Polling for sessions that were just closed.
+      setTabStates({});
+      setChartTraces([]);
+      setTraceData({});
+      setIsSplitView(false);
+      setSplitTabId('');
       setTabs(imported.tabs);
       setActiveTabId(imported.activeTabId);
       alert(`Đã nạp thành công dự án "${imported.projectName}" gồm ${imported.tabs.length} Sheet!`);
@@ -1027,138 +1277,47 @@ export const App: React.FC = () => {
     setTraceData({});
   };
 
-  // --- Grid Row Construction Helper ---
+  const activeRowsObj = useMemo(() => buildRowsForTab(activeTab, activeState), [activeTab, activeState]);
 
-  const buildRowsForTab = (tab: TabSession, state: PerTabState): { rows: RegisterRow[]; isCoil: boolean } => {
-    const isCoil =
-      tab.role === 'slave'
-        ? tab.slaveTable === 'coils' || tab.slaveTable === 'discrete'
-        : tab.definition.function_code === 1 || tab.definition.function_code === 2;
+  const remoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteSourceRef = useRef({ tabs, tabStates, activeTabId });
+  remoteSourceRef.current = { tabs, tabStates, activeTabId };
 
-    const startAddr = tab.role === 'slave' ? tab.slaveStartAddr : tab.definition.start_address;
-    const quantity = tab.role === 'slave' ? tab.slaveQuantity : tab.definition.quantity;
-
-    const resultRows: RegisterRow[] = [];
-    for (let i = 0; i < quantity; i++) {
-      const addr = startAddr + i;
-      const alias = tab.aliases[addr] || '';
-      const unit = tab.units[addr] || '';
-      const scaling = tab.scalings[addr] ?? 1;
-      const rowFormat = tab.formats?.[addr];
-
-      let rawVal: number | boolean | null = null;
-      let displayVal = '--';
-      let rawHex = '--';
-      let changed = false;
-      let changeDirection: 'up' | 'down' | null = null;
-      let decodedMulti: import('./types/modbus').MultiColumnDecoded | undefined = undefined;
-
-      const hasData = tab.role === 'slave' ? true : state.hasData;
-      let cellHasValue = false;
-
-      if (hasData) {
-        if (isCoil) {
-          if (i < state.coils.length) {
-            const bit = state.coils[i];
-            const prevBit = (state.lastValues[i] as boolean) ?? bit;
-            rawVal = bit;
-            displayVal = bit ? 'ON' : 'OFF';
-            rawHex = bit ? '0x01' : '0x00';
-            changed = bit !== prevBit;
-            if (changed) {
-              changeDirection = bit ? 'up' : 'down';
-            }
-            cellHasValue = true;
-          }
-        } else {
-          if (i < state.regs.length) {
-            const v = state.regs[i];
-            const prevV = (state.lastValues[i] as number) ?? v;
-            rawVal = v;
-            const effectiveFmt = rowFormat || tab.format;
-            const fmtRes = formatValue(state.regs, i, effectiveFmt, scaling);
-            displayVal = fmtRes.display;
-            rawHex = fmtRes.hex;
-            changed = v !== prevV;
-            if (changed) {
-              changeDirection = v > prevV ? 'up' : 'down';
-            }
-            cellHasValue = true;
-            decodedMulti = decodeAllColumns(state.regs, i, addr, tab.definition.function_code);
-          }
-        }
-      }
-
-      let displayAddress = '';
-      if (tab.role === 'slave') {
-        const prefix =
-          tab.slaveTable === 'holding'
-            ? '4'
-            : tab.slaveTable === 'input'
-            ? '3'
-            : tab.slaveTable === 'discrete'
-            ? '1'
-            : '0';
-        displayAddress = `${prefix}${String(addr + 1).padStart(4, '0')} (${addr})`;
-      } else {
-        displayAddress = getModbusAddressLabel(tab.definition.function_code, addr);
-      }
-
-      const lastUpdated = state.lastUpdatedMap?.[addr] || (cellHasValue ? state.lastUpdatedTime : undefined);
-
-      resultRows.push({
-        address: addr,
-        displayAddress,
-        alias,
-        rawValue: rawVal,
-        displayValue: displayVal,
-        rawHex,
-        unit,
-        scaling,
-        format: rowFormat,
-        lastUpdated,
-        changed,
-        changeDirection,
-        hasValue: cellHasValue,
-        decodedMulti,
-      });
-    }
-
-
-    return { rows: resultRows, isCoil };
-  };
-
-  const activeRowsObj = buildRowsForTab(activeTab, activeState);
-
-  // Broadcast live state to Mobile Remote Server whenever active tab or rows update
+  // Broadcast live state of every sheet to the Mobile Remote Server, so a phone can browse any
+  // sheet, not only the one open on the desktop. Rows are built inside the timer from the latest
+  // state, at most twice per second, instead of on every poll.
   useEffect(() => {
-    if (!activeRowsObj.rows || activeRowsObj.rows.length === 0) return;
+    if (remoteTimerRef.current) return;
+    remoteTimerRef.current = setTimeout(() => {
+      remoteTimerRef.current = null;
+      const src = remoteSourceRef.current;
+      const sheets: Record<string, unknown[]> = {};
+      for (const t of src.tabs) {
+        const state = src.tabStates[t.id] || createEmptyTabState();
+        sheets[t.id] = buildRowsForTab(t, state).rows.map((r) => ({
+          address: r.address,
+          displayAddress: r.displayAddress,
+          alias: r.alias,
+          displayValue: r.displayValue,
+          rawValue: r.rawValue,
+          rawHex: r.rawHex,
+          unit: r.unit,
+          isCoil: typeof r.rawValue === 'boolean',
+        }));
+      }
+      updateRemoteServerState({
+        active_tab_id: src.activeTabId,
+        tabs: src.tabs.map((t) => ({ id: t.id, title: t.title, role: t.role, slaveId: t.definition.slave_id })),
+        sheets,
+        rows: sheets[src.activeTabId] || [],
+        timestamp: new Date().toLocaleTimeString('vi-VN'),
+      });
+    }, 500);
+  }, [activeTabId, tabs, tabStates]);
 
-    const tabsData = tabs.map((t) => ({
-      id: t.id,
-      title: t.title,
-      role: t.role,
-      slaveId: t.definition.slave_id,
-    }));
-
-    const rowsData = activeRowsObj.rows.map((r) => ({
-      address: r.address,
-      displayAddress: r.displayAddress,
-      alias: r.alias,
-      displayValue: r.displayValue,
-      rawValue: r.rawValue,
-      rawHex: r.rawHex,
-      unit: r.unit,
-      isCoil: typeof r.rawValue === 'boolean',
-    }));
-
-    updateRemoteServerState({
-      active_tab_id: activeTabId,
-      tabs: tabsData,
-      rows: rowsData,
-      timestamp: new Date().toLocaleTimeString('vi-VN'),
-    });
-  }, [activeTabId, tabs, activeRowsObj.rows]);
+  useEffect(() => () => {
+    if (remoteTimerRef.current) clearTimeout(remoteTimerRef.current);
+  }, []);
 
   // Compute split tab & rows if Split View is active
   const splitTab =
@@ -1166,7 +1325,70 @@ export const App: React.FC = () => {
     tabs.find((t) => t.id !== activeTabId) ||
     activeTab;
   const splitState = tabStates[splitTab.id] || createEmptyTabState();
-  const splitRowsObj = buildRowsForTab(splitTab, splitState);
+  const splitRowsObj = useMemo(
+    () => (isSplitView ? buildRowsForTab(splitTab, splitState) : { rows: [] as RegisterRow[], isCoil: false }),
+    [isSplitView, splitTab, splitState]
+  );
+
+  hotkeyActionsRef.current = {
+    connectToggle: () => {
+      if (activeTab.role !== 'master') return;
+      if (activeState.isConnected) handleDisconnect();
+      else setIsConnectionModalOpen(true);
+    },
+    readOnce: () => {
+      if (activeTab.role === 'master') handleReadOnce();
+    },
+    definition: () => setIsDefinitionModalOpen(true),
+  };
+
+  // Stable DataGrid callbacks per tab. They always call the latest handlers through a ref, so
+  // the memoized DataGrid is not re-rendered just because App re-rendered.
+  const gridHandlersRef = useRef({
+    handleUpdateAlias,
+    handleUpdateUnit,
+    handleUpdateScaling,
+    handleUpdateFormat,
+    handleInlineWriteForTab,
+    handleToggleCoilForTab,
+    handleToggleTrace,
+  });
+  gridHandlersRef.current = {
+    handleUpdateAlias,
+    handleUpdateUnit,
+    handleUpdateScaling,
+    handleUpdateFormat,
+    handleInlineWriteForTab,
+    handleToggleCoilForTab,
+    handleToggleTrace,
+  };
+  const createGridHandlers = (tabId: string) => {
+    const h = () => gridHandlersRef.current;
+    const findTab = () => tabsRef.current.find((t) => t.id === tabId);
+    return {
+      onRowDoubleClick: (row: RegisterRow) => {
+        const tab = findTab();
+        if (!tab) return;
+        setSelectedRowForWrite(row);
+        setSelectedTabForWrite(tab);
+        setIsWriteModalOpen(true);
+      },
+      onUpdateAlias: (addr: number, val: string) => h().handleUpdateAlias(tabId, addr, val),
+      onUpdateUnit: (addr: number, val: string) => h().handleUpdateUnit(tabId, addr, val),
+      onUpdateScaling: (addr: number, val: number) => h().handleUpdateScaling(tabId, addr, val),
+      onUpdateFormat: (addr: number, fmt: DataFormat) => h().handleUpdateFormat(tabId, addr, fmt),
+      onInlineWrite: (addr: number, val: string) => h().handleInlineWriteForTab(tabId, addr, val),
+      onToggleCoil: (addr: number, cur: boolean) => h().handleToggleCoilForTab(tabId, addr, cur),
+      onOpenChart: (row: RegisterRow) => {
+        const tab = findTab();
+        if (tab) h().handleToggleTrace(tab, row);
+      },
+    };
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const activeGridHandlers = useMemo(() => createGridHandlers(activeTab.id), [activeTab.id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const splitGridHandlers = useMemo(() => createGridHandlers(splitTab.id), [splitTab.id]);
 
   // Trace Color Maps for DataGrid row indicators
   const activeChartColorMap = useMemo(() => {
@@ -1256,9 +1478,11 @@ export const App: React.FC = () => {
         onDefinitionClick={() => setIsDefinitionModalOpen(true)}
         onTogglePoll={handleTogglePoll}
         onReadOnce={handleReadOnce}
-        onClearCounters={() =>
-          updateTabState(activeTab.id, (prev) => ({ ...prev, txCount: 0, errCount: 0 }))
-        }
+        onClearCounters={() => {
+          // Reset in the backend too; otherwise the next poll restores its running totals.
+          sessionResetCounters(activeTab.id).catch((err) => console.error('Reset counters failed:', err));
+          updateTabState(activeTab.id, (prev) => ({ ...prev, txCount: 0, errCount: 0 }));
+        }}
         isListening={activeState.isListening}
         slaveTable={activeTab.slaveTable}
         onTableChange={handleSlaveTableChange}
@@ -1294,18 +1518,7 @@ export const App: React.FC = () => {
             rows={activeRowsObj.rows}
             isCoil={activeRowsObj.isCoil}
             sheetFormat={activeTab.format}
-            onRowDoubleClick={(row) => {
-              setSelectedRowForWrite(row);
-              setSelectedTabForWrite(activeTab);
-              setIsWriteModalOpen(true);
-            }}
-            onUpdateAlias={(addr, val) => handleUpdateAlias(activeTab.id, addr, val)}
-            onUpdateUnit={(addr, val) => handleUpdateUnit(activeTab.id, addr, val)}
-            onUpdateScaling={(addr, val) => handleUpdateScaling(activeTab.id, addr, val)}
-            onUpdateFormat={(addr, fmt) => handleUpdateFormat(activeTab.id, addr, fmt)}
-            onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
-            onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
-            onOpenChart={(row) => handleToggleTrace(activeTab, row)}
+            {...activeGridHandlers}
             activeChartColorMap={activeChartColorMap}
           />
         ) : (
@@ -1325,18 +1538,7 @@ export const App: React.FC = () => {
                 rows={activeRowsObj.rows}
                 isCoil={activeRowsObj.isCoil}
                 sheetFormat={activeTab.format}
-                onRowDoubleClick={(row) => {
-                  setSelectedRowForWrite(row);
-                  setSelectedTabForWrite(activeTab);
-                  setIsWriteModalOpen(true);
-                }}
-                onUpdateAlias={(addr, val) => handleUpdateAlias(activeTab.id, addr, val)}
-                onUpdateUnit={(addr, val) => handleUpdateUnit(activeTab.id, addr, val)}
-                onUpdateScaling={(addr, val) => handleUpdateScaling(activeTab.id, addr, val)}
-                onUpdateFormat={(addr, fmt) => handleUpdateFormat(activeTab.id, addr, fmt)}
-                onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
-                onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
-                onOpenChart={(row) => handleToggleTrace(activeTab, row)}
+                {...activeGridHandlers}
                 activeChartColorMap={activeChartColorMap}
               />
             </div>
@@ -1370,18 +1572,7 @@ export const App: React.FC = () => {
                 rows={splitRowsObj.rows}
                 isCoil={splitRowsObj.isCoil}
                 sheetFormat={splitTab.format}
-                onRowDoubleClick={(row) => {
-                  setSelectedRowForWrite(row);
-                  setSelectedTabForWrite(splitTab);
-                  setIsWriteModalOpen(true);
-                }}
-                onUpdateAlias={(addr, val) => handleUpdateAlias(splitTab.id, addr, val)}
-                onUpdateUnit={(addr, val) => handleUpdateUnit(splitTab.id, addr, val)}
-                onUpdateScaling={(addr, val) => handleUpdateScaling(splitTab.id, addr, val)}
-                onUpdateFormat={(addr, fmt) => handleUpdateFormat(splitTab.id, addr, fmt)}
-                onInlineWrite={(addr, val) => handleInlineWriteForTab(splitTab.id, addr, val)}
-                onToggleCoil={(addr, cur) => handleToggleCoilForTab(splitTab.id, addr, cur)}
-                onOpenChart={(row) => handleToggleTrace(splitTab, row)}
+                {...splitGridHandlers}
                 activeChartColorMap={splitChartColorMap}
               />
             </div>

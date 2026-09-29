@@ -26,7 +26,7 @@ interface DataGridProps {
   activeChartColorMap?: Record<number, string>;
 }
 
-export const DataGrid: React.FC<DataGridProps> = ({
+const DataGridView: React.FC<DataGridProps> = ({
   rows,
   isCoil,
   sheetFormat = 'unsigned16',
@@ -617,3 +617,7 @@ export const DataGrid: React.FC<DataGridProps> = ({
     </div>
   );
 };
+
+// Memoized: App re-renders on every poll of any tab and on chart hover, but a grid only needs to
+// re-render when its own rows or props change (App passes stable callbacks per tab).
+export const DataGrid = React.memo(DataGridView);

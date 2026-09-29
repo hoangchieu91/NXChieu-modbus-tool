@@ -1,5 +1,7 @@
 package modbus
 
+import "fmt"
+
 // SerialPortDetail contains information about an available serial COM port.
 type SerialPortDetail struct {
 	PortName    string `json:"port_name"`
@@ -118,4 +120,24 @@ type SimulationConfig struct {
 	Max        float64 `json:"max"`
 	Step       float64 `json:"step"`
 	IntervalMs uint64  `json:"interval_ms"`
+}
+
+// Validate checks a read request against the Modbus limits before it reaches a device or the
+// simulator (which would otherwise wrap past address 65535 and label data wrongly).
+func (d PollDefinition) Validate() error {
+	maxQty := 125
+	switch d.FunctionCode {
+	case 1, 2:
+		maxQty = 2000
+	case 3, 4:
+	default:
+		return fmt.Errorf("unsupported function code: %d", d.FunctionCode)
+	}
+	if d.Quantity < 1 || int(d.Quantity) > maxQty {
+		return fmt.Errorf("quantity %d out of range (1..%d for FC%02d)", d.Quantity, maxQty, d.FunctionCode)
+	}
+	if int(d.StartAddress)+int(d.Quantity) > 65536 {
+		return fmt.Errorf("read range %d..%d exceeds address 65535", d.StartAddress, int(d.StartAddress)+int(d.Quantity)-1)
+	}
+	return nil
 }

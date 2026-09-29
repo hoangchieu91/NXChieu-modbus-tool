@@ -10,6 +10,10 @@ export function CloseSession(arg1) {
   return window['go']['main']['App']['CloseSession'](arg1);
 }
 
+export function CompleteRemoteWrite(arg1, arg2) {
+  return window['go']['main']['App']['CompleteRemoteWrite'](arg1, arg2);
+}
+
 export function Connect(arg1) {
   return window['go']['main']['App']['Connect'](arg1);
 }
@@ -56,6 +60,10 @@ export function SessionGetConnectionStatus(arg1) {
 
 export function SessionReadOnce(arg1, arg2) {
   return window['go']['main']['App']['SessionReadOnce'](arg1, arg2);
+}
+
+export function SessionResetCounters(arg1) {
+  return window['go']['main']['App']['SessionResetCounters'](arg1);
 }
 
 export function SessionStartPolling(arg1, arg2) {

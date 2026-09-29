@@ -19,6 +19,8 @@ type App struct {
 	sessMgr      *modbus.SessionManager
 	defPort      *modbus.ModbusClientWrapper
 	remoteServer *web.RemoteServer
+
+	pendingWrites map[string]chan string // remote writes awaiting the desktop UI, by request id
 }
 
 // NewApp creates a new App application struct
@@ -28,28 +30,7 @@ func NewApp() *App {
 	}
 
 	app.remoteServer = web.NewRemoteServer(
-		func(tabID string, isCoil bool, addr uint16, val uint16, boolVal bool) error {
-			if tabID == "" {
-				tabID = "default"
-			}
-			// Never fall back to Slave ID 0: on RS485 that is a broadcast write to every device.
-			slaveID := app.sessMgr.MasterLastSlaveID(tabID)
-			if slaveID == 0 {
-				return fmt.Errorf("session %s has no active poll definition (unknown slave ID)", tabID)
-			}
-			if isCoil {
-				return app.sessMgr.MasterWriteCoil(tabID, modbus.WriteCoilParam{
-					SlaveID: slaveID,
-					Address: addr,
-					Value:   boolVal,
-				})
-			}
-			return app.sessMgr.MasterWriteRegister(tabID, modbus.WriteRegisterParam{
-				SlaveID: slaveID,
-				Address: addr,
-				Value:   val,
-			})
-		},
+		app.handleRemoteWrite,
 		func() map[string]interface{} {
 			return map[string]interface{}{
 				"timestamp": time.Now().Format(time.RFC3339),
@@ -74,6 +55,72 @@ func NewApp() *App {
 	)
 
 	return app
+}
+
+// remoteWriteTimeout bounds how long a phone waits for the desktop UI to perform a write.
+const remoteWriteTimeout = 10 * time.Second
+
+// handleRemoteWrite forwards a phone write to the desktop UI, which encodes the typed value with
+// the row's format and scaling and applies the same checks as an inline write (read-only
+// tables, ranges, FC06/FC16, Slave ID). Writing raw values from here would bypass all of that.
+func (a *App) handleRemoteWrite(req web.RemoteWriteRequest) error {
+	if a.ctx == nil {
+		return fmt.Errorf("desktop UI not ready")
+	}
+	if req.Address == nil {
+		return fmt.Errorf("address is required")
+	}
+
+	id := fmt.Sprintf("rw-%d", time.Now().UnixNano())
+	done := make(chan string, 1)
+	a.mu.Lock()
+	if a.pendingWrites == nil {
+		a.pendingWrites = make(map[string]chan string)
+	}
+	a.pendingWrites[id] = done
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		delete(a.pendingWrites, id)
+		a.mu.Unlock()
+	}()
+
+	text := req.Text
+	if text == "" && !req.IsCoil {
+		text = fmt.Sprintf("%d", req.Value)
+	}
+	runtime.EventsEmit(a.ctx, "remote-write", map[string]interface{}{
+		"id":         id,
+		"tab_id":     req.TabID,
+		"address":    *req.Address,
+		"is_coil":    req.IsCoil,
+		"bool_value": req.BoolValue,
+		"text":       text,
+	})
+
+	select {
+	case errMsg := <-done:
+		if errMsg != "" {
+			return fmt.Errorf("%s", errMsg)
+		}
+		return nil
+	case <-time.After(remoteWriteTimeout):
+		return fmt.Errorf("desktop app did not respond to the write request")
+	}
+}
+
+// CompleteRemoteWrite is called by the desktop UI when it has handled a "remote-write" event;
+// errMsg is empty on success.
+func (a *App) CompleteRemoteWrite(id string, errMsg string) {
+	a.mu.Lock()
+	done := a.pendingWrites[id]
+	a.mu.Unlock()
+	if done != nil {
+		select {
+		case done <- errMsg:
+		default:
+		}
+	}
 }
 
 // startup is called when the app starts. The context is saved so we can emit events.
@@ -155,6 +202,14 @@ func (a *App) SessionWriteCoil(sessionID string, param modbus.WriteCoilParam) er
 		sessionID = "default"
 	}
 	return a.sessMgr.MasterWriteCoil(sessionID, param)
+}
+
+// SessionResetCounters zeroes a session's TX/error counters (the toolbar's Clear counters).
+func (a *App) SessionResetCounters(sessionID string) {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	a.sessMgr.MasterResetCounters(sessionID)
 }
 
 // SessionGetConnectionStatus returns true if session master is connected.

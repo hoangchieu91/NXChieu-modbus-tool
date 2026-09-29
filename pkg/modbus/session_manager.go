@@ -155,8 +155,17 @@ func (sm *SessionManager) MasterStartPolling(sessionID string, def PollDefinitio
 				}
 				res := client.ExecuteRead(pDef)
 				res.SessionID = sID
-				if sm.onPollData != nil {
+				// A read that was in flight when polling was stopped or restarted belongs to the
+				// old definition. Checking under sess.mu (which Stop/Start hold while cancelling)
+				// guarantees no stale result is emitted after the new run has started.
+				sess.mu.Lock()
+				stale := pollCtx.Err() != nil
+				if !stale && sm.onPollData != nil {
 					sm.onPollData(sID, res)
+				}
+				sess.mu.Unlock()
+				if stale {
+					return
 				}
 			}
 		}
@@ -175,6 +184,11 @@ func (sm *SessionManager) MasterStopPolling(sessionID string) {
 		sess.pollCancel()
 		sess.pollCancel = nil
 	}
+}
+
+// MasterResetCounters zeroes the session's TX/error counters.
+func (sm *SessionManager) MasterResetCounters(sessionID string) {
+	sm.GetOrCreateSession(sessionID, RoleMaster).Master.ResetCounters()
 }
 
 // MasterReadOnce executes a single read cycle.

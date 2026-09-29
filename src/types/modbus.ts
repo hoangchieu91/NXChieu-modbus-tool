@@ -244,10 +244,11 @@ export interface MultiColumnDecoded {
   bin: string;
   int16: number;
   uint16: number;
-  int32_abcd: number;
-  int32_cdab: number;
-  uint32_abcd: number;
-  uint32_cdab: number;
+  // '--' when the block has too few registers left for a 32-bit value
+  int32_abcd: number | string;
+  int32_cdab: number | string;
+  uint32_abcd: number | string;
+  uint32_cdab: number | string;
   float_abcd: string;
   float_cdab: string;
   float_badc: string;

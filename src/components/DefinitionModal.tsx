@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Settings, Check, HelpCircle } from 'lucide-react';
 import { PollDefinition } from '../types/modbus';
-import { parseModbusAddress, formatModbusAddress } from '../utils/formatters';
+import { parseModbusAddress, formatModbusAddress, getModbusAddressLabel } from '../utils/formatters';
 
 interface DefinitionModalProps {
   isOpen: boolean;
@@ -76,14 +76,37 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const parsed = parseModbusAddress(addrInput, addrMode);
-    const finalAddress = parsed.isValid ? parsed.value : address;
+    if (!parsed.isValid) {
+      // Do not fall back to the previous address: keep the dialog open and show the error.
+      setAddrError(parsed.error || 'Địa chỉ không hợp lệ');
+      return;
+    }
+    const finalAddress = parsed.value;
+
+    // Cleared number inputs are NaN, and Math.max(1, NaN) is still NaN; reject instead.
+    if (!Number.isInteger(slaveId) || slaveId < 1 || slaveId > 247) {
+      setAddrError('Slave ID phải là số nguyên từ 1 đến 247');
+      return;
+    }
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 125) {
+      setAddrError('Số lượng phải là số nguyên từ 1 đến 125');
+      return;
+    }
+    if (finalAddress + quantity > 65536) {
+      setAddrError(`Vùng đọc vượt địa chỉ 65535: bắt đầu ${finalAddress} + ${quantity} thanh ghi. Tối đa ${65536 - finalAddress} thanh ghi từ địa chỉ này.`);
+      return;
+    }
+    if (!Number.isFinite(scanRate) || scanRate < 50) {
+      setAddrError('Chu kỳ quét tối thiểu 50 ms');
+      return;
+    }
 
     onSave({
-      slave_id: Math.max(1, Math.min(247, slaveId)),
+      slave_id: slaveId,
       function_code: functionCode,
-      start_address: Math.max(0, Math.min(65535, finalAddress)),
-      quantity: Math.max(1, Math.min(125, quantity)),
-      scan_rate_ms: Math.max(50, scanRate),
+      start_address: finalAddress,
+      quantity,
+      scan_rate_ms: Math.round(scanRate),
     });
     onClose();
   };
@@ -206,7 +229,7 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
                     )}
                   </span>
                   <span className="text-slate-500 font-sans">
-                    PLC: {functionCode === 3 ? 40001 + address : functionCode === 4 ? 30001 + address : address + 1}
+                    PLC: {getModbusAddressLabel(functionCode, address)}
                   </span>
                 </div>
               )}
