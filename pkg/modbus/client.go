@@ -30,6 +30,9 @@ type ModbusClientWrapper struct {
 	clientConfig  simonmodbus.ClientConfiguration
 	baseTimeout   time.Duration
 	lastProbeTime time.Time
+	// probing is set during Slave ID scanner probes: absent IDs time out by design, so their
+	// timeouts must not be taken as a dead TCP link.
+	probing bool
 
 	// txnID mirrors the library's Modbus TCP transaction counter (reset on every Open) so the
 	// traffic sniffer can show the real MBAP header.
@@ -285,6 +288,11 @@ func (m *ModbusClientWrapper) setTimeoutLocked(timeout time.Duration) error {
 	if m.client == nil || timeout == m.clientConfig.Timeout {
 		return nil
 	}
+	// A failed reopen leaves the old timeout in place; do not redial on every request.
+	if m.needsReopen && time.Since(m.lastReopenTry) < reopenInterval {
+		return fmt.Errorf("connection lost, reconnecting")
+	}
+	m.lastReopenTry = time.Now()
 	cfg := m.clientConfig
 	cfg.Timeout = timeout
 	next, err := simonmodbus.NewClient(&cfg)
@@ -345,7 +353,7 @@ func (m *ModbusClientWrapper) noteResultLocked(err error) {
 			m.consecTimeouts = 0
 			return
 		}
-		if m.isTCPLinkLocked() {
+		if m.isTCPLinkLocked() && !m.probing {
 			m.consecTimeouts++
 			if m.consecTimeouts >= tcpTimeoutsBeforeReopen {
 				m.needsReopen = true
@@ -564,6 +572,9 @@ func (m *ModbusClientWrapper) WriteRegisters(param WriteRegistersParam) error {
 
 	if !m.isConnected {
 		return fmt.Errorf("not connected to device")
+	}
+	if err := param.Validate(); err != nil {
+		return err
 	}
 
 	if m.isSimulator {

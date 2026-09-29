@@ -6,10 +6,11 @@ echo   Wails (Go backend + React frontend)
 echo ========================================================
 echo.
 cd /d "%~dp0"
-call npm run build:mobile-css || goto :error
+rem npm run build (called by wails build) also rebuilds the mobile page CSS.
 wails build -clean || goto :error
 echo.
-echo Build complete! Check buildinpause
+echo Build complete! Check build\bin\
+pause
 exit /b 0
 
 :error

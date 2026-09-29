@@ -1,6 +1,7 @@
 package modbus
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -36,27 +37,16 @@ type RegisterScanItem struct {
 	Detail  string `json:"detail"`
 }
 
-// isModbusExceptionError checks if an error from simonmodbus represents a valid Modbus exception response.
+// isModbusExceptionError reports whether err is an exception response sent by the addressed
+// device itself (so the device exists). Gateway exceptions 0x0A/0x0B mean the target did *not*
+// answer, and OS errors such as "device busy" are not Modbus answers at all.
 func isModbusExceptionError(err error) bool {
-	if err == nil {
+	var mbErr simonmodbus.Error
+	if !errors.As(err, &mbErr) {
 		return false
 	}
-	// Direct error comparison with known simonmodbus exception errors
-	if err == simonmodbus.ErrIllegalFunction ||
-		err == simonmodbus.ErrIllegalDataAddress ||
-		err == simonmodbus.ErrIllegalDataValue ||
-		err == simonmodbus.ErrServerDeviceFailure ||
-		err == simonmodbus.ErrAcknowledge ||
-		err == simonmodbus.ErrServerDeviceBusy ||
-		err == simonmodbus.ErrMemoryParityError {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "exception") ||
-		strings.Contains(msg, "illegal") ||
-		strings.Contains(msg, "device failure") ||
-		strings.Contains(msg, "busy") ||
-		strings.Contains(msg, "acknowledged")
+	code, ok := exceptionCodes[mbErr]
+	return ok && code != 0x0A && code != 0x0B
 }
 
 // ProbeSlave probes a single slave ID on the wrapper's active connection.
@@ -107,12 +97,26 @@ func (m *ModbusClientWrapper) ProbeSlave(slaveID uint8, timeoutMs uint) SlaveSca
 
 	// Try reading Holding Register 0
 	var val uint16
+	txnBefore := m.txnID
+	m.probing = true
 	err := m.hardwareCallLocked(slaveID, func() (err error) {
 		val, err = m.client.ReadRegister(0, simonmodbus.HOLDING_REGISTER)
 		return err
 	})
+	m.probing = false
 	m.lastProbeTime = time.Now()
 	latency := uint64(time.Since(startTime).Milliseconds())
+
+	// No request went out (link down / reconnecting): the ID was not probed, so it must not
+	// be reported as an absent device.
+	if err != nil && m.txnID == txnBefore {
+		return SlaveScanItem{
+			SlaveID:   slaveID,
+			Status:    "error",
+			Detail:    "Chưa dò được (liên kết lỗi): " + err.Error(),
+			LatencyMs: latency,
+		}
+	}
 
 	if err == nil {
 		return SlaveScanItem{
@@ -225,6 +229,19 @@ func (m *ModbusClientWrapper) ScanRegisters(slaveID uint8, fc uint8, startAddr, 
 		if err == nil && len(vals) == int(qty) {
 			for i, v := range vals {
 				results = append(results, okItem(uint16(blockStart+i), v))
+			}
+			continue
+		}
+		// Only an exception (e.g. an invalid address inside the block) is worth narrowing down
+		// register by register. A timeout would repeat for each of the 125 registers and could
+		// block the scan for many minutes.
+		if !isModbusExceptionError(err) {
+			detail := "Không đọc được khối"
+			if err != nil {
+				detail = err.Error()
+			}
+			for addr := blockStart; addr <= blockEnd; addr++ {
+				results = append(results, RegisterScanItem{Address: uint16(addr), Valid: false, Detail: detail})
 			}
 			continue
 		}

@@ -22,7 +22,7 @@ func startRTUPipe(t *testing.T, slaveID uint8) (*ModbusSlaveServer, net.Conn) {
 	store.setSlaveID(slaveID)
 
 	server, client := net.Pipe()
-	go srv.handleRTUConnection(&tcpFrameReader{conn: server, silence: 50 * time.Millisecond}, store, "pipe")
+	go srv.handleRTUConnection(&tcpFrameReader{conn: server, silence: 50 * time.Millisecond}, store, slaveID, "pipe")
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	return srv, client
 }

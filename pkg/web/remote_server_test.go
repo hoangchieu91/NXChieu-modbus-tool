@@ -189,3 +189,31 @@ func TestRemoteWriteForwardsTextAndReportsResult(t *testing.T) {
 		t.Fatalf("request not forwarded correctly: %+v", got)
 	}
 }
+
+// A snapshot cached while writes were off must not hide the write buttons after the server is
+// restarted with writes on.
+func TestInitialSnapshotUsesCurrentWritePermission(t *testing.T) {
+	s := NewRemoteServer(nil, func() map[string]interface{} { return map[string]interface{}{"rows": []int{}} })
+	s.BroadcastState(map[string]interface{}{"rows": []int{1}}) // cached with AllowWrite=false
+	s.config.AllowWrite = true
+	s.token = "secret"
+	s.isRunning = true
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWebSocket)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(ts.URL, "http")+"/ws?t=secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"allow_write":true`) || !strings.Contains(string(data), `"rows":[1]`) {
+		t.Fatalf("initial snapshot must carry the cached state and current permission: %s", data)
+	}
+}

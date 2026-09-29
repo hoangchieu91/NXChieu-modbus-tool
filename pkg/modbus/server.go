@@ -64,13 +64,23 @@ func NewSlaveMemoryStore(sessionID string, slaveID uint8, onActivity func(SlaveA
 	return store
 }
 
+// checkUnitLocked filters Modbus TCP requests by unit ID. 0 and 255 are the usual "this
+// device" IDs on TCP. Any other ID is answered like a gateway with no such target (0x0B);
+// "illegal data address" would make scanners report every ID as an existing device.
+func (s *SlaveMemoryStore) checkUnitLocked(unitID uint8) error {
+	if unitID == 0 || unitID == 255 || s.slaveID == 0 || unitID == s.slaveID {
+		return nil
+	}
+	return simonmodbus.ErrGWTargetFailedToRespond
+}
+
 // HandleCoils handles FC 01, 05, 15 for Modbus TCP/Server.
 func (s *SlaveMemoryStore) HandleCoils(req *simonmodbus.CoilsRequest) ([]bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if req.UnitId != 0 && s.slaveID != 0 && req.UnitId != s.slaveID {
-		return nil, simonmodbus.ErrIllegalDataAddress
+	if err := s.checkUnitLocked(req.UnitId); err != nil {
+		return nil, err
 	}
 
 	start := int(req.Addr)
@@ -126,8 +136,8 @@ func (s *SlaveMemoryStore) HandleDiscreteInputs(req *simonmodbus.DiscreteInputsR
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if req.UnitId != 0 && s.slaveID != 0 && req.UnitId != s.slaveID {
-		return nil, simonmodbus.ErrIllegalDataAddress
+	if err := s.checkUnitLocked(req.UnitId); err != nil {
+		return nil, err
 	}
 
 	start := int(req.Addr)
@@ -162,8 +172,8 @@ func (s *SlaveMemoryStore) HandleHoldingRegisters(req *simonmodbus.HoldingRegist
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if req.UnitId != 0 && s.slaveID != 0 && req.UnitId != s.slaveID {
-		return nil, simonmodbus.ErrIllegalDataAddress
+	if err := s.checkUnitLocked(req.UnitId); err != nil {
+		return nil, err
 	}
 
 	start := int(req.Addr)
@@ -219,8 +229,8 @@ func (s *SlaveMemoryStore) HandleInputRegisters(req *simonmodbus.InputRegistersR
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if req.UnitId != 0 && s.slaveID != 0 && req.UnitId != s.slaveID {
-		return nil, simonmodbus.ErrIllegalDataAddress
+	if err := s.checkUnitLocked(req.UnitId); err != nil {
+		return nil, err
 	}
 
 	start := int(req.Addr)
@@ -389,7 +399,7 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 	defer s.mu.Unlock()
 
 	if s.isListening {
-		s.stopLocked()
+		s.stopListenersLocked() // a restart keeps a running simulation
 	}
 
 	s.config = config
@@ -456,7 +466,7 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 		s.tcpConns = make(map[net.Conn]struct{})
 		s.isListening = true
 
-		go s.runRTUOverTCPLoop(ln, s.store)
+		go s.runRTUOverTCPLoop(ln, s.store, slaveID)
 
 	case "serial":
 		if config.Port == "" {
@@ -512,7 +522,7 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 		s.serialPort = sp
 		s.isListening = true
 
-		go s.handleRTUConnection(&serialFrameReader{sp}, s.store, "Serial "+config.Port)
+		go s.handleRTUConnection(&serialFrameReader{sp}, s.store, slaveID, "Serial "+config.Port)
 
 	default:
 		return fmt.Errorf("unsupported slave type: %s", config.Type)
@@ -533,6 +543,11 @@ func (s *ModbusSlaveServer) stopLocked() {
 		s.simCancel()
 		s.simCancel = nil
 	}
+	s.stopListenersLocked()
+}
+
+// stopListenersLocked closes the TCP/serial listeners and connections, leaving any simulation.
+func (s *ModbusSlaveServer) stopListenersLocked() {
 
 	if s.stopChan != nil {
 		close(s.stopChan)
@@ -613,7 +628,7 @@ func (r *tcpFrameReader) ReadChunk(p []byte) (int, bool, error) {
 func (r *tcpFrameReader) Write(p []byte) (int, error) { return r.conn.Write(p) }
 
 // RTU over TCP server listener loop
-func (s *ModbusSlaveServer) runRTUOverTCPLoop(ln net.Listener, store *SlaveMemoryStore) {
+func (s *ModbusSlaveServer) runRTUOverTCPLoop(ln net.Listener, store *SlaveMemoryStore, slaveID uint8) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -640,7 +655,7 @@ func (s *ModbusSlaveServer) runRTUOverTCPLoop(ln net.Listener, store *SlaveMemor
 				_ = c.Close()
 			}()
 			r := &tcpFrameReader{conn: c, silence: 100 * time.Millisecond}
-			s.handleRTUConnection(r, store, c.RemoteAddr().String())
+			s.handleRTUConnection(r, store, slaveID, c.RemoteAddr().String())
 		}(conn)
 	}
 }
@@ -670,7 +685,9 @@ func expectedRequestLen(buf []byte) int {
 
 // handleRTUConnection reassembles RTU frames from a byte stream. A frame is complete when its
 // expected length is reached; bytes left dangling after a line silence are discarded.
-func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemoryStore, clientAddr string) {
+// slaveID is fixed when the listener starts, so frame handling never reads s.config (which a
+// concurrent Start may be rewriting).
+func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemoryStore, slaveID uint8, clientAddr string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[RTU] Recovered from panic in handleRTUConnection (%s): %v", clientAddr, r)
@@ -711,7 +728,7 @@ func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemo
 
 			frame := pending[:want]
 			if len(frame) >= 4 && binary.LittleEndian.Uint16(frame[want-2:]) == CRC16Modbus(frame[:want-2]) {
-				if resp := s.processRTUFrame(store, frame, clientAddr); len(resp) > 0 {
+				if resp := s.processRTUFrame(store, slaveID, frame, clientAddr); len(resp) > 0 {
 					_, _ = rw.Write(resp)
 				}
 				pending = pending[want:]
@@ -735,9 +752,9 @@ func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemo
 
 // processRTUFrame handles a CRC-validated RTU request (FC 01-06, 0F, 10) and returns the response
 // bytes, or nil when no response must be sent (other unit IDs, broadcast).
-func (s *ModbusSlaveServer) processRTUFrame(store *SlaveMemoryStore, frame []byte, clientAddr string) []byte {
+func (s *ModbusSlaveServer) processRTUFrame(store *SlaveMemoryStore, slaveID uint8, frame []byte, clientAddr string) []byte {
 	unitID := frame[0]
-	if unitID != 0 && unitID != s.config.SlaveID {
+	if unitID != 0 && unitID != slaveID {
 		return nil // addressed to another device on the bus: stay silent
 	}
 	broadcast := unitID == 0

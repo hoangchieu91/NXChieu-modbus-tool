@@ -949,6 +949,11 @@ export const App: React.FC = () => {
       if (!encoded.ok) {
         return encoded.error;
       }
+      // Check the whole range before writing anything: a value must not wrap past 65535 or be
+      // left half-written (slave mode writes word by word).
+      if (address + encoded.values.length > 65536) {
+        return `Giá trị ${format} cần ${encoded.values.length} thanh ghi từ địa chỉ ${address}, vượt quá địa chỉ 65535.`;
+      }
 
       if (targetTab.role === 'slave') {
         for (let i = 0; i < encoded.values.length; i++) {

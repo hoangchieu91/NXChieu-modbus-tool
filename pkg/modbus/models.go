@@ -122,6 +122,18 @@ type SimulationConfig struct {
 	IntervalMs uint64  `json:"interval_ms"`
 }
 
+// Validate checks an FC16 request before anything is written, so a write can neither wrap past
+// address 65535 (uint16 arithmetic) nor be applied halfway.
+func (p WriteRegistersParam) Validate() error {
+	if len(p.Values) < 1 || len(p.Values) > 123 {
+		return fmt.Errorf("FC16 writes 1..123 registers, got %d", len(p.Values))
+	}
+	if int(p.Address)+len(p.Values) > 65536 {
+		return fmt.Errorf("write range %d..%d exceeds address 65535", p.Address, int(p.Address)+len(p.Values)-1)
+	}
+	return nil
+}
+
 // Validate checks a read request against the Modbus limits before it reaches a device or the
 // simulator (which would otherwise wrap past address 65535 and label data wrongly).
 func (d PollDefinition) Validate() error {

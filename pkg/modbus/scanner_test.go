@@ -60,3 +60,25 @@ func TestScannerSimulator(t *testing.T) {
 		t.Errorf("Expected simulator to match 9600 None")
 	}
 }
+
+// FC16 must be rejected as a whole when it would run past address 65535 (the simulator used to
+// wrap the second word to address 0).
+func TestWriteRegistersRejectsRangePast65535(t *testing.T) {
+	m := NewModbusClientWrapper()
+	if _, err := m.Connect(ConnectionConfig{Port: "simulator"}); err != nil {
+		t.Fatal(err)
+	}
+	m.simRegisters[0] = 2205
+	if err := m.WriteRegisters(WriteRegistersParam{SlaveID: 1, Address: 65535, Values: []uint16{1, 2}}); err == nil {
+		t.Fatal("expected an error for 65535 + 2 words")
+	}
+	if m.simRegisters[0] != 2205 || m.simRegisters[65535] != 0 {
+		t.Fatalf("nothing may be written: reg0=%d reg65535=%d", m.simRegisters[0], m.simRegisters[65535])
+	}
+	if err := m.WriteRegisters(WriteRegistersParam{SlaveID: 1, Address: 65534, Values: []uint16{1, 2}}); err != nil {
+		t.Fatalf("65534 + 2 words ends at 65535 and is valid: %v", err)
+	}
+	if err := m.WriteRegisters(WriteRegistersParam{SlaveID: 1, Address: 0, Values: make([]uint16, 124)}); err == nil {
+		t.Fatal("expected an error for 124 words")
+	}
+}

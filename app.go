@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nxchieu-modbus-tool/pkg/modbus"
@@ -57,6 +58,8 @@ func NewApp() *App {
 	return app
 }
 
+var remoteWriteSeq atomic.Uint64
+
 // remoteWriteTimeout bounds how long a phone waits for the desktop UI to perform a write.
 const remoteWriteTimeout = 10 * time.Second
 
@@ -71,7 +74,8 @@ func (a *App) handleRemoteWrite(req web.RemoteWriteRequest) error {
 		return fmt.Errorf("address is required")
 	}
 
-	id := fmt.Sprintf("rw-%d", time.Now().UnixNano())
+	// A counter, not the clock: Windows timestamps can repeat for writes a few ms apart.
+	id := fmt.Sprintf("rw-%d", remoteWriteSeq.Add(1))
 	done := make(chan string, 1)
 	a.mu.Lock()
 	if a.pendingWrites == nil {

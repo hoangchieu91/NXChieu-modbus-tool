@@ -74,7 +74,7 @@ type RemoteServer struct {
 	token         string
 	isRunning     bool
 	clients       map[*remoteClient]bool
-	lastState     []byte
+	lastState     json.RawMessage // last UI state; the envelope is rebuilt per send
 	upgrader      websocket.Upgrader
 	onRemoteWrite func(req RemoteWriteRequest) error
 	activeStateFn func() map[string]interface{}
@@ -326,22 +326,33 @@ func (s *RemoteServer) BroadcastPollResult(sessionID string, res modbus.PollResu
 
 // BroadcastState sends full app state snapshot to clients and caches it for phones that connect later.
 func (s *RemoteServer) BroadcastState(state map[string]interface{}) {
-	payload, err := json.Marshal(map[string]interface{}{
-		"type":        "state_snapshot",
-		"state":       state,
-		"allow_write": s.allowWrite(),
-	})
+	stateJSON, err := json.Marshal(state)
 	if err != nil {
 		return
 	}
 
 	s.mu.Lock()
-	s.lastState = payload
+	s.lastState = stateJSON
 	s.mu.Unlock()
+
+	payload, err := s.snapshotMessage(stateJSON)
+	if err != nil {
+		return
+	}
 
 	if s.hasClients() {
 		s.broadcastRaw(payload)
 	}
+}
+
+// snapshotMessage wraps a UI state with the server's *current* write permission. The state may
+// have been cached before the server was (re)started with a different permission.
+func (s *RemoteServer) snapshotMessage(state json.RawMessage) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"type":        "state_snapshot",
+		"state":       state,
+		"allow_write": s.allowWrite(),
+	})
 }
 
 func (s *RemoteServer) hasClients() bool {
@@ -404,18 +415,24 @@ func (s *RemoteServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	c := &remoteClient{conn: conn, send: make(chan []byte, clientSendBuffer)}
 
 	s.mu.Lock()
+	// Stop may have run during the upgrade (http.Server.Close does not close hijacked
+	// connections), or a restart may have rotated the token: do not keep this phone.
+	if !s.isRunning || s.token == "" || r.URL.Query().Get("t") != s.token {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
 	s.clients[c] = true
-	initMsg := s.lastState
+	state := s.lastState
 	s.mu.Unlock()
 
-	if initMsg == nil && s.activeStateFn != nil {
-		initMsg, _ = json.Marshal(map[string]interface{}{
-			"type":  "state_snapshot",
-			"state": s.activeStateFn(),
-		})
+	if state == nil && s.activeStateFn != nil {
+		state, _ = json.Marshal(s.activeStateFn())
 	}
-	if initMsg != nil {
-		c.enqueue(initMsg)
+	if state != nil {
+		if initMsg, err := s.snapshotMessage(state); err == nil {
+			c.enqueue(initMsg)
+		}
 	}
 
 	go s.writePump(c)
