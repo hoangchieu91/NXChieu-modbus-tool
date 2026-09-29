@@ -36,7 +36,7 @@ func TestScannerSimulator(t *testing.T) {
 	}
 
 	// 3. Test ScanRegisters
-	regResults := wrapper.ScanRegisters(3, 0, 10)
+	regResults := wrapper.ScanRegisters(1, 3, 0, 10)
 	if len(regResults) != 11 {
 		t.Errorf("Expected 11 registers (0..10), got %d", len(regResults))
 	}

@@ -44,6 +44,7 @@ export const DataGrid: React.FC<DataGridProps> = ({
   // Inline edit state
   const [editingAddress, setEditingAddress] = useState<number | null>(null);
   const [editInput, setEditInput] = useState<string>('');
+  const [editInitial, setEditInitial] = useState<string>('');
   const [justWrittenAddress, setJustWrittenAddress] = useState<number | null>(null);
 
   // Address display mode: 'dec' | 'hex'
@@ -59,14 +60,18 @@ export const DataGrid: React.FC<DataGridProps> = ({
   const [isMultiColumnLive, setIsMultiColumnLive] = useState<boolean>(false);
 
   const startEdit = (row: RegisterRow) => {
+    const initial = row.hasValue && row.displayValue !== '--' ? String(row.displayValue) : '';
     setEditingAddress(row.address);
-    setEditInput(row.displayValue !== '--' ? String(row.displayValue) : '0');
+    setEditInput(initial);
+    setEditInitial(initial);
   };
 
+  // Writes go to real devices, so only an explicit Enter with a changed value commits.
   const commitEdit = (address: number) => {
     if (editingAddress === address) {
-      onInlineWrite(address, editInput);
       setEditingAddress(null);
+      if (editInput.trim() === '' || editInput.trim() === editInitial.trim()) return;
+      onInlineWrite(address, editInput);
       setJustWrittenAddress(address);
       setTimeout(() => setJustWrittenAddress(null), 1000);
     }
@@ -412,7 +417,7 @@ export const DataGrid: React.FC<DataGridProps> = ({
                         {/* Standard Value with Flash Glow */}
                         <td
                           onClick={() => {
-                            if (editingAddress !== row.address) {
+                            if (!isCoil && editingAddress !== row.address) {
                               startEdit(row);
                             }
                           }}
@@ -443,7 +448,7 @@ export const DataGrid: React.FC<DataGridProps> = ({
                                     setEditingAddress(null);
                                   }
                                 }}
-                                onBlur={() => commitEdit(row.address)}
+                                onBlur={() => setEditingAddress(null)}
                                 className="w-full bg-slate-900 text-amber-300 font-mono font-bold px-2 py-0.5 rounded border border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400 text-sm shadow-inner"
                                 placeholder="Nhập giá trị..."
                               />

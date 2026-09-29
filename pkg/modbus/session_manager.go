@@ -207,6 +207,12 @@ func (sm *SessionManager) MasterWriteRegister(sessionID string, param WriteRegis
 	return sess.Master.WriteRegister(param)
 }
 
+// MasterWriteRegisters writes multiple registers (FC 16).
+func (sm *SessionManager) MasterWriteRegisters(sessionID string, param WriteRegistersParam) error {
+	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
+	return sess.Master.WriteRegisters(param)
+}
+
 // MasterWriteCoil writes a single coil.
 func (sm *SessionManager) MasterWriteCoil(sessionID string, param WriteCoilParam) error {
 	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
@@ -269,6 +275,10 @@ func (sm *SessionManager) ScanSlaveIDs(sessionID string, startID, endID uint8, t
 // ScanRegisters scans a range of registers on the session's master connection.
 func (sm *SessionManager) ScanRegisters(sessionID string, fc uint8, startAddr, endAddr uint16) []RegisterScanItem {
 	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
-	return sess.Master.ScanRegisters(fc, startAddr, endAddr)
+	slaveID := sm.MasterLastSlaveID(sessionID)
+	if slaveID == 0 {
+		slaveID = 1
+	}
+	return sess.Master.ScanRegisters(slaveID, fc, startAddr, endAddr)
 }
 

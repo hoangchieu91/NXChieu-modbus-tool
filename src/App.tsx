@@ -7,7 +7,9 @@ import {
   sessionStopPolling,
   sessionReadOnce,
   sessionWriteRegister,
+  sessionWriteRegisters,
   sessionWriteCoil,
+  closeSession,
   slaveStart,
   slaveStop,
   slaveGetSlice,
@@ -17,6 +19,7 @@ import {
   slaveStopSim,
   subscribePollData,
   subscribeSlaveActivity,
+  updateRemoteServerState,
 } from './services/backend';
 
 import { MenuBar } from './components/MenuBar';
@@ -50,7 +53,7 @@ import {
   TabSession,
   TrafficEntry,
 } from './types/modbus';
-import { formatValue, getModbusAddressLabel, decodeAllColumns } from './utils/formatters';
+import { formatValue, getModbusAddressLabel, decodeAllColumns, encodeRegisterInput } from './utils/formatters';
 
 import {
   loadWorkspace,
@@ -59,6 +62,28 @@ import {
   importProjectFromFile,
   exportSheetToCSV,
 } from './utils/projectStorage';
+
+// FC02 (Discrete Inputs) and FC04 (Input Registers) are read-only tables on a Modbus device.
+const isReadOnlyFunction = (fc: number) => fc === 2 || fc === 4;
+
+// Numeric value plotted on the trend chart. Text formats (hex/bin/ascii) do not parse as numbers,
+// so they fall back to the scaled raw register instead of a flat 0.
+const toChartValue = (values: number[], idx: number, fmt: DataFormat, scaling: number): number => {
+  if (fmt === 'hex16' || fmt === 'bin16' || fmt === 'ascii') return values[idx] * scaling;
+  const parsed = parseFloat(formatValue(values, idx, fmt, scaling).display.replace(/,/g, ''));
+  return isNaN(parsed) ? values[idx] * scaling : parsed;
+};
+
+type TracePoint = { timestamp: string; timeMs: number; value: number };
+
+// Appends one point per trace in a single state update, keeping the last 300 points.
+const appendTracePoints = (prev: Record<string, TracePoint[]>, points: Record<string, TracePoint>) => {
+  const next = { ...prev };
+  for (const [id, point] of Object.entries(points)) {
+    next[id] = [...(prev[id] || []).slice(-299), point];
+  }
+  return next;
+};
 
 const DEFAULT_DEFINITION: PollDefinition = {
   slave_id: 1,
@@ -286,26 +311,24 @@ export const App: React.FC = () => {
         // Record point for any chart trace matching this tab
         if (slice.values && chartTracesRef.current.length > 0) {
           const targetTab = tabsRef.current.find((t) => t.id === tabId) || activeTabRef.current;
+          const points: Record<string, TracePoint> = {};
           chartTracesRef.current.forEach((trace) => {
             if (trace.tabId === tabId) {
               const relIdx = trace.address - startAddr;
               if (relIdx >= 0 && slice.values && relIdx < slice.values.length) {
                 const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
-                const scaling = targetTab.scalings[trace.address] ?? 1;
-                const fmtRes = formatValue(slice.values, relIdx, regFmt, scaling);
-                const parsed = parseFloat(fmtRes.display.replace(/,/g, ''));
-                const val = isNaN(parsed) ? slice.values[relIdx] * scaling : parsed;
-
-                setTraceData((prev) => ({
-                  ...prev,
-                  [trace.id]: [
-                    ...(prev[trace.id] || []).slice(-299),
-                    { timestamp: timeStr, timeMs: now.getTime(), value: val },
-                  ],
-                }));
+                const scaling = targetTab.scalings?.[trace.address] ?? 1;
+                points[trace.id] = {
+                  timestamp: timeStr,
+                  timeMs: now.getTime(),
+                  value: toChartValue(slice.values, relIdx, regFmt, scaling),
+                };
               }
             }
           });
+          if (Object.keys(points).length > 0) {
+            setTraceData((prev) => appendTracePoints(prev, points));
+          }
         }
       } catch (err) {
         console.error('Failed to load slave memory slice:', err);
@@ -351,7 +374,7 @@ export const App: React.FC = () => {
         const updatedMap = { ...(prev.lastUpdatedMap || {}) };
         if (isSuccess) {
           const targetTab = tabsRef.current.find((t) => t.id === targetId) || activeTabRef.current;
-          const start = targetTab.definition.start_address;
+          const start = payload.start_address ?? targetTab.definition.start_address;
           const count = payload.values.length || payload.bool_values.length;
           for (let i = 0; i < count; i++) {
             updatedMap[start + i] = timeStr;
@@ -363,10 +386,12 @@ export const App: React.FC = () => {
           txCount: payload.tx_count,
           errCount: payload.err_count,
           latencyMs: payload.latency_ms,
-          hasData: isSuccess,
-          regs: isSuccess ? payload.values : [],
-          coils: isSuccess ? payload.bool_values : [],
-          lastValues: payload.is_coil ? prev.coils : prev.regs,
+          // A failed poll keeps the last good values on screen (errors show in the traffic log),
+          // so the grid does not blank out and change detection keeps working.
+          hasData: isSuccess || prev.hasData,
+          regs: isSuccess ? payload.values : prev.regs,
+          coils: isSuccess ? payload.bool_values : prev.coils,
+          lastValues: isSuccess ? (payload.is_coil ? prev.coils : prev.regs) : prev.lastValues,
           lastUpdatedTime: isSuccess ? timeStr : prev.lastUpdatedTime,
           lastUpdatedMap: updatedMap,
           traffic: [...prev.traffic, ...newEntries].slice(-500),
@@ -377,28 +402,26 @@ export const App: React.FC = () => {
       const isSuccess = !payload.error && payload.values && payload.values.length > 0;
       if (isSuccess && chartTracesRef.current.length > 0) {
         const targetTab = tabsRef.current.find((t) => t.id === targetId) || activeTabRef.current;
-        const start = targetTab.definition.start_address;
+        const start = payload.start_address ?? targetTab.definition.start_address;
+        const points: Record<string, TracePoint> = {};
 
         chartTracesRef.current.forEach((trace) => {
           if (trace.tabId === targetId) {
             const relIdx = trace.address - start;
             if (relIdx >= 0 && relIdx < payload.values.length) {
               const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
-              const scaling = targetTab.scalings[trace.address] ?? 1;
-              const fmtRes = formatValue(payload.values, relIdx, regFmt, scaling);
-              const parsed = parseFloat(fmtRes.display.replace(/,/g, ''));
-              const val = isNaN(parsed) ? payload.values[relIdx] * scaling : parsed;
-
-              setTraceData((prev) => ({
-                ...prev,
-                [trace.id]: [
-                  ...(prev[trace.id] || []).slice(-299),
-                  { timestamp: timeStr, timeMs: now.getTime(), value: val },
-                ],
-              }));
+              const scaling = targetTab.scalings?.[trace.address] ?? 1;
+              points[trace.id] = {
+                timestamp: timeStr,
+                timeMs: now.getTime(),
+                value: toChartValue(payload.values, relIdx, regFmt, scaling),
+              };
             }
           }
         });
+        if (Object.keys(points).length > 0) {
+          setTraceData((prev) => appendTracePoints(prev, points));
+        }
       }
     });
 
@@ -614,70 +637,137 @@ export const App: React.FC = () => {
     await handleConnect(cfg);
   };
 
-  const handleApplyScannerRange = (fc: number, startAddr: number, qty: number) => {
+  const handleSaveDefinition = async (newDef: PollDefinition) => {
+    const tabId = activeTabId;
+    const currentState = tabStates[tabId];
+
     setTabs((prev) =>
-      prev.map((t) =>
-        t.id === activeTabId
-          ? {
-              ...t,
-              definition: {
-                ...t.definition,
-                function_code: fc,
-                start_address: startAddr,
-                quantity: Math.min(100, Math.max(1, qty)),
-              },
-            }
-          : t
-      )
+      prev.map((t) => (t.id === tabId ? { ...t, definition: newDef } : t))
     );
+
+    // Reset cached old range data to avoid old data being shown under new address labels
+    updateTabState(tabId, (prev) => ({
+      ...prev,
+      regs: [],
+      coils: [],
+      lastValues: [],
+      hasData: false,
+    }));
+
+    if (currentState?.isPolling) {
+      try {
+        await sessionStopPolling(tabId);
+        await sessionStartPolling(tabId, newDef);
+      } catch (err) {
+        console.error('Lỗi khởi động lại polling khi đổi cấu hình:', err);
+      }
+    }
+  };
+
+  const handleApplyScannerRange = async (fc: number, startAddr: number, qty: number) => {
+    const tabId = activeTabId;
+    const currentState = tabStates[tabId];
+    const newDef: PollDefinition = {
+      ...activeTab.definition,
+      function_code: fc,
+      start_address: startAddr,
+      quantity: Math.min(100, Math.max(1, qty)),
+    };
+
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, definition: newDef } : t))
+    );
+
+    updateTabState(tabId, (prev) => ({
+      ...prev,
+      regs: [],
+      coils: [],
+      lastValues: [],
+      hasData: false,
+    }));
+
+    if (currentState?.isPolling) {
+      try {
+        await sessionStopPolling(tabId);
+        await sessionStartPolling(tabId, newDef);
+      } catch (err) {
+        console.error('Lỗi cập nhật polling sau khi quét:', err);
+      }
+    }
   };
 
   // --- Inline Write & Coil Toggle Handlers ---
 
-
   const handleInlineWriteForTab = async (tabId: string, address: number, valueStr: string) => {
     const targetTab = tabs.find((t) => t.id === tabId) || activeTab;
     try {
-      let num = 0;
-      const trimmed = valueStr.trim();
-      if (trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
-        num = parseInt(trimmed, 16);
-      } else {
-        const parsedFloat = parseFloat(trimmed);
-        if (isNaN(parsedFloat)) return;
-        const scaling = targetTab.scalings[address] ?? 1;
-        if (scaling !== 1 && scaling !== 0) {
-          num = Math.round(parsedFloat / scaling);
-        } else {
-          num = Math.round(parsedFloat);
-        }
+      if (targetTab.role !== 'slave' && isReadOnlyFunction(targetTab.definition.function_code)) {
+        alert('FC02/FC04 là bảng chỉ đọc, không thể ghi.');
+        return;
       }
-      if (num < 0) num = 0;
-      if (num > 65535) num = 65535;
+
+      const isCoilType =
+        targetTab.role === 'slave'
+          ? targetTab.slaveTable === 'coils' || targetTab.slaveTable === 'discrete'
+          : targetTab.definition.function_code === 1 || targetTab.definition.function_code === 2;
+
+      if (isCoilType) {
+        const valLower = valueStr.trim().toLowerCase();
+        const boolVal = valLower === '1' || valLower === 'true' || valLower === 'on';
+        if (targetTab.role === 'slave') {
+          await slaveSetCoil(targetTab.id, targetTab.slaveTable, address, boolVal);
+          await refreshSlaveSlice(targetTab.id, targetTab.slaveTable, targetTab.slaveStartAddr, targetTab.slaveQuantity);
+        } else {
+          await sessionWriteCoil(targetTab.id, {
+            slave_id: targetTab.definition.slave_id,
+            address,
+            value: boolVal,
+          });
+        }
+        return;
+      }
+
+      // Register write supporting Signed16, Float32, Long, UInt32 multi-registers
+      const format = targetTab.formats?.[address] ?? targetTab.format;
+      const scaling = targetTab.scalings?.[address] ?? 1;
+      const encoded = encodeRegisterInput(valueStr, format, scaling);
+      if (!encoded.ok) {
+        alert(encoded.error);
+        return;
+      }
 
       if (targetTab.role === 'slave') {
-        const isCoilType = targetTab.slaveTable === 'coils' || targetTab.slaveTable === 'discrete';
-        if (isCoilType) {
-          await slaveSetCoil(targetTab.id, targetTab.slaveTable, address, num > 0);
-        } else {
-          await slaveSetRegister(targetTab.id, targetTab.slaveTable, address, num);
+        for (let i = 0; i < encoded.values.length; i++) {
+          await slaveSetRegister(targetTab.id, targetTab.slaveTable, address + i, encoded.values[i]);
         }
         await refreshSlaveSlice(targetTab.id, targetTab.slaveTable, targetTab.slaveStartAddr, targetTab.slaveQuantity);
       } else {
-        await sessionWriteRegister(targetTab.id, {
-          slave_id: targetTab.definition.slave_id,
-          address,
-          value: num,
-        });
+        if (encoded.values.length === 1) {
+          await sessionWriteRegister(targetTab.id, {
+            slave_id: targetTab.definition.slave_id,
+            address,
+            value: encoded.values[0],
+          });
+        } else {
+          await sessionWriteRegisters(targetTab.id, {
+            slave_id: targetTab.definition.slave_id,
+            address,
+            values: encoded.values,
+          });
+        }
       }
     } catch (err) {
-      alert(`Lỗi ghi thanh ghi: ${err}`);
+      alert(`Lỗi ghi dữ liệu: ${err}`);
     }
   };
 
   const handleToggleCoilForTab = async (tabId: string, address: number, currentVal: boolean) => {
     const targetTab = tabs.find((t) => t.id === tabId) || activeTab;
     try {
+      if (targetTab.role !== 'slave' && isReadOnlyFunction(targetTab.definition.function_code)) {
+        alert('FC02 (Discrete Inputs) là bảng chỉ đọc, không thể bật/tắt.');
+        return;
+      }
       if (targetTab.role === 'slave') {
         await slaveSetCoil(targetTab.id, targetTab.slaveTable, address, !currentVal);
         await refreshSlaveSlice(targetTab.id, targetTab.slaveTable, targetTab.slaveStartAddr, targetTab.slaveQuantity);
@@ -724,11 +814,28 @@ export const App: React.FC = () => {
     setActiveTabId(newId);
   };
 
-  const handleCloseTab = (id: string, e: React.MouseEvent) => {
+  const handleCloseTab = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (tabs.length <= 1) return;
+
+    // Clean up background session resources in Go backend
+    try {
+      await sessionStopPolling(id);
+      await sessionDisconnect(id);
+      await slaveStop(id);
+      await closeSession(id);
+    } catch (err) {
+      console.error(`Lỗi dọn dẹp session khi đóng tab ${id}:`, err);
+    }
+
     const remaining = tabs.filter((t) => t.id !== id);
     setTabs(remaining);
+    setTabStates((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
     if (activeTabId === id) {
       setActiveTabId(remaining[0].id);
     }
@@ -756,6 +863,18 @@ export const App: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
+      // Clean up previous sessions before importing new project
+      for (const t of tabs) {
+        try {
+          await sessionStopPolling(t.id);
+          await sessionDisconnect(t.id);
+          await slaveStop(t.id);
+          await closeSession(t.id);
+        } catch (err) {
+          console.error(`Lỗi dọn dẹp session cũ ${t.id}:`, err);
+        }
+      }
+
       const imported = await importProjectFromFile(file);
       setTabs(imported.tabs);
       setActiveTabId(imported.activeTabId);
@@ -1010,6 +1129,36 @@ export const App: React.FC = () => {
   };
 
   const activeRowsObj = buildRowsForTab(activeTab, activeState);
+
+  // Broadcast live state to Mobile Remote Server whenever active tab or rows update
+  useEffect(() => {
+    if (!activeRowsObj.rows || activeRowsObj.rows.length === 0) return;
+
+    const tabsData = tabs.map((t) => ({
+      id: t.id,
+      title: t.title,
+      role: t.role,
+      slaveId: t.definition.slave_id,
+    }));
+
+    const rowsData = activeRowsObj.rows.map((r) => ({
+      address: r.address,
+      displayAddress: r.displayAddress,
+      alias: r.alias,
+      displayValue: r.displayValue,
+      rawValue: r.rawValue,
+      rawHex: r.rawHex,
+      unit: r.unit,
+      isCoil: typeof r.rawValue === 'boolean',
+    }));
+
+    updateRemoteServerState({
+      active_tab_id: activeTabId,
+      tabs: tabsData,
+      rows: rowsData,
+      timestamp: new Date().toLocaleTimeString('vi-VN'),
+    });
+  }, [activeTabId, tabs, activeRowsObj.rows]);
 
   // Compute split tab & rows if Split View is active
   const splitTab =
@@ -1290,11 +1439,7 @@ export const App: React.FC = () => {
         isOpen={isDefinitionModalOpen}
         onClose={() => setIsDefinitionModalOpen(false)}
         definition={activeTab.definition}
-        onSave={(newDef) => {
-          setTabs((prev) =>
-            prev.map((t) => (t.id === activeTabId ? { ...t, definition: newDef } : t))
-          );
-        }}
+        onSave={handleSaveDefinition}
       />
 
       <WriteModal
@@ -1306,6 +1451,7 @@ export const App: React.FC = () => {
         }}
         row={selectedRowForWrite}
         slaveId={modalTab.definition.slave_id}
+        readOnly={modalTab.role !== 'slave' && isReadOnlyFunction(modalTab.definition.function_code)}
         isCoil={
           selectedRowForWrite
             ? modalTab.role === 'slave'

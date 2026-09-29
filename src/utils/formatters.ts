@@ -468,3 +468,161 @@ export function decodeAllColumns(
     ascii,
   };
 }
+
+const SINGLE_REGISTER_FORMATS: DataFormat[] = ['signed16', 'unsigned16', 'hex16', 'bin16'];
+
+/** True when a value in this format fits in one 16-bit register (writable with FC06). */
+export function isSingleRegisterFormat(format?: DataFormat): boolean {
+  return !format || SINGLE_REGISTER_FORMATS.includes(format);
+}
+
+export type EncodedRegisters = { ok: true; values: number[] } | { ok: false; error: string };
+
+/**
+ * Encode user input according to the chosen DataFormat and scaling factor.
+ * Supports:
+ * - 16-bit: unsigned16, signed16 (handles negative numbers down to -32768), hex16, bin16 -> 1 register
+ * - 32-bit Float: float_abcd, float_cdab, float_badc, float_dcba -> 2 registers
+ * - 32-bit Int: long_abcd, long_cdab -> 2 registers
+ * - 32-bit UInt: uint32_abcd, uint32_cdab -> 2 registers
+ */
+export function encodeRegisterInput(
+  input: string,
+  format: DataFormat = 'unsigned16',
+  scaling = 1
+): EncodedRegisters {
+  const trimmed = input.trim();
+  if (trimmed === '') {
+    return { ok: false, error: 'Chưa nhập giá trị.' };
+  }
+
+  // 1. Single register formats (16-bit)
+  if (isSingleRegisterFormat(format)) {
+    const compactBin = trimmed.replace(/[\s_]/g, '');
+    let num: number;
+
+    if (/^0x[0-9a-f]{1,4}$/i.test(trimmed)) {
+      num = parseInt(trimmed.slice(2), 16);
+    } else if (/^0b[01]{1,16}$/i.test(compactBin) || (format === 'bin16' && /^[01]{1,16}$/.test(compactBin))) {
+      num = parseInt(compactBin.replace(/^0b/i, ''), 2);
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed)) {
+        return { ok: false, error: `Giá trị "${trimmed}" không hợp lệ.` };
+      }
+      if (scaling !== 1 && scaling !== 0) {
+        num = Math.round(parsed / scaling);
+      } else if (!Number.isInteger(parsed)) {
+        return { ok: false, error: 'Thanh ghi 16-bit chỉ nhận số nguyên.' };
+      } else {
+        num = parsed;
+      }
+    }
+
+    if (num < -32768 || num > 65535) {
+      return { ok: false, error: `Giá trị ${num} nằm ngoài phạm vi 16-bit (-32768 đến 65535).` };
+    }
+    return { ok: true, values: [num & 0xffff] };
+  }
+
+  // 2. 32-bit Float formats (2 registers)
+  if (format === 'float_abcd' || format === 'float_cdab' || format === 'float_badc' || format === 'float_dcba') {
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { ok: false, error: `Giá trị số thực "${trimmed}" không hợp lệ.` };
+    }
+    const fVal = scaling !== 1 && scaling !== 0 ? parsed / scaling : parsed;
+
+    const buf = new ArrayBuffer(4);
+    const view = new DataView(buf);
+    view.setFloat32(0, fVal, false); // IEEE-754 Big Endian bytes
+    const b0 = view.getUint8(0);
+    const b1 = view.getUint8(1);
+    const b2 = view.getUint8(2);
+    const b3 = view.getUint8(3);
+
+    let high = 0;
+    let low = 0;
+
+    if (format === 'float_abcd') {
+      high = (b0 << 8) | b1;
+      low = (b2 << 8) | b3;
+    } else if (format === 'float_cdab') {
+      high = (b2 << 8) | b3;
+      low = (b0 << 8) | b1;
+    } else if (format === 'float_badc') {
+      high = (b1 << 8) | b0;
+      low = (b3 << 8) | b2;
+    } else if (format === 'float_dcba') {
+      high = (b3 << 8) | b2;
+      low = (b1 << 8) | b0;
+    }
+
+    return { ok: true, values: [high & 0xffff, low & 0xffff] };
+  }
+
+  // 3. 32-bit Signed Integer formats (2 registers)
+  if (format === 'long_abcd' || format === 'long_cdab') {
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { ok: false, error: `Giá trị số nguyên 32-bit "${trimmed}" không hợp lệ.` };
+    }
+    const iVal = scaling !== 1 && scaling !== 0 ? Math.round(parsed / scaling) : Math.round(parsed);
+    if (iVal < -2147483648 || iVal > 2147483647) {
+      return { ok: false, error: `Giá trị ${iVal} nằm ngoài phạm vi 32-bit (-2147483648 đến 2147483647).` };
+    }
+    const int32 = iVal | 0;
+
+    let high = 0;
+    let low = 0;
+    if (format === 'long_abcd') {
+      high = (int32 >>> 16) & 0xffff;
+      low = int32 & 0xffff;
+    } else {
+      // In decode: ((low << 16) | high) | 0
+      high = int32 & 0xffff;
+      low = (int32 >>> 16) & 0xffff;
+    }
+    return { ok: true, values: [high, low] };
+  }
+
+  // 4. 32-bit Unsigned Integer formats (2 registers)
+  if (format === 'uint32_abcd' || format === 'uint32_cdab') {
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 4294967295) {
+      return { ok: false, error: `Giá trị unsigned 32-bit "${trimmed}" không hợp lệ (0 đến 4294967295).` };
+    }
+    const uVal = scaling !== 1 && scaling !== 0 ? Math.round(parsed / scaling) : Math.round(parsed);
+    const u32 = uVal >>> 0;
+
+    let high = 0;
+    let low = 0;
+    if (format === 'uint32_abcd') {
+      high = (u32 >>> 16) & 0xffff;
+      low = u32 & 0xffff;
+    } else {
+      // In decode: ((low >>> 0) << 16) | (high & 0xffff)
+      high = u32 & 0xffff;
+      low = (u32 >>> 16) & 0xffff;
+    }
+    return { ok: true, values: [high, low] };
+  }
+
+  return {
+    ok: false,
+    error: `Chưa hỗ trợ ghi trực tiếp cho định dạng ${format}.`,
+  };
+}
+
+export type ParsedRegister = { ok: true; value: number } | { ok: false; error: string };
+
+/**
+ * Parse user input into a raw 16-bit register value (for modals or single-cell edits).
+ */
+export function parseRegisterInput(input: string, format?: DataFormat, scaling = 1): ParsedRegister {
+  const res = encodeRegisterInput(input, format || 'unsigned16', scaling);
+  if (!res.ok) {
+    return { ok: false, error: res.error };
+  }
+  return { ok: true, value: res.values[0] };
+}

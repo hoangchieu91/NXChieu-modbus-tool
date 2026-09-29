@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net"
@@ -630,6 +631,9 @@ func (s *ModbusSlaveServer) runRTUOverTCPLoop(ln net.Listener, store *SlaveMemor
 
 		go func(c net.Conn) {
 			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[RTU-TCP] Recovered from panic: %v", r)
+				}
 				s.mu.Lock()
 				delete(s.tcpConns, c)
 				s.mu.Unlock()
@@ -654,7 +658,11 @@ func expectedRequestLen(buf []byte) int {
 		if len(buf) < 7 {
 			return 0
 		}
-		return 9 + int(buf[6])
+		byteCount := int(buf[6])
+		if byteCount > 250 {
+			return -1 // Unreasonable byte count: drop / resync
+		}
+		return 9 + byteCount
 	default:
 		return -1
 	}
@@ -663,8 +671,15 @@ func expectedRequestLen(buf []byte) int {
 // handleRTUConnection reassembles RTU frames from a byte stream. A frame is complete when its
 // expected length is reached; bytes left dangling after a line silence are discarded.
 func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemoryStore, clientAddr string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[RTU] Recovered from panic in handleRTUConnection (%s): %v", clientAddr, r)
+		}
+	}()
+
 	readBuf := make([]byte, 512)
 	var pending []byte
+	lastDataTime := time.Now()
 
 	for {
 		if tr, ok := rw.(*tcpFrameReader); ok {
@@ -675,7 +690,11 @@ func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemo
 		if err != nil {
 			return
 		}
-		pending = append(pending, readBuf[:n]...)
+
+		if n > 0 {
+			pending = append(pending, readBuf[:n]...)
+			lastDataTime = time.Now()
+		}
 
 		for len(pending) > 0 {
 			want := expectedRequestLen(pending)
@@ -683,8 +702,8 @@ func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemo
 				break // wait for more bytes
 			}
 			if want < 0 {
-				// Unknown layout: treat everything received before the silence as one frame.
-				if !timedOut {
+				// Unknown layout: only process if there was a silence
+				if !timedOut || n > 0 {
 					break
 				}
 				want = len(pending)
@@ -702,8 +721,11 @@ func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemo
 			}
 		}
 
-		if timedOut && len(pending) > 0 {
-			pending = pending[:0] // incomplete frame followed by silence
+		// Only discard incomplete pending buffer if a genuine silence period elapsed
+		// without receiving any new bytes (n == 0 && timedOut).
+		// We allow at least 150ms of silence before discarding dangling partial frames.
+		if timedOut && n == 0 && len(pending) > 0 && time.Since(lastDataTime) >= 150*time.Millisecond {
+			pending = pending[:0]
 		}
 		if len(pending) > 1024 {
 			pending = pending[:0]
@@ -862,11 +884,14 @@ func (s *ModbusSlaveServer) buildWriteMultipleResponse(unitID, fc uint8, addr, q
 }
 
 func (s *ModbusSlaveServer) buildBitReadResponse(unitID uint8, fc uint8, bools []bool) []byte {
-	byteCount := byte((len(bools) + 7) / 8)
-	resp := make([]byte, 3+int(byteCount)+2)
+	if len(bools) > 2000 {
+		return s.buildExceptionResponse(unitID, fc, 0x03)
+	}
+	byteCount := (len(bools) + 7) / 8
+	resp := make([]byte, 3+byteCount+2)
 	resp[0] = unitID
 	resp[1] = fc
-	resp[2] = byteCount
+	resp[2] = byte(byteCount)
 
 	for i, b := range bools {
 		if b {
@@ -874,24 +899,27 @@ func (s *ModbusSlaveServer) buildBitReadResponse(unitID uint8, fc uint8, bools [
 		}
 	}
 
-	crc := CRC16Modbus(resp[:3+int(byteCount)])
-	binary.LittleEndian.PutUint16(resp[3+int(byteCount):], crc)
+	crc := CRC16Modbus(resp[:3+byteCount])
+	binary.LittleEndian.PutUint16(resp[3+byteCount:], crc)
 	return resp
 }
 
 func (s *ModbusSlaveServer) buildRegisterReadResponse(unitID uint8, fc uint8, regs []uint16) []byte {
-	byteCount := byte(len(regs) * 2)
-	resp := make([]byte, 3+int(byteCount)+2)
+	if len(regs) > 125 {
+		return s.buildExceptionResponse(unitID, fc, 0x03)
+	}
+	byteCount := len(regs) * 2
+	resp := make([]byte, 3+byteCount+2)
 	resp[0] = unitID
 	resp[1] = fc
-	resp[2] = byteCount
+	resp[2] = byte(byteCount)
 
 	for i, reg := range regs {
 		binary.BigEndian.PutUint16(resp[3+(i*2):], reg)
 	}
 
-	crc := CRC16Modbus(resp[:3+int(byteCount)])
-	binary.LittleEndian.PutUint16(resp[3+int(byteCount):], crc)
+	crc := CRC16Modbus(resp[:3+byteCount])
+	binary.LittleEndian.PutUint16(resp[3+byteCount:], crc)
 	return resp
 }
 

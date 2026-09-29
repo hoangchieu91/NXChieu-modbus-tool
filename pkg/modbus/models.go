@@ -33,6 +33,11 @@ type PollDefinition struct {
 type PollResult struct {
 	SessionID  string   `json:"session_id,omitempty"`
 	Timestamp  string   `json:"timestamp"`
+	// Request that produced this result, so the UI maps values to the right addresses even
+	// if the poll definition was edited while the request was in flight.
+	SlaveID      uint8  `json:"slave_id"`
+	FunctionCode uint8  `json:"function_code"`
+	StartAddress uint16 `json:"start_address"`
 	Values     []uint16 `json:"values"`
 	BoolValues []bool   `json:"bool_values"`
 	IsCoil     bool     `json:"is_coil"`
@@ -49,6 +54,13 @@ type WriteRegisterParam struct {
 	SlaveID uint8  `json:"slave_id"`
 	Address uint16 `json:"address"`
 	Value   uint16 `json:"value"`
+}
+
+// WriteRegistersParam defines parameter for writing multiple holding registers (FC 16).
+type WriteRegistersParam struct {
+	SlaveID uint8    `json:"slave_id"`
+	Address uint16   `json:"address"`
+	Values  []uint16 `json:"values"`
 }
 
 // WriteCoilParam defines parameter for writing a single coil (FC 05).

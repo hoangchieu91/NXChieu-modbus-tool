@@ -73,6 +73,9 @@ export namespace modbus {
 	export class PollResult {
 	    session_id?: string;
 	    timestamp: string;
+	    slave_id: number;
+	    function_code: number;
+	    start_address: number;
 	    values: number[];
 	    bool_values: boolean[];
 	    is_coil: boolean;
@@ -91,6 +94,9 @@ export namespace modbus {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];
 	        this.timestamp = source["timestamp"];
+	        this.slave_id = source["slave_id"];
+	        this.function_code = source["function_code"];
+	        this.start_address = source["start_address"];
 	        this.values = source["values"];
 	        this.bool_values = source["bool_values"];
 	        this.is_coil = source["is_coil"];
@@ -264,6 +270,22 @@ export namespace modbus {
 	        this.slave_id = source["slave_id"];
 	        this.address = source["address"];
 	        this.value = source["value"];
+	    }
+	}
+	export class WriteRegistersParam {
+	    slave_id: number;
+	    address: number;
+	    values: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WriteRegistersParam(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slave_id = source["slave_id"];
+	        this.address = source["address"];
+	        this.values = source["values"];
 	    }
 	}
 

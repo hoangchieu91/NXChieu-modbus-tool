@@ -39,6 +39,8 @@ export function SessionWriteCoil(arg1:string,arg2:modbus.WriteCoilParam):Promise
 
 export function SessionWriteRegister(arg1:string,arg2:modbus.WriteRegisterParam):Promise<void>;
 
+export function SessionWriteRegisters(arg1:string,arg2:modbus.WriteRegistersParam):Promise<void>;
+
 export function SlaveGetSlice(arg1:string,arg2:string,arg3:number,arg4:number):Promise<modbus.SlaveMemorySlice>;
 
 export function SlaveIsListening(arg1:string):Promise<boolean>;
@@ -64,6 +66,8 @@ export function StopPolling():Promise<void>;
 export function StopRemoteServer():Promise<web.RemoteServerStatus>;
 
 export function UpdateRemoteServerState(arg1:Record<string, any>):Promise<void>;
+
+export function WriteRegisters(arg1:modbus.WriteRegistersParam):Promise<void>;
 
 export function WriteSingleCoil(arg1:modbus.WriteCoilParam):Promise<void>;
 

@@ -27,64 +27,28 @@ import {
   startRemoteServer,
   stopRemoteServer,
   getRemoteServerStatus,
-  updateRemoteServerState,
 } from '../services/backend';
 
 interface MobileRemoteModalProps {
   isOpen: boolean;
   onClose: () => void;
-  sessions: TabSession[];
-  activeSessionId: string;
+  sessions?: TabSession[];
+  activeSessionId?: string;
   activeRows?: RegisterRow[];
 }
 
 export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
   isOpen,
   onClose,
-  sessions,
-  activeSessionId,
-  activeRows,
 }) => {
   const [status, setStatus] = useState<RemoteServerStatus | null>(null);
   const [port, setPort] = useState<number>(8088);
-  const [allowWrite, setAllowWrite] = useState<boolean>(true);
+  const [allowWrite, setAllowWrite] = useState<boolean>(false);
   const [selectedIface, setSelectedIface] = useState<NetworkInterfaceInfo | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const pollTimerRef = useRef<any>(null);
-
-  // Sync state snapshot to remote server whenever sessions, rows or active tab changes
-  useEffect(() => {
-    if (!isOpen || !status?.is_running) return;
-
-    const tabsData = sessions.map((s) => ({
-      id: s.id,
-      title: s.title,
-      slave_id: s.definition?.slave_id ?? 1,
-      fc: s.definition?.function_code ?? 3,
-      start_address: s.definition?.start_address ?? 0,
-      quantity: s.definition?.quantity ?? 10,
-    }));
-
-    const rowsData = (activeRows || []).slice(0, 100).map((r) => ({
-      address: r.address,
-      displayAddress: r.displayAddress,
-      alias: r.alias,
-      unit: r.unit,
-      displayValue: r.displayValue,
-      rawValue: r.rawValue,
-      rawHex: r.rawHex,
-      isCoil: typeof r.rawValue === 'boolean',
-    }));
-
-    updateRemoteServerState({
-      active_tab_id: activeSessionId,
-      tabs: tabsData,
-      rows: rowsData,
-      timestamp: new Date().toLocaleTimeString('vi-VN'),
-    });
-  }, [isOpen, status?.is_running, sessions, activeSessionId, activeRows]);
 
   // Load server status on open and periodically check client count
   useEffect(() => {
@@ -97,8 +61,11 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
       try {
         const s = await getRemoteServerStatus();
         setStatus(s);
-        setPort(s.port || 8088);
-        setAllowWrite(s.allow_write);
+        // Only mirror settings from a running server; otherwise keep what the user is editing.
+        if (s.is_running) {
+          setPort(s.port || 8088);
+          setAllowWrite(s.allow_write);
+        }
 
         if (s.interfaces && s.interfaces.length > 0) {
           // Priority selection: Tailscale VPN first, then local VPN, then Ethernet, then WiFi
@@ -121,19 +88,9 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
       }
     };
 
+    // The server is never started automatically: it exposes device data on the network,
+    // so the user must start it explicitly.
     fetchStatus();
-
-    // Auto start server if not running yet for seamless 1-click mobile access
-    getRemoteServerStatus().then(async (s) => {
-      if (!s.is_running) {
-        const newStatus = await startRemoteServer(8088, true);
-        setStatus(newStatus);
-        if (newStatus.interfaces && newStatus.interfaces.length > 0) {
-          const tailscale = newStatus.interfaces.find((i) => i.type === 'vpn_tailscale');
-          setSelectedIface(tailscale || newStatus.interfaces[0]);
-        }
-      }
-    });
 
     pollTimerRef.current = setInterval(fetchStatus, 3000);
     return () => {
@@ -148,7 +105,12 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
       return;
     }
 
-    const currentUrl = `http://${selectedIface.ip}:${port}`;
+    if (!status?.is_running) {
+      setQrDataUrl('');
+      return;
+    }
+
+    const currentUrl = selectedIface.url;
     QRCode.toDataURL(currentUrl, {
       width: 256,
       margin: 2,
@@ -160,7 +122,7 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
     })
       .then((url) => setQrDataUrl(url))
       .catch((err) => console.error('QR code generation failed:', err));
-  }, [selectedIface, port]);
+  }, [selectedIface, status?.is_running]);
 
   // Server toggle handler
   const handleToggleServer = async () => {
@@ -172,13 +134,16 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
       } else {
         const s = await startRemoteServer(port, allowWrite);
         setStatus(s);
-        if (s.interfaces && s.interfaces.length > 0 && !selectedIface) {
+        if (s.interfaces && s.interfaces.length > 0) {
+          // Re-pick the interface from the fresh status so its URL carries the new access token.
+          const matched = selectedIface && s.interfaces.find((i) => i.ip === selectedIface.ip);
           const tailscale = s.interfaces.find((i) => i.type === 'vpn_tailscale');
-          setSelectedIface(tailscale || s.interfaces[0]);
+          setSelectedIface(matched || tailscale || s.interfaces[0]);
         }
       }
     } catch (err) {
       console.error('Toggle server error:', err);
+      alert(`Không khởi động được Web Remote: ${err}`);
     } finally {
       setLoading(false);
     }
@@ -186,7 +151,7 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
 
   const handleCopyLink = () => {
     if (!selectedIface) return;
-    const url = `http://${selectedIface.ip}:${port}`;
+    const url = selectedIface.url;
     navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -194,13 +159,13 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
 
   const handleOpenBrowser = () => {
     if (!selectedIface) return;
-    const url = `http://${selectedIface.ip}:${port}`;
+    const url = selectedIface.url;
     window.open(url, '_blank');
   };
 
   if (!isOpen) return null;
 
-  const currentUrl = selectedIface ? `http://${selectedIface.ip}:${port}` : '';
+  const currentUrl = selectedIface && status?.is_running ? selectedIface.url : '';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">

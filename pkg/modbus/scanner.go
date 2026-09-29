@@ -153,10 +153,7 @@ func (m *ModbusClientWrapper) ScanSlaveRange(startID, endID uint8, timeoutMs uin
 }
 
 // ScanRegisters scans a range of registers [startAddr, endAddr] to detect available addresses.
-func (m *ModbusClientWrapper) ScanRegisters(fc uint8, startAddr, endAddr uint16) []RegisterScanItem {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+func (m *ModbusClientWrapper) ScanRegisters(slaveID uint8, fc uint8, startAddr, endAddr uint16) []RegisterScanItem {
 	var results []RegisterScanItem
 
 	if endAddr < startAddr {
@@ -172,56 +169,71 @@ func (m *ModbusClientWrapper) ScanRegisters(fc uint8, startAddr, endAddr uint16)
 		regType = simonmodbus.INPUT_REGISTER
 	}
 
-	for addr := int(startAddr); addr <= int(endAddr); addr++ {
-		uAddr := uint16(addr)
+	okItem := func(addr, val uint16) RegisterScanItem {
+		return RegisterScanItem{Address: addr, Valid: true, Value: val, Hex: fmt.Sprintf("0x%04X", val), Detail: "OK"}
+	}
 
+	// Scan in blocks of up to 125 registers. The lock is taken per request so polling,
+	// writes and Disconnect are not blocked for the whole scan.
+	const blockSize = 125
+	for blockStart := int(startAddr); blockStart <= int(endAddr); blockStart += blockSize {
+		blockEnd := blockStart + blockSize - 1
+		if blockEnd > int(endAddr) {
+			blockEnd = int(endAddr)
+		}
+		qty := uint16(blockEnd - blockStart + 1)
+
+		m.mu.Lock()
 		if m.isSimulator {
-			if val, ok := m.simRegisters[uAddr]; ok {
-				results = append(results, RegisterScanItem{
-					Address: uAddr,
-					Valid:   true,
-					Value:   val,
-					Hex:     fmt.Sprintf("0x%04X", val),
-					Detail:  "OK",
-				})
-			} else {
-				// Simulate default address
-				val := uAddr * 10
-				results = append(results, RegisterScanItem{
-					Address: uAddr,
-					Valid:   true,
-					Value:   val,
-					Hex:     fmt.Sprintf("0x%04X", val),
-					Detail:  "OK",
-				})
+			for addr := blockStart; addr <= blockEnd; addr++ {
+				uAddr := uint16(addr)
+				val, ok := m.simRegisters[uAddr]
+				if !ok {
+					val = uAddr * 10
+				}
+				results = append(results, okItem(uAddr, val))
 			}
+			m.mu.Unlock()
 			continue
 		}
 
 		if !m.isConnected || m.client == nil {
-			results = append(results, RegisterScanItem{
-				Address: uAddr,
-				Valid:   false,
-				Detail:  "Not connected",
-			})
+			m.mu.Unlock()
+			for addr := blockStart; addr <= blockEnd; addr++ {
+				results = append(results, RegisterScanItem{Address: uint16(addr), Valid: false, Detail: "Not connected"})
+			}
 			continue
 		}
 
-		val, err := m.client.ReadRegister(uAddr, regType)
-		if err == nil {
-			results = append(results, RegisterScanItem{
-				Address: uAddr,
-				Valid:   true,
-				Value:   val,
-				Hex:     fmt.Sprintf("0x%04X", val),
-				Detail:  "OK",
-			})
-		} else {
-			results = append(results, RegisterScanItem{
-				Address: uAddr,
-				Valid:   false,
-				Detail:  err.Error(),
-			})
+		m.client.SetUnitId(slaveID)
+		vals, err := m.client.ReadRegisters(uint16(blockStart), qty, regType)
+		m.mu.Unlock()
+
+		if err == nil && len(vals) == int(qty) {
+			for i, v := range vals {
+				results = append(results, okItem(uint16(blockStart+i), v))
+			}
+			continue
+		}
+
+		// The block contains an invalid address (or timed out): fall back to one register at a time.
+		for addr := blockStart; addr <= blockEnd; addr++ {
+			uAddr := uint16(addr)
+			m.mu.Lock()
+			if !m.isConnected || m.client == nil {
+				m.mu.Unlock()
+				results = append(results, RegisterScanItem{Address: uAddr, Valid: false, Detail: "Not connected"})
+				continue
+			}
+			m.client.SetUnitId(slaveID)
+			val, err := m.client.ReadRegister(uAddr, regType)
+			m.mu.Unlock()
+
+			if err == nil {
+				results = append(results, okItem(uAddr, val))
+			} else {
+				results = append(results, RegisterScanItem{Address: uAddr, Valid: false, Detail: err.Error()})
+			}
 		}
 	}
 

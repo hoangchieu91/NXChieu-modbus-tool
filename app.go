@@ -141,6 +141,14 @@ func (a *App) SessionWriteRegister(sessionID string, param modbus.WriteRegisterP
 	return a.sessMgr.MasterWriteRegister(sessionID, param)
 }
 
+// SessionWriteRegisters writes multiple 16-bit registers on a session (FC 16).
+func (a *App) SessionWriteRegisters(sessionID string, param modbus.WriteRegistersParam) error {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	return a.sessMgr.MasterWriteRegisters(sessionID, param)
+}
+
 // SessionWriteCoil writes a single coil on a session.
 func (a *App) SessionWriteCoil(sessionID string, param modbus.WriteCoilParam) error {
 	if sessionID == "" {
@@ -260,6 +268,11 @@ func (a *App) ReadOnce(def modbus.PollDefinition) modbus.PollResult {
 // WriteSingleRegister writes on default master.
 func (a *App) WriteSingleRegister(param modbus.WriteRegisterParam) error {
 	return a.SessionWriteRegister("default", param)
+}
+
+// WriteRegisters writes multiple registers on default master.
+func (a *App) WriteRegisters(param modbus.WriteRegistersParam) error {
+	return a.SessionWriteRegisters("default", param)
 }
 
 // WriteSingleCoil writes on default master.

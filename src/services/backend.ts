@@ -11,6 +11,7 @@ import {
   SlaveMemorySlice,
   WriteCoilParam,
   WriteRegisterParam,
+  WriteRegistersParam,
 } from '../types/modbus';
 
 export const isWailsApp = (): boolean => {
@@ -55,6 +56,10 @@ export async function sessionConnect(sessionId: string, config: ConnectionConfig
   return await AppMethods.SessionConnect(sessionId, goConfig as any);
 }
 
+export async function closeSession(sessionId: string): Promise<void> {
+  await AppMethods.CloseSession(sessionId);
+}
+
 export async function sessionDisconnect(sessionId: string): Promise<void> {
   await AppMethods.SessionDisconnect(sessionId);
 }
@@ -88,6 +93,10 @@ export async function sessionWriteRegister(sessionId: string, param: WriteRegist
   await AppMethods.SessionWriteRegister(sessionId, param as any);
 }
 
+export async function sessionWriteRegisters(sessionId: string, param: WriteRegistersParam): Promise<void> {
+  await AppMethods.SessionWriteRegisters(sessionId, param as any);
+}
+
 export async function sessionWriteCoil(sessionId: string, param: WriteCoilParam): Promise<void> {
   await AppMethods.SessionWriteCoil(sessionId, param as any);
 }
@@ -115,6 +124,10 @@ export async function readOnceBackend(def: PollDefinition): Promise<PollResult> 
 
 export async function writeRegisterBackend(param: WriteRegisterParam): Promise<void> {
   return sessionWriteRegister('default', param);
+}
+
+export async function writeRegistersBackend(param: WriteRegistersParam): Promise<void> {
+  return sessionWriteRegisters('default', param);
 }
 
 export async function writeCoilBackend(param: WriteCoilParam): Promise<void> {
@@ -310,21 +323,10 @@ export async function scanRegisters(
 
 export async function startRemoteServer(
   port: number = 8088,
-  allowWrite: boolean = true
+  allowWrite: boolean = false
 ): Promise<import('../types/modbus').RemoteServerStatus> {
-  try {
-    const res = await (AppMethods as any).StartRemoteServer(port, allowWrite);
-    return res;
-  } catch (e: any) {
-    console.error('startRemoteServer error:', e);
-    return {
-      is_running: false,
-      port,
-      allow_write: allowWrite,
-      active_clients: 0,
-      interfaces: [],
-    };
-  }
+  // Errors (e.g. port already in use) propagate so the UI can show them.
+  return (AppMethods as any).StartRemoteServer(port, allowWrite);
 }
 
 export async function stopRemoteServer(): Promise<import('../types/modbus').RemoteServerStatus> {
@@ -336,8 +338,9 @@ export async function stopRemoteServer(): Promise<import('../types/modbus').Remo
     return {
       is_running: false,
       port: 8088,
-      allow_write: true,
+      allow_write: false,
       active_clients: 0,
+      token: '',
       interfaces: [],
     };
   }
@@ -352,8 +355,9 @@ export async function getRemoteServerStatus(): Promise<import('../types/modbus')
     return {
       is_running: false,
       port: 8088,
-      allow_write: true,
+      allow_write: false,
       active_clients: 0,
+      token: '',
       interfaces: [],
     };
   }

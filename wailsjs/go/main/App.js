@@ -74,6 +74,10 @@ export function SessionWriteRegister(arg1, arg2) {
   return window['go']['main']['App']['SessionWriteRegister'](arg1, arg2);
 }
 
+export function SessionWriteRegisters(arg1, arg2) {
+  return window['go']['main']['App']['SessionWriteRegisters'](arg1, arg2);
+}
+
 export function SlaveGetSlice(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SlaveGetSlice'](arg1, arg2, arg3, arg4);
 }
@@ -124,6 +128,10 @@ export function StopRemoteServer() {
 
 export function UpdateRemoteServerState(arg1) {
   return window['go']['main']['App']['UpdateRemoteServerState'](arg1);
+}
+
+export function WriteRegisters(arg1) {
+  return window['go']['main']['App']['WriteRegisters'](arg1);
 }
 
 export function WriteSingleCoil(arg1) {

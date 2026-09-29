@@ -245,6 +245,14 @@ func (m *ModbusClientWrapper) IsConnected() bool {
 
 // ExecuteRead executes a read operation and formats standard hex frames and metrics.
 func (m *ModbusClientWrapper) ExecuteRead(def PollDefinition) PollResult {
+	res := m.executeRead(def)
+	res.SlaveID = def.SlaveID
+	res.FunctionCode = def.FunctionCode
+	res.StartAddress = def.StartAddress
+	return res
+}
+
+func (m *ModbusClientWrapper) executeRead(def PollDefinition) PollResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -394,6 +402,26 @@ func (m *ModbusClientWrapper) WriteRegister(param WriteRegisterParam) error {
 
 	m.client.SetUnitId(param.SlaveID)
 	return m.client.WriteRegister(param.Address, param.Value)
+}
+
+// WriteRegisters writes multiple 16-bit registers (FC 16).
+func (m *ModbusClientWrapper) WriteRegisters(param WriteRegistersParam) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.isConnected {
+		return fmt.Errorf("not connected to device")
+	}
+
+	if m.isSimulator {
+		for i, v := range param.Values {
+			m.simRegisters[param.Address+uint16(i)] = v
+		}
+		return nil
+	}
+
+	m.client.SetUnitId(param.SlaveID)
+	return m.client.WriteRegisters(param.Address, param.Values)
 }
 
 // WriteCoil writes a single coil (FC 05).

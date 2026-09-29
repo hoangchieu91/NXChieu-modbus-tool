@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Edit3, Send } from 'lucide-react';
 import { RegisterRow } from '../types/modbus';
+import { parseRegisterInput } from '../utils/formatters';
 
 interface WriteModalProps {
   isOpen: boolean;
@@ -8,6 +9,8 @@ interface WriteModalProps {
   row: RegisterRow | null;
   slaveId: number;
   isCoil: boolean;
+  /** FC02/FC04 tables in master mode cannot be written. */
+  readOnly?: boolean;
   onWriteRegister: (slaveId: number, address: number, value: number) => Promise<void>;
   onWriteCoil: (slaveId: number, address: number, value: boolean) => Promise<void>;
 }
@@ -18,6 +21,7 @@ export const WriteModal: React.FC<WriteModalProps> = ({
   row,
   slaveId,
   isCoil,
+  readOnly = false,
   onWriteRegister,
   onWriteCoil,
 }) => {
@@ -31,7 +35,7 @@ export const WriteModal: React.FC<WriteModalProps> = ({
       if (isCoil) {
         setCoilVal(Boolean(row.rawValue));
       } else {
-        setValString(String(row.rawValue));
+        setValString(row.rawValue === null || row.rawValue === undefined ? '' : String(row.rawValue));
       }
       setErrorMsg(null);
     }
@@ -41,6 +45,10 @@ export const WriteModal: React.FC<WriteModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (readOnly) {
+      setErrorMsg('FC02/FC04 là bảng chỉ đọc, không thể ghi.');
+      return;
+    }
     setIsSubmitting(true);
     setErrorMsg(null);
 
@@ -48,19 +56,13 @@ export const WriteModal: React.FC<WriteModalProps> = ({
       if (isCoil) {
         await onWriteCoil(slaveId, row.address, coilVal);
       } else {
-        let numVal = 0;
-        const trimmed = valString.trim();
-        if (trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
-          numVal = parseInt(trimmed, 16);
-        } else {
-          numVal = parseInt(trimmed, 10);
+        // The modal writes the raw register value, so no scaling or display format applies.
+        const parsed = parseRegisterInput(valString);
+        if (!parsed.ok) {
+          throw new Error(parsed.error);
         }
 
-        if (isNaN(numVal) || numVal < 0 || numVal > 65535) {
-          throw new Error('Giá trị thanh ghi không hợp lệ (Phải từ 0 đến 65535 hoặc 0x0000 - 0xFFFF)');
-        }
-
-        await onWriteRegister(slaveId, row.address, numVal);
+        await onWriteRegister(slaveId, row.address, parsed.value);
       }
       onClose();
     } catch (err: unknown) {
@@ -128,6 +130,12 @@ export const WriteModal: React.FC<WriteModalProps> = ({
             </div>
           )}
 
+          {readOnly && (
+            <div className="p-2.5 rounded bg-amber-950/60 border border-amber-700/60 text-amber-300 text-[11px]">
+              Bảng FC02/FC04 là dữ liệu chỉ đọc trên thiết bị. Lệnh ghi sẽ đi vào FC05/FC06 tại cùng địa chỉ (bảng khác), nên đã bị chặn.
+            </div>
+          )}
+
           {isCoil ? (
             <div>
               <label className="block text-slate-300 font-medium mb-1.5">
@@ -173,7 +181,7 @@ export const WriteModal: React.FC<WriteModalProps> = ({
                 required
               />
               <span className="text-[10px] text-slate-500 mt-1 block">
-                Phạm vi 16-bit: 0 đến 65535 (hoặc 0x0000 đến 0xFFFF)
+                Phạm vi 16-bit: 0 đến 65535, -32768 đến -1 (bù 2), hoặc 0x0000 đến 0xFFFF
               </span>
             </div>
           )}
@@ -189,7 +197,7 @@ export const WriteModal: React.FC<WriteModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || readOnly}
               className="px-4 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-medium shadow-md shadow-cyan-900/30 transition-colors flex items-center space-x-1 disabled:opacity-50"
             >
               <Send className="w-3.5 h-3.5" />

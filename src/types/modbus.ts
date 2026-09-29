@@ -59,6 +59,10 @@ export interface PollDefinition {
 export interface PollResult {
   session_id?: string;
   timestamp: string;
+  /** Request that produced this result (may differ from the tab's current definition). */
+  slave_id?: number;
+  function_code?: number;
+  start_address?: number;
   values: number[];
   bool_values: boolean[];
   is_coil: boolean;
@@ -196,6 +200,12 @@ export interface WriteRegisterParam {
   value: number;
 }
 
+export interface WriteRegistersParam {
+  slave_id: number;
+  address: number;
+  values: number[];
+}
+
 export interface WriteCoilParam {
   slave_id: number;
   address: number;
@@ -263,6 +273,8 @@ export interface RemoteServerStatus {
   port: number;
   allow_write: boolean;
   active_clients: number;
+  /** Access token required by /ws and /api/write; already included in each interface URL. */
+  token: string;
   interfaces: NetworkInterfaceInfo[];
 }
 

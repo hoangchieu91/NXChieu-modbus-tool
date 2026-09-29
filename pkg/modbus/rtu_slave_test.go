@@ -156,3 +156,44 @@ func TestRTUSlaveRecoversAfterGarbage(t *testing.T) {
 		t.Fatalf("got % X, want % X", got, want)
 	}
 }
+
+func TestRTUSlaveFC03_128RegistersDoesNotPanic(t *testing.T) {
+	_, c := startRTUPipe(t, 1)
+
+	// FC03 with quantity = 128 (128*2 = 256, which previously overflowed byte to 0 and caused slice panic)
+	req := BuildRTUReadRequest(1, 3, 0, 128)
+	if _, err := c.Write(req); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should safely return Modbus Exception 0x03 (Illegal Data Value) without panicking
+	want := withCRC([]byte{1, 0x83, 0x03})
+	if got := readResp(t, c, len(want)); !bytes.Equal(got, want) {
+		t.Fatalf("got % X, want % X", got, want)
+	}
+}
+
+func TestRTUSlaveMergedRequests(t *testing.T) {
+	_, c := startRTUPipe(t, 1)
+
+	req1 := BuildRTUReadRequest(1, 3, 0, 1)
+	req2 := BuildRTUReadRequest(1, 3, 1, 1)
+	merged := append(req1, req2...)
+
+	if _, err := c.Write(merged); err != nil {
+		t.Fatal(err)
+	}
+
+	want1 := BuildRTURegisterResponse(1, 3, []uint16{2205})
+	want2 := BuildRTURegisterResponse(1, 3, []uint16{512})
+
+	got1 := readResp(t, c, len(want1))
+	if !bytes.Equal(got1, want1) {
+		t.Fatalf("got1 % X, want1 % X", got1, want1)
+	}
+
+	got2 := readResp(t, c, len(want2))
+	if !bytes.Equal(got2, want2) {
+		t.Fatalf("got2 % X, want2 % X", got2, want2)
+	}
+}
