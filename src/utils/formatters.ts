@@ -302,13 +302,84 @@ export function formatValue(
 }
 
 /**
+ * Parse an address string or number in either Decimal or Hexadecimal mode.
+ * Auto-detects '0x...' or '...h' / '...H' prefixes/suffixes regardless of mode.
+ */
+export function parseModbusAddress(
+  input: string | number,
+  mode: 'dec' | 'hex' = 'dec'
+): { value: number; isValid: boolean; error?: string } {
+  if (typeof input === 'number') {
+    if (isNaN(input) || input < 0 || input > 65535) {
+      return { value: 0, isValid: false, error: 'Địa chỉ phải từ 0 đến 65535' };
+    }
+    return { value: Math.floor(input), isValid: true };
+  }
+
+  const raw = String(input).trim();
+  if (!raw) {
+    return { value: 0, isValid: true };
+  }
+
+  // Check for explicit Hex syntax: 0x..., 0X..., ...h, ...H, $...
+  const lower = raw.toLowerCase();
+  let isHex = mode === 'hex';
+
+  let cleanStr = raw;
+  if (lower.startsWith('0x')) {
+    isHex = true;
+    cleanStr = raw.slice(2);
+  } else if (lower.startsWith('$') || lower.startsWith('#')) {
+    isHex = true;
+    cleanStr = raw.slice(1);
+  } else if (lower.endsWith('h')) {
+    isHex = true;
+    cleanStr = raw.slice(0, -1);
+  }
+
+  const parsed = parseInt(cleanStr, isHex ? 16 : 10);
+  if (isNaN(parsed) || parsed < 0 || parsed > 65535) {
+    return {
+      value: 0,
+      isValid: false,
+      error: isHex ? 'Địa chỉ Hex không hợp lệ (0x0000 - 0xFFFF)' : 'Địa chỉ Dec không hợp lệ (0 - 65535)',
+    };
+  }
+
+  return { value: parsed, isValid: true };
+}
+
+/**
+ * Format address number to string based on mode.
+ */
+export function formatModbusAddress(
+  address: number,
+  mode: 'dec' | 'hex',
+  prefix: boolean = true
+): string {
+  const safe = Math.max(0, Math.min(65535, address || 0));
+  if (mode === 'hex') {
+    const hexStr = safe.toString(16).toUpperCase().padStart(4, '0');
+    return prefix ? `0x${hexStr}` : hexStr;
+  }
+  return safe.toString(10);
+}
+
+/**
  * Standard Modbus register address display string:
  * FC 01: 00001 + offset
  * FC 02: 10001 + offset
  * FC 03: 40001 + offset
  * FC 04: 30001 + offset
  */
-export function getModbusAddressLabel(functionCode: number, address: number): string {
+export function getModbusAddressLabel(
+  functionCode: number,
+  address: number,
+  mode: 'dec' | 'hex' = 'dec'
+): string {
+  if (mode === 'hex') {
+    return `0x${(address & 0xffff).toString(16).toUpperCase().padStart(4, '0')}`;
+  }
   switch (functionCode) {
     case 1:
       return `${(1 + address).toString().padStart(5, '0')}`;

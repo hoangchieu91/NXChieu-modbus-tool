@@ -31,7 +31,7 @@ import {
   autoDetectBaudrate,
   scanRegisters,
 } from '../services/backend';
-import { decodeAllColumns } from '../utils/formatters';
+import { decodeAllColumns, parseModbusAddress, formatModbusAddress } from '../utils/formatters';
 
 interface ScannerModalProps {
   isOpen: boolean;
@@ -77,9 +77,40 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [regFc, setRegFc] = useState<number>(3);
   const [regStart, setRegStart] = useState<number>(0);
   const [regEnd, setRegEnd] = useState<number>(60);
+  const [regAddrMode, setRegAddrMode] = useState<'dec' | 'hex'>('dec');
+  const [regStartInput, setRegStartInput] = useState<string>('0');
+  const [regEndInput, setRegEndInput] = useState<string>('60');
   const [regScanning, setRegScanning] = useState<boolean>(false);
   const [regResults, setRegResults] = useState<RegisterScanItem[]>([]);
   const [multiRows, setMultiRows] = useState<MultiColumnDecoded[]>([]);
+
+  const handleToggleRegAddrMode = (mode: 'dec' | 'hex') => {
+    if (mode === regAddrMode) return;
+    setRegAddrMode(mode);
+    if (mode === 'hex') {
+      setRegStartInput(formatModbusAddress(regStart, 'hex'));
+      setRegEndInput(formatModbusAddress(regEnd, 'hex'));
+    } else {
+      setRegStartInput(formatModbusAddress(regStart, 'dec'));
+      setRegEndInput(formatModbusAddress(regEnd, 'dec'));
+    }
+  };
+
+  const handleRegStartChange = (valStr: string) => {
+    setRegStartInput(valStr);
+    const parsed = parseModbusAddress(valStr, regAddrMode);
+    if (parsed.isValid) {
+      setRegStart(parsed.value);
+    }
+  };
+
+  const handleRegEndChange = (valStr: string) => {
+    setRegEndInput(valStr);
+    const parsed = parseModbusAddress(valStr, regAddrMode);
+    if (parsed.isValid) {
+      setRegEnd(parsed.value);
+    }
+  };
 
   // Columns visibility toggles for Multi-Column View
   const [colVisibility, setColVisibility] = useState<Record<string, boolean>>({
@@ -802,58 +833,107 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     </select>
                   </div>
 
+                  {/* Dec / Hex Mode Switch */}
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Địa Chỉ Bắt Đầu:</label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={65535}
-                      value={regStart}
-                      onChange={(e) => setRegStart(parseInt(e.target.value) || 0)}
-                      className="w-20 px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono text-center focus:border-emerald-500 focus:outline-none"
-                    />
+                    <label className="block text-[11px] text-slate-400 mb-1">Kiểu Gõ Địa Chỉ:</label>
+                    <div className="flex items-center bg-slate-900 p-0.5 rounded border border-slate-700 text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleRegAddrMode('dec')}
+                        className={`px-2.5 py-1 rounded transition ${
+                          regAddrMode === 'dec'
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        DEC
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleRegAddrMode('hex')}
+                        className={`px-2.5 py-1 rounded transition ${
+                          regAddrMode === 'hex'
+                            ? 'bg-purple-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        HEX (0x)
+                      </button>
+                    </div>
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Địa Chỉ Kết Thúc:</label>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Bắt Đầu ({regAddrMode.toUpperCase()}):
+                    </label>
                     <input
-                      type="number"
-                      min={0}
-                      max={65535}
-                      value={regEnd}
-                      onChange={(e) => setRegEnd(parseInt(e.target.value) || 60)}
-                      className="w-20 px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono text-center focus:border-emerald-500 focus:outline-none"
+                      type="text"
+                      value={regStartInput}
+                      onChange={(e) => handleRegStartChange(e.target.value)}
+                      placeholder={regAddrMode === 'hex' ? '0x0000' : '0'}
+                      className="w-24 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono text-center focus:border-emerald-500 focus:outline-none"
                     />
+                    <span className="text-[10px] text-slate-500 block text-center font-mono mt-0.5">
+                      {regAddrMode === 'dec' ? formatModbusAddress(regStart, 'hex') : regStart}
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Kết Thúc ({regAddrMode.toUpperCase()}):
+                    </label>
+                    <input
+                      type="text"
+                      value={regEndInput}
+                      onChange={(e) => handleRegEndChange(e.target.value)}
+                      placeholder={regAddrMode === 'hex' ? '0x003C' : '60'}
+                      className="w-24 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono text-center focus:border-emerald-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-500 block text-center font-mono mt-0.5">
+                      {regAddrMode === 'dec' ? formatModbusAddress(regEnd, 'hex') : regEnd}
+                    </span>
                   </div>
 
                   {/* Range shortcut chips */}
                   <div className="flex items-center gap-1 mt-4">
                     <button
                       onClick={() => {
-                        setRegStart(0);
-                        setRegEnd(30);
+                        const s = 0;
+                        const e = 30;
+                        setRegStart(s);
+                        setRegEnd(e);
+                        setRegStartInput(formatModbusAddress(s, regAddrMode));
+                        setRegEndInput(formatModbusAddress(e, regAddrMode));
                       }}
-                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-400 rounded border border-slate-800"
+                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-400 rounded border border-slate-800 font-mono"
                     >
-                      0-30
+                      {regAddrMode === 'hex' ? '0x00 - 0x1E' : '0-30'}
                     </button>
                     <button
                       onClick={() => {
-                        setRegStart(0);
-                        setRegEnd(100);
+                        const s = 0;
+                        const e = 100;
+                        setRegStart(s);
+                        setRegEnd(e);
+                        setRegStartInput(formatModbusAddress(s, regAddrMode));
+                        setRegEndInput(formatModbusAddress(e, regAddrMode));
                       }}
-                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-400 rounded border border-slate-800"
+                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-400 rounded border border-slate-800 font-mono"
                     >
-                      0-100
+                      {regAddrMode === 'hex' ? '0x00 - 0x64' : '0-100'}
                     </button>
                     <button
                       onClick={() => {
-                        setRegStart(0);
-                        setRegEnd(250);
+                        const s = regAddrMode === 'hex' ? 0x1000 : 1000;
+                        const e = regAddrMode === 'hex' ? 0x1032 : 1050;
+                        setRegStart(s);
+                        setRegEnd(e);
+                        setRegStartInput(formatModbusAddress(s, regAddrMode));
+                        setRegEndInput(formatModbusAddress(e, regAddrMode));
                       }}
-                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-400 rounded border border-slate-800"
+                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[11px] text-cyan-400 rounded border border-slate-800 font-mono"
                     >
-                      0-250
+                      {regAddrMode === 'hex' ? '0x1000+' : '1000+'}
                     </button>
                   </div>
                 </div>
@@ -991,8 +1071,9 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                 <table className="w-full text-left text-xs border-collapse">
                   <thead className="sticky top-0 z-10">
                     <tr className="border-b border-slate-800 bg-slate-900 text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
-                      <th className="py-2.5 px-3 w-16 bg-slate-900">Dec</th>
-                      <th className="py-2.5 px-3 w-20 bg-slate-900">Modbus</th>
+                      <th className="py-2.5 px-3 w-16 bg-slate-900 text-cyan-400">Dec Addr</th>
+                      <th className="py-2.5 px-3 w-20 bg-slate-900 text-purple-400">Hex Addr</th>
+                      <th className="py-2.5 px-3 w-20 bg-slate-900 text-slate-400">PLC Ref</th>
                       {colVisibility.hex && <th className="py-2.5 px-3 bg-slate-900 text-amber-400">Hex 16</th>}
                       {colVisibility.uint16 && <th className="py-2.5 px-3 bg-slate-900 text-emerald-400">UInt16</th>}
                       {colVisibility.int16 && <th className="py-2.5 px-3 bg-slate-900 text-green-400">Int16</th>}
@@ -1026,15 +1107,18 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
                     {multiRows.length === 0 ? (
                       <tr>
-                        <td colSpan={18} className="py-12 text-center text-slate-500 font-sans">
+                        <td colSpan={19} className="py-12 text-center text-slate-500 font-sans">
                           Chưa có dữ liệu. Nhấn &quot;Quét Thanh Ghi&quot; để đọc và phân tích toàn bộ các định dạng cùng lúc.
                         </td>
                       </tr>
                     ) : (
                       multiRows.map((row) => (
                         <tr key={row.address} className="hover:bg-slate-900/60 transition">
-                          <td className="py-1.5 px-3 font-bold text-slate-400">{row.address}</td>
-                          <td className="py-1.5 px-3 text-slate-300">{row.displayAddress}</td>
+                          <td className="py-1.5 px-3 font-bold text-slate-200">{row.address}</td>
+                          <td className="py-1.5 px-3 font-bold font-mono text-purple-400">
+                            0x{(row.address & 0xffff).toString(16).toUpperCase().padStart(4, '0')}
+                          </td>
+                          <td className="py-1.5 px-3 text-slate-400">{row.displayAddress}</td>
                           {colVisibility.hex && (
                             <td className="py-1.5 px-3 text-amber-400 font-bold">{row.hex}</td>
                           )}

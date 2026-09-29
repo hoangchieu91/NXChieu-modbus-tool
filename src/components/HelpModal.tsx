@@ -301,6 +301,17 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                       Chuyển đổi giữa <strong>Chuẩn</strong> (khoảng cách thoáng) và <strong>Gọn</strong> (thu nhỏ dòng) để hiển thị được nhiều thanh ghi hơn trên cùng một màn hình mà không cần cuộn chuột.
                     </p>
                   </div>
+
+                  <div className="p-3 bg-slate-900 rounded border border-purple-900/60 bg-purple-950/20">
+                    <span className="font-bold text-purple-300 text-sm">10. Hỗ Trợ 2 Kiểu Gõ Địa Chỉ: DEC (Thập Phân) & HEX (0x... / ...H)</span>
+                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                      Nhiều tài liệu manual (biến tần Delta, Yaskawa, đồng hồ đo...) cung cấp địa chỉ thanh ghi dạng Hex (như <code>0x2000</code>, <code>2001H</code>, <code>0x1000</code>).
+                      <br />
+                      • <strong>Tại hộp thoại Cấu hình quét (F8) & Bộ quét (F4):</strong> Có sẵn nút chọn <strong>DEC</strong> hoặc <strong>HEX</strong>. Bạn có thể gõ trực tiếp địa chỉ dạng Hex (ví dụ <code>0x1000</code> hoặc <code>1000</code>) mà không cần dùng máy tính đổi sang <code>4096</code>! Phần mềm tự động nhận diện cả tiền tố <code>0x</code> và hậu tố <code>H</code>.
+                      <br />
+                      • <strong>Tại bảng DataGrid:</strong> Bấm nút <strong>DEC / HEX</strong> trên thanh công cụ phụ hoặc nhấp trực tiếp vào tiêu đề cột <strong>Address</strong> để xem toàn bộ danh sách địa chỉ dưới dạng Hex (<code>0x1000</code>) hoặc Dec chuẩn Modicon (<code>40001</code>).
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

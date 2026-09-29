@@ -311,6 +311,24 @@ func (s *SlaveMemoryStore) SetRegister(table string, addr uint16, value uint16) 
 	}
 }
 
+// ToggleCoil inverts a coil or discrete input atomically.
+func (s *SlaveMemoryStore) ToggleCoil(table string, addr uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if strings.ToLower(table) == "discrete" {
+		s.DiscreteInputs[addr] = !s.DiscreteInputs[addr]
+	} else {
+		s.Coils[addr] = !s.Coils[addr]
+	}
+}
+
+func (s *SlaveMemoryStore) setSlaveID(id uint8) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slaveID = id
+}
+
 func (s *SlaveMemoryStore) SetCoil(table string, addr uint16, value bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -331,6 +349,7 @@ type ModbusSlaveServer struct {
 	isListening  bool
 	tcpServer    *simonmodbus.ModbusServer
 	tcpListener  net.Listener
+	tcpConns     map[net.Conn]struct{}
 	serialPort   serial.Port
 	stopChan     chan struct{}
 	simCancel    context.CancelFunc
@@ -352,8 +371,14 @@ func (s *ModbusSlaveServer) IsListening() bool {
 	return s.isListening
 }
 
-// GetMemoryStore returns the underlying memory store.
+// GetMemoryStore returns the underlying memory store, creating a default one if the server
+// has not been started yet so the UI and simulation can work before Start.
 func (s *ModbusSlaveServer) GetMemoryStore() *SlaveMemoryStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.store == nil {
+		s.store = NewSlaveMemoryStore(s.sessionID, 1, s.onActivity)
+	}
 	return s.store
 }
 
@@ -372,7 +397,13 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 		slaveID = 1
 	}
 
-	s.store = NewSlaveMemoryStore(s.sessionID, slaveID, s.onActivity)
+	// Keep memory edited by the user before starting; only the unit ID changes.
+	if s.store == nil {
+		s.store = NewSlaveMemoryStore(s.sessionID, slaveID, s.onActivity)
+	} else {
+		s.store.setSlaveID(slaveID)
+	}
+	s.config.SlaveID = slaveID
 	s.stopChan = make(chan struct{})
 
 	switch strings.ToLower(config.Type) {
@@ -421,9 +452,10 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 			return fmt.Errorf("failed to start RTU-over-TCP listener on %s: %w", addr, err)
 		}
 		s.tcpListener = ln
+		s.tcpConns = make(map[net.Conn]struct{})
 		s.isListening = true
 
-		go s.runRTUOverTCPLoop(ln)
+		go s.runRTUOverTCPLoop(ln, s.store)
 
 	case "serial":
 		if config.Port == "" {
@@ -471,10 +503,15 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 		if err != nil {
 			return fmt.Errorf("failed to open serial port %s: %w", portName, err)
 		}
+		// A short read timeout lets the framer detect the inter-frame silence (t3.5).
+		if err := sp.SetReadTimeout(rtuSilence(baud)); err != nil {
+			_ = sp.Close()
+			return fmt.Errorf("failed to configure serial port %s: %w", portName, err)
+		}
 		s.serialPort = sp
 		s.isListening = true
 
-		go s.runSerialRTULoop(sp)
+		go s.handleRTUConnection(&serialFrameReader{sp}, s.store, "Serial "+config.Port)
 
 	default:
 		return fmt.Errorf("unsupported slave type: %s", config.Type)
@@ -511,6 +548,11 @@ func (s *ModbusSlaveServer) stopLocked() {
 		s.tcpListener = nil
 	}
 
+	for conn := range s.tcpConns {
+		_ = conn.Close()
+	}
+	s.tcpConns = nil
+
 	if s.serialPort != nil {
 		_ = s.serialPort.Close()
 		s.serialPort = nil
@@ -519,184 +561,304 @@ func (s *ModbusSlaveServer) stopLocked() {
 	s.isListening = false
 }
 
+// rtuSilence returns the RTU inter-frame gap (3.5 characters, 1.75ms above 19200 baud per spec),
+// padded to tolerate USB-serial adapter latency.
+func rtuSilence(baud int) time.Duration {
+	if baud <= 0 {
+		baud = 9600
+	}
+	t35 := time.Duration(float64(time.Second) * 11 * 3.5 / float64(baud))
+	if baud > 19200 {
+		t35 = 1750 * time.Microsecond
+	}
+	return t35 + 20*time.Millisecond
+}
+
+// frameReader reads bytes; timedOut reports whether a read ended because the line went silent.
+type frameReader interface {
+	io.Writer
+	ReadChunk(p []byte) (n int, timedOut bool, err error)
+}
+
+type serialFrameReader struct{ sp serial.Port }
+
+func (r *serialFrameReader) ReadChunk(p []byte) (int, bool, error) {
+	n, err := r.sp.Read(p)
+	// go.bug.st/serial returns (0, nil) when the read timeout expires.
+	return n, n == 0 && err == nil, err
+}
+
+func (r *serialFrameReader) Write(p []byte) (int, error) { return r.sp.Write(p) }
+
+type tcpFrameReader struct {
+	conn    net.Conn
+	pending bool // a partial frame is buffered, so silence must be detected
+	silence time.Duration
+}
+
+func (r *tcpFrameReader) ReadChunk(p []byte) (int, bool, error) {
+	if r.pending {
+		_ = r.conn.SetReadDeadline(time.Now().Add(r.silence))
+	} else {
+		_ = r.conn.SetReadDeadline(time.Time{})
+	}
+	n, err := r.conn.Read(p)
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return n, true, nil
+	}
+	return n, false, err
+}
+
+func (r *tcpFrameReader) Write(p []byte) (int, error) { return r.conn.Write(p) }
+
 // RTU over TCP server listener loop
-func (s *ModbusSlaveServer) runRTUOverTCPLoop(ln net.Listener) {
+func (s *ModbusSlaveServer) runRTUOverTCPLoop(ln net.Listener, store *SlaveMemoryStore) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go s.handleRTUConnection(conn, conn.RemoteAddr().String())
+
+		s.mu.Lock()
+		if s.tcpConns == nil || s.tcpListener != ln {
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		s.tcpConns[conn] = struct{}{}
+		s.mu.Unlock()
+
+		go func(c net.Conn) {
+			defer func() {
+				s.mu.Lock()
+				delete(s.tcpConns, c)
+				s.mu.Unlock()
+				_ = c.Close()
+			}()
+			r := &tcpFrameReader{conn: c, silence: 100 * time.Millisecond}
+			s.handleRTUConnection(r, store, c.RemoteAddr().String())
+		}(conn)
 	}
 }
 
-// Serial RTU server read loop
-func (s *ModbusSlaveServer) runSerialRTULoop(sp serial.Port) {
-	s.handleRTUConnection(sp, "Serial "+s.config.Port)
+// expectedRequestLen returns the full length (including CRC) of the RTU request at the start
+// of buf, 0 if more bytes are needed to know, or -1 if the function code has no fixed layout.
+func expectedRequestLen(buf []byte) int {
+	if len(buf) < 2 {
+		return 0
+	}
+	switch buf[1] {
+	case 0x01, 0x02, 0x03, 0x04, 0x05, 0x06:
+		return 8
+	case 0x0F, 0x10:
+		if len(buf) < 7 {
+			return 0
+		}
+		return 9 + int(buf[6])
+	default:
+		return -1
+	}
 }
 
-func (s *ModbusSlaveServer) handleRTUConnection(rw io.ReadWriter, clientAddr string) {
-	buf := make([]byte, 512)
+// handleRTUConnection reassembles RTU frames from a byte stream. A frame is complete when its
+// expected length is reached; bytes left dangling after a line silence are discarded.
+func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemoryStore, clientAddr string) {
+	readBuf := make([]byte, 512)
+	var pending []byte
+
 	for {
-		s.mu.Lock()
-		active := s.isListening
-		s.mu.Unlock()
-		if !active {
-			return
+		if tr, ok := rw.(*tcpFrameReader); ok {
+			tr.pending = len(pending) > 0
 		}
 
-		n, err := rw.Read(buf)
+		n, timedOut, err := rw.ReadChunk(readBuf)
 		if err != nil {
 			return
 		}
-		if n < 4 {
-			continue
+		pending = append(pending, readBuf[:n]...)
+
+		for len(pending) > 0 {
+			want := expectedRequestLen(pending)
+			if want == 0 || (want > 0 && len(pending) < want) {
+				break // wait for more bytes
+			}
+			if want < 0 {
+				// Unknown layout: treat everything received before the silence as one frame.
+				if !timedOut {
+					break
+				}
+				want = len(pending)
+			}
+
+			frame := pending[:want]
+			if len(frame) >= 4 && binary.LittleEndian.Uint16(frame[want-2:]) == CRC16Modbus(frame[:want-2]) {
+				if resp := s.processRTUFrame(store, frame, clientAddr); len(resp) > 0 {
+					_, _ = rw.Write(resp)
+				}
+				pending = pending[want:]
+			} else {
+				// Bad CRC: drop one byte and try to resynchronise on the next frame start.
+				pending = pending[1:]
+			}
 		}
 
-		frame := buf[:n]
-		resp, err := s.processRTUFrame(frame, clientAddr)
-		if err == nil && len(resp) > 0 {
-			_, _ = rw.Write(resp)
+		if timedOut && len(pending) > 0 {
+			pending = pending[:0] // incomplete frame followed by silence
+		}
+		if len(pending) > 1024 {
+			pending = pending[:0]
 		}
 	}
 }
 
-// processRTUFrame validates CRC and handles Modbus FC 01, 02, 03, 04, 05, 06, 0F, 10
-func (s *ModbusSlaveServer) processRTUFrame(frame []byte, clientAddr string) ([]byte, error) {
-	if len(frame) < 4 {
-		return nil, fmt.Errorf("frame too short")
-	}
-
-	// Validate CRC
-	n := len(frame)
-	expectedCRC := binary.LittleEndian.Uint16(frame[n-2:])
-	computedCRC := CRC16Modbus(frame[:n-2])
-	if expectedCRC != computedCRC {
-		return nil, fmt.Errorf("crc error")
-	}
-
+// processRTUFrame handles a CRC-validated RTU request (FC 01-06, 0F, 10) and returns the response
+// bytes, or nil when no response must be sent (other unit IDs, broadcast).
+func (s *ModbusSlaveServer) processRTUFrame(store *SlaveMemoryStore, frame []byte, clientAddr string) []byte {
 	unitID := frame[0]
-	if unitID != 0 && s.config.SlaveID != 0 && unitID != s.config.SlaveID {
-		return nil, fmt.Errorf("unit id mismatch")
+	if unitID != 0 && unitID != s.config.SlaveID {
+		return nil // addressed to another device on the bus: stay silent
 	}
+	broadcast := unitID == 0
 
 	fc := frame[1]
+	reply := func(resp []byte) []byte {
+		if broadcast {
+			return nil // broadcast requests are never answered
+		}
+		return resp
+	}
+	exception := func(code byte) []byte {
+		return reply(s.buildExceptionResponse(unitID, fc, code))
+	}
+
 	switch fc {
-	case 0x01: // Read Coils
-		if len(frame) < 6 {
-			return nil, fmt.Errorf("malformed FC01")
+	case 0x01, 0x02: // Read Coils / Discrete Inputs
+		if broadcast {
+			return nil
 		}
 		addr := binary.BigEndian.Uint16(frame[2:4])
 		qty := binary.BigEndian.Uint16(frame[4:6])
-		bools, err := s.store.HandleCoils(&simonmodbus.CoilsRequest{
-			ClientAddr: clientAddr,
-			UnitId:     unitID,
-			Addr:       addr,
-			Quantity:   qty,
-			IsWrite:    false,
-		})
-		if err != nil {
-			return s.buildExceptionResponse(unitID, fc, 0x02), nil
+		if qty < 1 || qty > 2000 {
+			return exception(0x03)
 		}
-		return s.buildBitReadResponse(unitID, fc, bools), nil
+		var bools []bool
+		var err error
+		if fc == 0x01 {
+			bools, err = store.HandleCoils(&simonmodbus.CoilsRequest{
+				ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: qty,
+			})
+		} else {
+			bools, err = store.HandleDiscreteInputs(&simonmodbus.DiscreteInputsRequest{
+				ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: qty,
+			})
+		}
+		if err != nil {
+			return exception(0x02)
+		}
+		return s.buildBitReadResponse(unitID, fc, bools)
 
-	case 0x02: // Read Discrete Inputs
-		if len(frame) < 6 {
-			return nil, fmt.Errorf("malformed FC02")
+	case 0x03, 0x04: // Read Holding / Input Registers
+		if broadcast {
+			return nil
 		}
 		addr := binary.BigEndian.Uint16(frame[2:4])
 		qty := binary.BigEndian.Uint16(frame[4:6])
-		bools, err := s.store.HandleDiscreteInputs(&simonmodbus.DiscreteInputsRequest{
-			ClientAddr: clientAddr,
-			UnitId:     unitID,
-			Addr:       addr,
-			Quantity:   qty,
-		})
+		if qty < 1 || qty > 125 {
+			return exception(0x03)
+		}
+		var regs []uint16
+		var err error
+		if fc == 0x03 {
+			regs, err = store.HandleHoldingRegisters(&simonmodbus.HoldingRegistersRequest{
+				ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: qty,
+			})
+		} else {
+			regs, err = store.HandleInputRegisters(&simonmodbus.InputRegistersRequest{
+				ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: qty,
+			})
+		}
 		if err != nil {
-			return s.buildExceptionResponse(unitID, fc, 0x02), nil
+			return exception(0x02)
 		}
-		return s.buildBitReadResponse(unitID, fc, bools), nil
-
-	case 0x03: // Read Holding Registers
-		if len(frame) < 6 {
-			return nil, fmt.Errorf("malformed FC03")
-		}
-		addr := binary.BigEndian.Uint16(frame[2:4])
-		qty := binary.BigEndian.Uint16(frame[4:6])
-		regs, err := s.store.HandleHoldingRegisters(&simonmodbus.HoldingRegistersRequest{
-			ClientAddr: clientAddr,
-			UnitId:     unitID,
-			Addr:       addr,
-			Quantity:   qty,
-			IsWrite:    false,
-		})
-		if err != nil {
-			return s.buildExceptionResponse(unitID, fc, 0x02), nil
-		}
-		return s.buildRegisterReadResponse(unitID, fc, regs), nil
-
-	case 0x04: // Read Input Registers
-		if len(frame) < 6 {
-			return nil, fmt.Errorf("malformed FC04")
-		}
-		addr := binary.BigEndian.Uint16(frame[2:4])
-		qty := binary.BigEndian.Uint16(frame[4:6])
-		regs, err := s.store.HandleInputRegisters(&simonmodbus.InputRegistersRequest{
-			ClientAddr: clientAddr,
-			UnitId:     unitID,
-			Addr:       addr,
-			Quantity:   qty,
-		})
-		if err != nil {
-			return s.buildExceptionResponse(unitID, fc, 0x02), nil
-		}
-		return s.buildRegisterReadResponse(unitID, fc, regs), nil
+		return s.buildRegisterReadResponse(unitID, fc, regs)
 
 	case 0x05: // Write Single Coil
-		if len(frame) < 6 {
-			return nil, fmt.Errorf("malformed FC05")
-		}
 		addr := binary.BigEndian.Uint16(frame[2:4])
 		rawVal := binary.BigEndian.Uint16(frame[4:6])
-		val := rawVal == 0xFF00
-		_, err := s.store.HandleCoils(&simonmodbus.CoilsRequest{
-			ClientAddr: clientAddr,
-			UnitId:     unitID,
-			Addr:       addr,
-			Quantity:   1,
-			IsWrite:    true,
-			Args:       []bool{val},
-		})
-		if err != nil {
-			return s.buildExceptionResponse(unitID, fc, 0x02), nil
+		if rawVal != 0xFF00 && rawVal != 0x0000 {
+			return exception(0x03)
 		}
-		// FC05 echoes back request frame on success
-		return frame[:6+2], nil
+		if _, err := store.HandleCoils(&simonmodbus.CoilsRequest{
+			ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: 1,
+			IsWrite: true, Args: []bool{rawVal == 0xFF00},
+		}); err != nil {
+			return exception(0x02)
+		}
+		return reply(append([]byte(nil), frame[:8]...)) // echo request
 
 	case 0x06: // Write Single Register
-		if len(frame) < 6 {
-			return nil, fmt.Errorf("malformed FC06")
-		}
 		addr := binary.BigEndian.Uint16(frame[2:4])
 		val := binary.BigEndian.Uint16(frame[4:6])
-		_, err := s.store.HandleHoldingRegisters(&simonmodbus.HoldingRegistersRequest{
-			ClientAddr: clientAddr,
-			UnitId:     unitID,
-			Addr:       addr,
-			Quantity:   1,
-			IsWrite:    true,
-			Args:       []uint16{val},
-		})
-		if err != nil {
-			return s.buildExceptionResponse(unitID, fc, 0x02), nil
+		if _, err := store.HandleHoldingRegisters(&simonmodbus.HoldingRegistersRequest{
+			ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: 1,
+			IsWrite: true, Args: []uint16{val},
+		}); err != nil {
+			return exception(0x02)
 		}
-		// FC06 echoes back request frame on success
-		return frame[:6+2], nil
+		return reply(append([]byte(nil), frame[:8]...)) // echo request
+
+	case 0x0F: // Write Multiple Coils
+		addr := binary.BigEndian.Uint16(frame[2:4])
+		qty := binary.BigEndian.Uint16(frame[4:6])
+		byteCount := int(frame[6])
+		if qty < 1 || qty > 1968 || byteCount != (int(qty)+7)/8 {
+			return exception(0x03)
+		}
+		bools := make([]bool, qty)
+		for i := range bools {
+			bools[i] = frame[7+i/8]&(1<<(i%8)) != 0
+		}
+		if _, err := store.HandleCoils(&simonmodbus.CoilsRequest{
+			ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: qty,
+			IsWrite: true, Args: bools,
+		}); err != nil {
+			return exception(0x02)
+		}
+		return reply(s.buildWriteMultipleResponse(unitID, fc, addr, qty))
+
+	case 0x10: // Write Multiple Registers
+		addr := binary.BigEndian.Uint16(frame[2:4])
+		qty := binary.BigEndian.Uint16(frame[4:6])
+		byteCount := int(frame[6])
+		if qty < 1 || qty > 123 || byteCount != int(qty)*2 {
+			return exception(0x03)
+		}
+		regs := make([]uint16, qty)
+		for i := range regs {
+			regs[i] = binary.BigEndian.Uint16(frame[7+i*2:])
+		}
+		if _, err := store.HandleHoldingRegisters(&simonmodbus.HoldingRegistersRequest{
+			ClientAddr: clientAddr, UnitId: unitID, Addr: addr, Quantity: qty,
+			IsWrite: true, Args: regs,
+		}); err != nil {
+			return exception(0x02)
+		}
+		return reply(s.buildWriteMultipleResponse(unitID, fc, addr, qty))
 
 	default:
 		// Unsupported function code -> Exception 0x01 (Illegal Function)
-		return s.buildExceptionResponse(unitID, fc, 0x01), nil
+		return exception(0x01)
 	}
+}
+
+func (s *ModbusSlaveServer) buildWriteMultipleResponse(unitID, fc uint8, addr, qty uint16) []byte {
+	resp := make([]byte, 8)
+	resp[0] = unitID
+	resp[1] = fc
+	binary.BigEndian.PutUint16(resp[2:], addr)
+	binary.BigEndian.PutUint16(resp[4:], qty)
+	binary.LittleEndian.PutUint16(resp[6:], CRC16Modbus(resp[:6]))
+	return resp
 }
 
 func (s *ModbusSlaveServer) buildBitReadResponse(unitID uint8, fc uint8, bools []bool) []byte {
@@ -761,6 +923,11 @@ func (s *ModbusSlaveServer) StartSimulation(config SimulationConfig) {
 		interval = 1000 * time.Millisecond
 	}
 
+	if s.store == nil {
+		s.store = NewSlaveMemoryStore(s.sessionID, 1, s.onActivity)
+	}
+	store := s.store
+
 	go func(simCtx context.Context, cfg SimulationConfig) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -793,8 +960,7 @@ func (s *ModbusSlaveServer) StartSimulation(config SimulationConfig) {
 					currentVal = cfg.Min + (span/2.0)*(1.0+math.Sin(angle))
 
 				case "toggle":
-					b := s.store.Coils[cfg.Address]
-					s.store.SetCoil(cfg.Table, cfg.Address, !b)
+					store.ToggleCoil(cfg.Table, cfg.Address)
 					continue
 
 				default: // "increment"
@@ -814,7 +980,7 @@ func (s *ModbusSlaveServer) StartSimulation(config SimulationConfig) {
 				if currentVal > 65535 {
 					currentVal = 65535
 				}
-				s.store.SetRegister(cfg.Table, cfg.Address, uint16(math.Round(currentVal)))
+				store.SetRegister(cfg.Table, cfg.Address, uint16(math.Round(currentVal)))
 			}
 		}
 	}(ctx, config)

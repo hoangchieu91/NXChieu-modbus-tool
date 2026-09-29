@@ -46,6 +46,9 @@ export const DataGrid: React.FC<DataGridProps> = ({
   const [editInput, setEditInput] = useState<string>('');
   const [justWrittenAddress, setJustWrittenAddress] = useState<number | null>(null);
 
+  // Address display mode: 'dec' | 'hex'
+  const [addressMode, setAddressMode] = useState<'dec' | 'hex'>('dec');
+
   // Search / Filter state
   const [filterQuery, setFilterQuery] = useState<string>('');
 
@@ -69,14 +72,18 @@ export const DataGrid: React.FC<DataGridProps> = ({
     }
   };
 
-  // Filter rows based on query (by address or alias)
+  // Filter rows based on query (by address in dec/hex or alias)
   const filteredRows = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) => {
+      const hexStr = `0x${(r.address & 0xffff).toString(16).toLowerCase()}`;
+      const hexRaw = (r.address & 0xffff).toString(16).toLowerCase();
       const matchAddr =
         r.address.toString().includes(q) ||
-        r.displayAddress.toLowerCase().includes(q);
+        r.displayAddress.toLowerCase().includes(q) ||
+        hexStr.includes(q) ||
+        hexRaw.includes(q);
       const matchAlias = r.alias.toLowerCase().includes(q);
       return matchAddr || matchAlias;
     });
@@ -134,6 +141,34 @@ export const DataGrid: React.FC<DataGridProps> = ({
             </button>
           )}
 
+          {/* Address Format Toggle: DEC vs HEX */}
+          <div className="flex items-center bg-slate-950 p-0.5 rounded border border-slate-800 text-[11px] font-bold">
+            <button
+              type="button"
+              onClick={() => setAddressMode('dec')}
+              className={`px-2 py-0.5 rounded transition ${
+                addressMode === 'dec'
+                  ? 'bg-cyan-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Hiển thị địa chỉ dạng Thập phân (Dec)"
+            >
+              DEC
+            </button>
+            <button
+              type="button"
+              onClick={() => setAddressMode('hex')}
+              className={`px-2 py-0.5 rounded transition ${
+                addressMode === 'hex'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Hiển thị địa chỉ dạng Thập lục phân (Hex 0x0000)"
+            >
+              HEX
+            </button>
+          </div>
+
           {/* Density Toggle */}
           <div className="flex items-center bg-slate-950 p-0.5 rounded border border-slate-800">
             <button
@@ -167,10 +202,19 @@ export const DataGrid: React.FC<DataGridProps> = ({
               <th className="px-3 py-2 border-r border-slate-800 w-12 text-center text-slate-500">
                 #
               </th>
-              <th className="px-3 py-2 border-r border-slate-800 w-24 text-cyan-400">
-                Address
+              <th
+                onClick={() => setAddressMode(addressMode === 'dec' ? 'hex' : 'dec')}
+                className="px-3 py-2 border-r border-slate-800 w-28 text-cyan-400 cursor-pointer select-none hover:bg-slate-800 transition"
+                title="Bấm để chuyển đổi hiển thị địa chỉ DEC / HEX"
+              >
+                <div className="flex items-center justify-between">
+                  <span>Address</span>
+                  <span className="text-[10px] px-1 py-0.2 rounded bg-slate-950 text-slate-300 border border-slate-700 font-mono font-normal">
+                    {addressMode.toUpperCase()}
+                  </span>
+                </div>
               </th>
-              <th className="px-3 py-2 border-r border-slate-800 w-20 text-slate-400">
+              <th className="px-3 py-2 border-r border-slate-800 w-24 text-slate-400">
                 Offset
               </th>
               <th className="px-3 py-2 border-r border-slate-800 min-w-[160px] text-slate-200">
@@ -302,13 +346,23 @@ export const DataGrid: React.FC<DataGridProps> = ({
                     </td>
 
                     {/* Modbus Address */}
-                    <td className={`px-3 ${padY} border-r border-slate-800/80 text-cyan-400 font-bold`}>
-                      {row.displayAddress}
+                    <td className={`px-3 ${padY} border-r border-slate-800/80 font-bold font-mono`}>
+                      {addressMode === 'hex' ? (
+                        <span className="text-purple-400">
+                          0x{(row.address & 0xffff).toString(16).toUpperCase().padStart(4, '0')}
+                        </span>
+                      ) : (
+                        <span className="text-cyan-400">{row.displayAddress}</span>
+                      )}
                     </td>
 
                     {/* Offset */}
-                    <td className={`px-3 ${padY} border-r border-slate-800/80 text-slate-400`}>
-                      +{idx} ({row.address})
+                    <td className={`px-3 ${padY} border-r border-slate-800/80 text-slate-400 font-mono`}>
+                      {addressMode === 'hex' ? (
+                        <>+{idx} <span className="text-slate-500 text-[10px]">(0x{(row.address & 0xffff).toString(16).toUpperCase().padStart(4, '0')})</span></>
+                      ) : (
+                        <>+{idx} <span className="text-slate-500 text-[10px]">({row.address})</span></>
+                      )}
                     </td>
 
                     {/* Editable Alias */}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -31,13 +32,20 @@ func NewApp() *App {
 			if tabID == "" {
 				tabID = "default"
 			}
+			// Never fall back to Slave ID 0: on RS485 that is a broadcast write to every device.
+			slaveID := app.sessMgr.MasterLastSlaveID(tabID)
+			if slaveID == 0 {
+				return fmt.Errorf("session %s has no active poll definition (unknown slave ID)", tabID)
+			}
 			if isCoil {
 				return app.sessMgr.MasterWriteCoil(tabID, modbus.WriteCoilParam{
+					SlaveID: slaveID,
 					Address: addr,
 					Value:   boolVal,
 				})
 			}
 			return app.sessMgr.MasterWriteRegister(tabID, modbus.WriteRegisterParam{
+				SlaveID: slaveID,
 				Address: addr,
 				Value:   val,
 			})

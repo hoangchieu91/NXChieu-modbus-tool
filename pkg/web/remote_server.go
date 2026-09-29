@@ -1,13 +1,15 @@
 package web
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,10 +27,8 @@ type NetworkInterfaceInfo struct {
 
 // RemoteServerConfig holds settings for the Web Remote Server.
 type RemoteServerConfig struct {
-	Port            uint16 `json:"port"`               // Default 8088
-	AllowWrite      bool   `json:"allow_write"`        // Allow remote writes from phone
-	RequirePassword bool   `json:"require_password"`   // Future security
-	Password        string `json:"password,omitempty"`
+	Port       uint16 `json:"port"`        // Default 8088
+	AllowWrite bool   `json:"allow_write"` // Allow remote writes from phone
 }
 
 // RemoteServerStatus returns live status of the web server.
@@ -37,18 +37,44 @@ type RemoteServerStatus struct {
 	Port          uint16                 `json:"port"`
 	AllowWrite    bool                   `json:"allow_write"`
 	ActiveClients int                    `json:"active_clients"`
+	Token         string                 `json:"token"`
 	Interfaces    []NetworkInterfaceInfo `json:"interfaces"`
+}
+
+// clientSendBuffer is the number of pending messages per phone before new ones are dropped.
+const clientSendBuffer = 32
+
+// remoteClient owns one WebSocket connection. Only its writer goroutine writes to conn,
+// because gorilla/websocket does not support concurrent writers.
+type remoteClient struct {
+	conn *websocket.Conn
+	send chan []byte
+	once sync.Once
+}
+
+func (c *remoteClient) close() {
+	c.once.Do(func() { close(c.send) })
+}
+
+// enqueue sends without blocking; a slow phone drops messages instead of stalling Modbus polling.
+func (c *remoteClient) enqueue(msg []byte) {
+	defer func() { _ = recover() }() // send on closed channel after disconnect
+	select {
+	case c.send <- msg:
+	default:
+	}
 }
 
 // RemoteServer bridges Modbus telemetry to phone browsers via WebSockets and HTTP.
 type RemoteServer struct {
-	mu           sync.RWMutex
-	httpServer   *http.Server
-	config       RemoteServerConfig
-	isRunning    bool
-	clients      map[*websocket.Conn]bool
-	clientCount  int64
-	upgrader     websocket.Upgrader
+	mu            sync.RWMutex
+	httpServer    *http.Server
+	config        RemoteServerConfig
+	token         string
+	isRunning     bool
+	clients       map[*remoteClient]bool
+	lastState     []byte
+	upgrader      websocket.Upgrader
 	onRemoteWrite func(tabID string, isCoil bool, addr uint16, val uint16, boolVal bool) error
 	activeStateFn func() map[string]interface{}
 }
@@ -61,22 +87,32 @@ func NewRemoteServer(
 	return &RemoteServer{
 		config: RemoteServerConfig{
 			Port:       8088,
-			AllowWrite: true,
+			AllowWrite: false,
 		},
-		clients:       make(map[*websocket.Conn]bool),
+		clients:       make(map[*remoteClient]bool),
 		onRemoteWrite: onRemoteWrite,
 		activeStateFn: activeStateFn,
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return true // Allow connections from phone on LAN/VPN
-			},
-		},
+		// Default CheckOrigin rejects cross-origin pages, which blocks cross-site WebSocket hijacking.
+		upgrader: websocket.Upgrader{},
 	}
 }
 
+func newToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
 // GetNetworkInterfaces scans host network adapters and classifies LAN, WiFi, Tailscale and VPN IPs.
-func GetNetworkInterfaces(port uint16) []NetworkInterfaceInfo {
+func GetNetworkInterfaces(port uint16, token string) []NetworkInterfaceInfo {
 	var results []NetworkInterfaceInfo
+
+	query := ""
+	if token != "" {
+		query = "/?t=" + token
+	}
 
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -107,6 +143,7 @@ func GetNetworkInterfaces(port uint16) []NetworkInterfaceInfo {
 			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
 				continue
 			}
+			ip = ip.To4()
 
 			ipStr := ip.String()
 			// Ignore Windows auto-configured link-local APIPA 169.254.x.x
@@ -141,7 +178,7 @@ func GetNetworkInterfaces(port uint16) []NetworkInterfaceInfo {
 				IP:          ipStr,
 				Type:        netType,
 				Description: desc,
-				URL:         fmt.Sprintf("http://%s:%d", ipStr, port),
+				URL:         fmt.Sprintf("http://%s:%d%s", ipStr, port, query),
 			})
 		}
 	}
@@ -153,7 +190,7 @@ func GetNetworkInterfaces(port uint16) []NetworkInterfaceInfo {
 			IP:          "127.0.0.1",
 			Type:        "other",
 			Description: "Máy Cục Bộ (Local Loopback)",
-			URL:         fmt.Sprintf("http://127.0.0.1:%d", port),
+			URL:         fmt.Sprintf("http://127.0.0.1:%d%s", port, query),
 		})
 	}
 
@@ -161,6 +198,7 @@ func GetNetworkInterfaces(port uint16) []NetworkInterfaceInfo {
 }
 
 // Start launches the HTTP and WebSocket server listening on 0.0.0.0:Port.
+// A new access token is generated on every start; phones must present it (?t=...).
 func (s *RemoteServer) Start(cfg RemoteServerConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,37 +210,37 @@ func (s *RemoteServer) Start(cfg RemoteServerConfig) error {
 	if cfg.Port == 0 {
 		cfg.Port = 8088
 	}
-	s.config = cfg
-
-	mux := http.NewServeMux()
-
-	// 1. WebSocket Handler
-	mux.HandleFunc("/ws", s.handleWebSocket)
-
-	// 2. Info API
-	mux.HandleFunc("/api/info", s.handleAPIInfo)
-
-	// 3. Write API
-	mux.HandleFunc("/api/write", s.handleAPIWrite)
-
-	// 4. Standalone Mobile Web UI (Embedded HTML/CSS/JS)
-	mux.HandleFunc("/", s.handleMobileWeb)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
+	// Listen synchronously so a busy port is reported to the caller instead of failing silently.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
+	s.config = cfg
+	s.token = newToken()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWebSocket)
+	mux.HandleFunc("/api/info", s.handleAPIInfo)
+	mux.HandleFunc("/api/write", s.handleAPIWrite)
+	mux.HandleFunc("/", s.handleMobileWeb)
+
 	server := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	s.httpServer = server
 	s.isRunning = true
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			s.mu.Lock()
-			s.isRunning = false
+			if s.httpServer == server {
+				s.isRunning = false
+			}
 			s.mu.Unlock()
 		}
 	}()
@@ -219,42 +257,56 @@ func (s *RemoteServer) Stop() {
 		return
 	}
 
-	// Close all WebSocket clients
-	for conn := range s.clients {
-		_ = conn.Close()
+	for c := range s.clients {
+		c.close()
+		_ = c.conn.Close()
 	}
-	s.clients = make(map[*websocket.Conn]bool)
-	atomic.StoreInt64(&s.clientCount, 0)
+	s.clients = make(map[*remoteClient]bool)
 
 	_ = s.httpServer.Close()
 	s.httpServer = nil
 	s.isRunning = false
+	s.token = ""
 }
 
 // GetStatus returns the current live server status.
 func (s *RemoteServer) GetStatus() RemoteServerStatus {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	port := s.config.Port
 	if port == 0 {
 		port = 8088
 	}
-
-	return RemoteServerStatus{
+	status := RemoteServerStatus{
 		IsRunning:     s.isRunning,
 		Port:          port,
 		AllowWrite:    s.config.AllowWrite,
-		ActiveClients: int(atomic.LoadInt64(&s.clientCount)),
-		Interfaces:    GetNetworkInterfaces(port),
+		ActiveClients: len(s.clients),
+		Token:         s.token,
 	}
+	s.mu.RUnlock()
+
+	status.Interfaces = GetNetworkInterfaces(port, status.Token)
+	return status
+}
+
+// authorized checks the access token passed as ?t=... using a constant-time compare.
+func (s *RemoteServer) authorized(r *http.Request) bool {
+	s.mu.RLock()
+	token := s.token
+	s.mu.RUnlock()
+	given := r.URL.Query().Get("t")
+	return token != "" && subtle.ConstantTimeCompare([]byte(given), []byte(token)) == 1
+}
+
+func (s *RemoteServer) allowWrite() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.AllowWrite
 }
 
 // BroadcastPollResult sends telemetry update to all connected phone clients.
 func (s *RemoteServer) BroadcastPollResult(sessionID string, res modbus.PollResult) {
-	s.mu.RLock()
-	if !s.isRunning || len(s.clients) == 0 {
-		s.mu.RUnlock()
+	if !s.hasClients() {
 		return
 	}
 
@@ -263,8 +315,6 @@ func (s *RemoteServer) BroadcastPollResult(sessionID string, res modbus.PollResu
 		"session_id": sessionID,
 		"data":       res,
 	})
-	s.mu.RUnlock()
-
 	if err != nil {
 		return
 	}
@@ -272,94 +322,129 @@ func (s *RemoteServer) BroadcastPollResult(sessionID string, res modbus.PollResu
 	s.broadcastRaw(payload)
 }
 
-// BroadcastState sends full app state snapshot to clients.
+// BroadcastState sends full app state snapshot to clients and caches it for phones that connect later.
 func (s *RemoteServer) BroadcastState(state map[string]interface{}) {
-	s.mu.RLock()
-	if !s.isRunning || len(s.clients) == 0 {
-		s.mu.RUnlock()
-		return
-	}
-
 	payload, err := json.Marshal(map[string]interface{}{
 		"type":  "state_snapshot",
 		"state": state,
 	})
-	s.mu.RUnlock()
-
 	if err != nil {
 		return
 	}
 
-	s.broadcastRaw(payload)
+	s.mu.Lock()
+	s.lastState = payload
+	s.mu.Unlock()
+
+	if s.hasClients() {
+		s.broadcastRaw(payload)
+	}
+}
+
+func (s *RemoteServer) hasClients() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isRunning && len(s.clients) > 0
 }
 
 func (s *RemoteServer) broadcastRaw(payload []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	for conn := range s.clients {
-		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-		err := conn.WriteMessage(websocket.TextMessage, payload)
-		if err != nil {
-			_ = conn.Close()
-			delete(s.clients, conn)
-			atomic.AddInt64(&s.clientCount, -1)
+	for c := range s.clients {
+		c.enqueue(payload)
+	}
+}
+
+func (s *RemoteServer) removeClient(c *remoteClient) {
+	s.mu.Lock()
+	delete(s.clients, c)
+	s.mu.Unlock()
+	c.close()
+	_ = c.conn.Close()
+}
+
+// writePump is the only goroutine that writes to the client's connection.
+func (s *RemoteServer) writePump(c *remoteClient) {
+	defer s.removeClient(c)
+	for msg := range c.send {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
 		}
 	}
 }
 
+// remoteWriteRequest is the payload of a remote write command (WebSocket or HTTP).
+type remoteWriteRequest struct {
+	Type      string  `json:"type"`
+	TabID     string  `json:"tab_id"`
+	IsCoil    bool    `json:"is_coil"`
+	Address   *uint16 `json:"address"`
+	Value     uint16  `json:"value"`
+	BoolValue bool    `json:"bool_value"`
+}
+
 func (s *RemoteServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 
+	c := &remoteClient{conn: conn, send: make(chan []byte, clientSendBuffer)}
+
 	s.mu.Lock()
-	s.clients[conn] = true
-	atomic.AddInt64(&s.clientCount, 1)
+	s.clients[c] = true
+	initMsg := s.lastState
 	s.mu.Unlock()
 
-	// Send initial state snapshot if available
-	if s.activeStateFn != nil {
-		state := s.activeStateFn()
-		initMsg, _ := json.Marshal(map[string]interface{}{
+	if initMsg == nil && s.activeStateFn != nil {
+		initMsg, _ = json.Marshal(map[string]interface{}{
 			"type":  "state_snapshot",
-			"state": state,
+			"state": s.activeStateFn(),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, initMsg)
+	}
+	if initMsg != nil {
+		c.enqueue(initMsg)
 	}
 
-	// Read loop to handle client commands (ping, write, tab selection)
+	go s.writePump(c)
+
+	// Read loop to handle client commands (ping, write)
 	go func() {
-		defer func() {
-			s.mu.Lock()
-			delete(s.clients, conn)
-			atomic.AddInt64(&s.clientCount, -1)
-			s.mu.Unlock()
-			_ = conn.Close()
-		}()
+		defer s.removeClient(c)
+		conn.SetReadLimit(64 * 1024)
 
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				break
+				return
 			}
 
-			var req map[string]interface{}
-			if err := json.Unmarshal(msg, &req); err == nil {
-				msgType, _ := req["type"].(string)
-				if msgType == "ping" {
-					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
-				} else if msgType == "write" && s.config.AllowWrite && s.onRemoteWrite != nil {
-					tabID, _ := req["tab_id"].(string)
-					isCoil, _ := req["is_coil"].(bool)
-					addr := uint16(req["address"].(float64))
-					val := uint16(0)
-					if v, ok := req["value"].(float64); ok {
-						val = uint16(v)
-					}
-					boolVal, _ := req["bool_value"].(bool)
-					_ = s.onRemoteWrite(tabID, isCoil, addr, val, boolVal)
+			var req remoteWriteRequest
+			if err := json.Unmarshal(msg, &req); err != nil {
+				continue
+			}
+
+			switch req.Type {
+			case "ping":
+				c.enqueue([]byte(`{"type":"pong"}`))
+			case "write":
+				if !s.allowWrite() || s.onRemoteWrite == nil || req.Address == nil {
+					continue
+				}
+				result := map[string]interface{}{"type": "write_result", "success": true}
+				if err := s.onRemoteWrite(req.TabID, req.IsCoil, *req.Address, req.Value, req.BoolValue); err != nil {
+					result["success"] = false
+					result["error"] = err.Error()
+				}
+				if payload, err := json.Marshal(result); err == nil {
+					c.enqueue(payload)
 				}
 			}
 		}
@@ -367,53 +452,56 @@ func (s *RemoteServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *RemoteServer) handleAPIInfo(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	status := s.GetStatus()
+	status.Token = ""
 	_ = json.NewEncoder(w).Encode(status)
 }
 
 func (s *RemoteServer) handleAPIWrite(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	if r.Method == "OPTIONS" {
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		return
-	}
-
-	if r.Method != "POST" {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if !s.config.AllowWrite {
+	if !s.authorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Require a JSON content type so plain cross-site form posts are rejected.
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	if !s.allowWrite() {
 		http.Error(w, "Remote write is disabled on server", http.StatusForbidden)
 		return
 	}
 
-	var req struct {
-		TabID     string  `json:"tab_id"`
-		IsCoil    bool    `json:"is_coil"`
-		Address   uint16  `json:"address"`
-		Value     uint16  `json:"value"`
-		BoolValue bool    `json:"bool_value"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req remoteWriteRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Address == nil {
+		http.Error(w, "address is required", http.StatusBadRequest)
 		return
 	}
 
 	if s.onRemoteWrite != nil {
-		err := s.onRemoteWrite(req.TabID, req.IsCoil, req.Address, req.Value, req.BoolValue)
-		if err != nil {
+		if err := s.onRemoteWrite(req.TabID, req.IsCoil, *req.Address, req.Value, req.BoolValue); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
@@ -493,9 +581,15 @@ const embeddedMobileHTML = `<!DOCTYPE html>
     let currentTabId = '';
     let appSnapshot = null;
 
+    const accessToken = new URLSearchParams(window.location.search).get('t') || '';
+
+    function esc(v) {
+      return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     function connectWS() {
       const loc = window.location;
-      const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/ws';
+      const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/ws?t=' + encodeURIComponent(accessToken);
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
@@ -572,9 +666,9 @@ const embeddedMobileHTML = `<!DOCTYPE html>
         const card = document.createElement('div');
         card.className = 'p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 relative overflow-hidden ' + changeClass;
         card.innerHTML = 
-          '<div class="text-[10px] text-slate-400 truncate font-sans font-medium">' + (r.alias || ('Reg ' + r.address)) + '</div>' +
-          '<div class="text-lg font-bold font-mono text-cyan-300 mt-0.5 truncate">' + (r.displayValue || '--') + ' <span class="text-xs text-slate-400 font-sans font-normal">' + (r.unit || '') + '</span></div>' +
-          '<div class="text-[9px] text-slate-600 font-mono mt-0.5">' + (r.displayAddress || '') + '</div>';
+          '<div class="text-[10px] text-slate-400 truncate font-sans font-medium">' + esc(r.alias || ('Reg ' + r.address)) + '</div>' +
+          '<div class="text-lg font-bold font-mono text-cyan-300 mt-0.5 truncate">' + esc(r.displayValue || '--') + ' <span class="text-xs text-slate-400 font-sans font-normal">' + esc(r.unit || '') + '</span></div>' +
+          '<div class="text-[9px] text-slate-600 font-mono mt-0.5">' + esc(r.displayAddress || '') + '</div>';
         kpi.appendChild(card);
       });
 
@@ -586,14 +680,14 @@ const embeddedMobileHTML = `<!DOCTYPE html>
         item.innerHTML = 
           '<div class="flex-1 min-w-0 pr-3">' +
             '<div class="flex items-center space-x-1.5">' +
-              '<span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-bold">' + (r.displayAddress || r.address) + '</span>' +
-              '<span class="text-xs font-semibold text-slate-200 truncate font-sans">' + (r.alias || 'Chưa đặt tên') + '</span>' +
+              '<span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-bold">' + esc(r.displayAddress || r.address) + '</span>' +
+              '<span class="text-xs font-semibold text-slate-200 truncate font-sans">' + esc(r.alias || 'Chưa đặt tên') + '</span>' +
             '</div>' +
-            '<div class="text-[10px] text-slate-500 font-mono mt-1">Hex: <span class="text-emerald-400">' + (r.rawHex || '--') + '</span></div>' +
+            '<div class="text-[10px] text-slate-500 font-mono mt-1">Hex: <span class="text-emerald-400">' + esc(r.rawHex || '--') + '</span></div>' +
           '</div>' +
           '<div class="text-right">' +
-            '<div class="text-base font-bold font-mono text-amber-300">' + (r.displayValue || '--') + '</div>' +
-            '<div class="text-[10px] text-slate-400 font-sans">' + (r.unit || '') + '</div>' +
+            '<div class="text-base font-bold font-mono text-amber-300">' + esc(r.displayValue || '--') + '</div>' +
+            '<div class="text-[10px] text-slate-400 font-sans">' + esc(r.unit || '') + '</div>' +
           '</div>';
         list.appendChild(item);
       });

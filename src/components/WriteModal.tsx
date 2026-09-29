@@ -110,9 +110,14 @@ export const WriteModal: React.FC<WriteModalProps> = ({
             </div>
             <div>
               <span className="block text-[11px]">Address:</span>
-              <span className="font-mono text-cyan-400 text-sm font-bold">
-                {row.displayAddress} (Offset: {row.address})
-              </span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-mono text-cyan-400 text-sm font-bold">
+                  {row.displayAddress}
+                </span>
+                <span className="font-mono text-[11px] text-slate-400">
+                  (Dec: <span className="text-cyan-300 font-semibold">{row.address}</span> | Hex: <span className="text-purple-400 font-semibold">0x{(row.address & 0xffff).toString(16).toUpperCase().padStart(4, '0')}</span>)
+                </span>
+              </div>
             </div>
           </div>
 

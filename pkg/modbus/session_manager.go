@@ -22,6 +22,7 @@ type EngineSession struct {
 	Master      *ModbusClientWrapper
 	Slave       *ModbusSlaveServer
 	pollCancel  context.CancelFunc
+	lastSlaveID uint8 // Slave ID of the most recent poll/read, used for remote writes
 	mu          sync.Mutex
 }
 
@@ -133,6 +134,7 @@ func (sm *SessionManager) MasterStartPolling(sessionID string, def PollDefinitio
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sess.pollCancel = cancel
+	sess.lastSlaveID = def.SlaveID
 
 	scanRate := def.ScanRateMs
 	if scanRate < 50 {
@@ -178,9 +180,25 @@ func (sm *SessionManager) MasterStopPolling(sessionID string) {
 // MasterReadOnce executes a single read cycle.
 func (sm *SessionManager) MasterReadOnce(sessionID string, def PollDefinition) PollResult {
 	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
+	sess.mu.Lock()
+	sess.lastSlaveID = def.SlaveID
+	sess.mu.Unlock()
 	res := sess.Master.ExecuteRead(def)
 	res.SessionID = sessionID
 	return res
+}
+
+// MasterLastSlaveID returns the Slave ID last used for polling on the session (0 if unknown).
+func (sm *SessionManager) MasterLastSlaveID(sessionID string) uint8 {
+	sm.mu.RLock()
+	sess, exists := sm.sessions[sessionID]
+	sm.mu.RUnlock()
+	if !exists {
+		return 0
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.lastSlaveID
 }
 
 // MasterWriteRegister writes a single register.
@@ -215,31 +233,19 @@ func (sm *SessionManager) SlaveStop(sessionID string) {
 // SlaveGetSlice retrieves memory slice from the slave session.
 func (sm *SessionManager) SlaveGetSlice(sessionID string, table string, startAddr uint16, qty uint16) SlaveMemorySlice {
 	sess := sm.GetOrCreateSession(sessionID, RoleSlave)
-	store := sess.Slave.GetMemoryStore()
-	if store == nil {
-		// Provide default initialized store for view even before server is started
-		sess.Slave.store = NewSlaveMemoryStore(sessionID, 1, sm.onSlaveAct)
-		store = sess.Slave.store
-	}
-	return store.GetSlice(table, startAddr, qty)
+	return sess.Slave.GetMemoryStore().GetSlice(table, startAddr, qty)
 }
 
 // SlaveSetRegister updates a holding or input register in the slave session memory.
 func (sm *SessionManager) SlaveSetRegister(sessionID string, table string, addr uint16, val uint16) {
 	sess := sm.GetOrCreateSession(sessionID, RoleSlave)
-	store := sess.Slave.GetMemoryStore()
-	if store != nil {
-		store.SetRegister(table, addr, val)
-	}
+	sess.Slave.GetMemoryStore().SetRegister(table, addr, val)
 }
 
 // SlaveSetCoil updates a coil or discrete input in the slave session memory.
 func (sm *SessionManager) SlaveSetCoil(sessionID string, table string, addr uint16, val bool) {
 	sess := sm.GetOrCreateSession(sessionID, RoleSlave)
-	store := sess.Slave.GetMemoryStore()
-	if store != nil {
-		store.SetCoil(table, addr, val)
-	}
+	sess.Slave.GetMemoryStore().SetCoil(table, addr, val)
 }
 
 // SlaveStartSimulation starts auto simulation.

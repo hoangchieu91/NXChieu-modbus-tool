@@ -296,6 +296,7 @@ export namespace web {
 	    port: number;
 	    allow_write: boolean;
 	    active_clients: number;
+	    token: string;
 	    interfaces: NetworkInterfaceInfo[];
 	
 	    static createFrom(source: any = {}) {
@@ -308,6 +309,7 @@ export namespace web {
 	        this.port = source["port"];
 	        this.allow_write = source["allow_write"];
 	        this.active_clients = source["active_clients"];
+	        this.token = source["token"];
 	        this.interfaces = this.convertValues(source["interfaces"], NetworkInterfaceInfo);
 	    }
 	

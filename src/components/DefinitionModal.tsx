@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Settings, Check, HelpCircle } from 'lucide-react';
 import { PollDefinition } from '../types/modbus';
+import { parseModbusAddress, formatModbusAddress } from '../utils/formatters';
 
 interface DefinitionModalProps {
   isOpen: boolean;
@@ -28,6 +29,9 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
   const [slaveId, setSlaveId] = useState(definition.slave_id);
   const [functionCode, setFunctionCode] = useState(definition.function_code);
   const [address, setAddress] = useState(definition.start_address);
+  const [addrMode, setAddrMode] = useState<'dec' | 'hex'>('dec');
+  const [addrInput, setAddrInput] = useState<string>(String(definition.start_address));
+  const [addrError, setAddrError] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(definition.quantity);
   const [scanRate, setScanRate] = useState(definition.scan_rate_ms);
 
@@ -35,18 +39,49 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
     setSlaveId(definition.slave_id);
     setFunctionCode(definition.function_code);
     setAddress(definition.start_address);
+    setAddrInput(
+      addrMode === 'hex'
+        ? formatModbusAddress(definition.start_address, 'hex')
+        : String(definition.start_address)
+    );
+    setAddrError(null);
     setQuantity(definition.quantity);
     setScanRate(definition.scan_rate_ms);
   }, [definition, isOpen]);
+
+  const handleToggleAddrMode = (mode: 'dec' | 'hex') => {
+    if (mode === addrMode) return;
+    setAddrMode(mode);
+    if (mode === 'hex') {
+      setAddrInput(formatModbusAddress(address, 'hex'));
+    } else {
+      setAddrInput(formatModbusAddress(address, 'dec'));
+    }
+    setAddrError(null);
+  };
+
+  const handleAddressChange = (valStr: string) => {
+    setAddrInput(valStr);
+    const parsed = parseModbusAddress(valStr, addrMode);
+    if (parsed.isValid) {
+      setAddress(parsed.value);
+      setAddrError(null);
+    } else {
+      setAddrError(parsed.error || 'Địa chỉ không hợp lệ');
+    }
+  };
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const parsed = parseModbusAddress(addrInput, addrMode);
+    const finalAddress = parsed.isValid ? parsed.value : address;
+
     onSave({
       slave_id: Math.max(1, Math.min(247, slaveId)),
       function_code: functionCode,
-      start_address: Math.max(0, address),
+      start_address: Math.max(0, Math.min(65535, finalAddress)),
       quantity: Math.max(1, Math.min(125, quantity)),
       scan_rate_ms: Math.max(50, scanRate),
     });
@@ -114,24 +149,67 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
           {/* Start Address & Quantity in 2 cols */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <div className="flex items-center mb-1">
-                <label className="text-slate-400">
-                  Start Address (Offset 0-based):
-                </label>
-                <FieldTooltip text="Địa chỉ thanh ghi bắt đầu tính từ 0. Ví dụ: offset 0 tương ứng thanh ghi 40001 (Holding) hoặc 30001 (Input) theo chuẩn Modicon." />
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center">
+                  <label className="text-slate-300 font-medium">
+                    Start Address:
+                  </label>
+                  <FieldTooltip text="Địa chỉ thanh ghi bắt đầu tính từ 0. Bấm DEC hoặc HEX để chuyển chế độ nhập. Hệ thống cũng tự động nhận dạng tiền tố '0x' hoặc hậu tố 'H' (ví dụ: 0x1000 hoặc 1000h)." />
+                </div>
+                {/* Segmented Pill DEC / HEX */}
+                <div className="flex items-center bg-slate-950 p-0.5 rounded border border-slate-700/80 text-[10px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleAddrMode('dec')}
+                    className={`px-1.5 py-0.5 rounded transition ${
+                      addrMode === 'dec'
+                        ? 'bg-cyan-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    DEC
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleAddrMode('hex')}
+                    className={`px-1.5 py-0.5 rounded transition ${
+                      addrMode === 'hex'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    HEX
+                  </button>
+                </div>
               </div>
               <input
-                type="number"
-                min={0}
-                max={65535}
-                value={address}
-                onChange={(e) => setAddress(Number(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
+                type="text"
+                value={addrInput}
+                onChange={(e) => handleAddressChange(e.target.value)}
+                placeholder={addrMode === 'hex' ? '0x0000 hoặc 1000' : '0 đến 65535'}
+                className={`w-full bg-slate-950 border rounded px-2.5 py-1.5 text-slate-200 focus:outline-none font-mono ${
+                  addrError
+                    ? 'border-rose-500 focus:border-rose-500 text-rose-300'
+                    : 'border-slate-700 focus:border-cyan-500'
+                }`}
                 required
               />
-              <span className="text-[10px] text-slate-500 mt-0.5 block">
-                PLC Ref: {functionCode === 3 ? 40001 + address : functionCode === 4 ? 30001 + address : address}
-              </span>
+              {addrError ? (
+                <span className="text-[10px] text-rose-400 mt-0.5 block">{addrError}</span>
+              ) : (
+                <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1 font-mono">
+                  <span>
+                    {addrMode === 'dec' ? (
+                      <>Hex: <span className="text-purple-400 font-bold">{formatModbusAddress(address, 'hex')}</span></>
+                    ) : (
+                      <>Dec: <span className="text-cyan-400 font-bold">{address}</span></>
+                    )}
+                  </span>
+                  <span className="text-slate-500 font-sans">
+                    PLC: {functionCode === 3 ? 40001 + address : functionCode === 4 ? 30001 + address : address + 1}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div>
