@@ -1,0 +1,653 @@
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import {
+  X,
+  Play,
+  Pause,
+  Trash2,
+  TrendingUp,
+  Maximize2,
+  Minimize2,
+  Download,
+  Eye,
+  EyeOff,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Radio,
+} from 'lucide-react';
+import { ChartDataPoint, ChartTrace } from '../types/modbus';
+
+interface TrendChartProps {
+  traces: ChartTrace[];
+  traceData: Record<string, ChartDataPoint[]>;
+  onToggleTraceVisibility: (traceId: string) => void;
+  onRemoveTrace: (traceId: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+}
+
+export const TrendChart: React.FC<TrendChartProps> = ({
+  traces,
+  traceData,
+  onToggleTraceVisibility,
+  onRemoveTrace,
+  onClear,
+  onClose,
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Display mode
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
+
+  // Zoom & Pan state
+  const [viewPointsCount, setViewPointsCount] = useState<number>(60); // number of points shown in window
+  const [panOffset, setPanOffset] = useState<number>(0); // 0 = latest (auto-follow realtime)
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [dragStartX, setDragStartX] = useState<number>(0);
+  const [dragStartOffset, setDragStartOffset] = useState<number>(0);
+
+  // Mouse Inspection Crosshair
+  const [hoverInfo, setHoverInfo] = useState<{
+    x: number;
+    y: number;
+    timestamp: string;
+    points: { label: string; value: number; unit: string; color: string }[];
+  } | null>(null);
+
+  // Frozen data snapshot when paused
+  const [frozenData, setFrozenData] = useState<Record<string, ChartDataPoint[]>>({});
+  useEffect(() => {
+    if (!isPaused) {
+      setFrozenData(traceData);
+    }
+  }, [traceData, isPaused]);
+
+  const activeData = isPaused ? frozenData : traceData;
+  const visibleTraces = useMemo(() => traces.filter((t) => t.visible), [traces]);
+
+  // Determine common timestamps or max points length
+  const maxAvailablePoints = useMemo(() => {
+    let maxLen = 0;
+    traces.forEach((t) => {
+      const pts = activeData[t.id] || [];
+      if (pts.length > maxLen) maxLen = pts.length;
+    });
+    return maxLen;
+  }, [traces, activeData]);
+
+  // Compute overall min, max across all visible traces in current view window
+  const windowSliceRange = useMemo(() => {
+    if (maxAvailablePoints === 0) return { startIdx: 0, endIdx: 0 };
+    const end = Math.max(0, maxAvailablePoints - panOffset);
+    const start = Math.max(0, end - viewPointsCount);
+    return { startIdx: start, endIdx: end };
+  }, [maxAvailablePoints, panOffset, viewPointsCount]);
+
+  // Compute Stats for each trace in current window
+  const traceStats = useMemo(() => {
+    const stats: Record<string, { current: number; min: number; max: number; avg: number }> = {};
+
+    traces.forEach((t) => {
+      const allPts = activeData[t.id] || [];
+      const windowPts = allPts.slice(windowSliceRange.startIdx, windowSliceRange.endIdx);
+      if (windowPts.length === 0) {
+        stats[t.id] = { current: 0, min: 0, max: 0, avg: 0 };
+      } else {
+        const vals = windowPts.map((p) => p.value);
+        const min = Math.min(...vals);
+        const max = Math.max(...vals);
+        const sum = vals.reduce((a, b) => a + b, 0);
+        const current = windowPts[windowPts.length - 1].value;
+        stats[t.id] = { current, min, max, avg: sum / vals.length };
+      }
+    });
+
+    return stats;
+  }, [traces, activeData, windowSliceRange]);
+
+  // Overall Global Min/Max for chart Y-axis
+  const globalYRange = useMemo(() => {
+    let globalMin = Infinity;
+    let globalMax = -Infinity;
+
+    visibleTraces.forEach((t) => {
+      const allPts = activeData[t.id] || [];
+      const windowPts = allPts.slice(windowSliceRange.startIdx, windowSliceRange.endIdx);
+      windowPts.forEach((p) => {
+        if (p.value < globalMin) globalMin = p.value;
+        if (p.value > globalMax) globalMax = p.value;
+      });
+    });
+
+    if (globalMin === Infinity || globalMax === -Infinity) {
+      return { min: 0, max: 100, range: 100 };
+    }
+
+    if (globalMin === globalMax) {
+      globalMin -= 1;
+      globalMax += 1;
+    } else {
+      const margin = (globalMax - globalMin) * 0.15;
+      globalMin -= margin;
+      globalMax += margin;
+    }
+
+    return { min: globalMin, max: globalMax, range: globalMax - globalMin };
+  }, [visibleTraces, activeData, windowSliceRange]);
+
+  // Main Canvas Render
+  const drawChart = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+
+    const width = rect.width;
+    const height = rect.height;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const padding = { top: 20, right: 60, bottom: 26, left: 20 };
+    const chartW = width - padding.left - padding.right;
+    const chartH = height - padding.top - padding.bottom;
+
+    if (visibleTraces.length === 0 || maxAvailablePoints === 0) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(
+        visibleTraces.length === 0
+          ? 'Chưa chọn đường tín hiệu nào (Vui lòng bật hiển thị ít nhất 1 biến)'
+          : 'Đang chờ dữ liệu gửi về từ Modbus Master/Slave...',
+        width / 2,
+        height / 2
+      );
+      return;
+    }
+
+    // 1. Draw Grid Lines (Horizontal)
+    ctx.strokeStyle = '#1e293b'; // slate-800
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+
+    const gridSteps = 4;
+    for (let i = 0; i <= gridSteps; i++) {
+      const y = padding.top + (chartH / gridSteps) * i;
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(padding.left + chartW, y);
+      ctx.stroke();
+
+      const val = globalYRange.max - (globalYRange.range / gridSteps) * i;
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(val.toFixed(2), padding.left + chartW + 6, y + 3);
+    }
+    ctx.setLineDash([]);
+
+    // 2. Draw Each Visible Trace
+    const totalPointsInWindow = windowSliceRange.endIdx - windowSliceRange.startIdx;
+    const xStep = totalPointsInWindow > 1 ? chartW / (totalPointsInWindow - 1) : chartW;
+
+    visibleTraces.forEach((trace) => {
+      const allPts = activeData[trace.id] || [];
+      const windowPts = allPts.slice(windowSliceRange.startIdx, windowSliceRange.endIdx);
+      if (windowPts.length === 0) return;
+
+      const coords: { x: number; y: number; val: number; time: string }[] = [];
+      windowPts.forEach((p, idx) => {
+        const x = padding.left + idx * xStep;
+        const normalizedY = (p.value - globalYRange.min) / globalYRange.range;
+        const y = padding.top + chartH - normalizedY * chartH;
+        coords.push({ x, y, val: p.value, time: p.timestamp });
+      });
+
+      if (coords.length > 0) {
+        // Gradient fill below first visible trace if single, or light transparent fill
+        if (visibleTraces.length === 1) {
+          const grad = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartH);
+          grad.addColorStop(0, `${trace.color}40`);
+          grad.addColorStop(1, `${trace.color}00`);
+
+          ctx.beginPath();
+          ctx.moveTo(coords[0].x, padding.top + chartH);
+          coords.forEach((pt) => ctx.lineTo(pt.x, pt.y));
+          ctx.lineTo(coords[coords.length - 1].x, padding.top + chartH);
+          ctx.closePath();
+          ctx.fillStyle = grad;
+          ctx.fill();
+        }
+
+        // Draw Spline
+        ctx.strokeStyle = trace.color;
+        ctx.lineWidth = 2;
+        ctx.shadowColor = `${trace.color}80`;
+        ctx.shadowBlur = 6;
+
+        ctx.beginPath();
+        ctx.moveTo(coords[0].x, coords[0].y);
+        for (let i = 1; i < coords.length; i++) {
+          const xc = (coords[i].x + coords[i - 1].x) / 2;
+          const yc = (coords[i].y + coords[i - 1].y) / 2;
+          ctx.quadraticCurveTo(coords[i - 1].x, coords[i - 1].y, xc, yc);
+        }
+        if (coords.length > 1) {
+          const last = coords[coords.length - 1];
+          ctx.lineTo(last.x, last.y);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Draw Points
+        if (totalPointsInWindow < 50) {
+          coords.forEach((pt, i) => {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, i === coords.length - 1 ? 4 : 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = trace.color;
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          });
+        } else {
+          // Only last point
+          const last = coords[coords.length - 1];
+          ctx.beginPath();
+          ctx.arc(last.x, last.y, 4, 0, Math.PI * 2);
+          ctx.fillStyle = trace.color;
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
+    });
+
+    // 3. Draw Inspection Crosshair if active
+    if (hoverInfo) {
+      ctx.strokeStyle = '#94a3b8'; // slate-400
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+
+      ctx.beginPath();
+      ctx.moveTo(hoverInfo.x, padding.top);
+      ctx.lineTo(hoverInfo.x, padding.top + chartH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Timestamp label at bottom of crosshair
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(hoverInfo.x - 40, padding.top + chartH + 3, 80, 18);
+      ctx.strokeStyle = '#334155';
+      ctx.strokeRect(hoverInfo.x - 40, padding.top + chartH + 3, 80, 18);
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(hoverInfo.timestamp, hoverInfo.x, padding.top + chartH + 16);
+    }
+  }, [activeData, visibleTraces, maxAvailablePoints, windowSliceRange, globalYRange, hoverInfo]);
+
+  useEffect(() => {
+    drawChart();
+  }, [drawChart]);
+
+  // Handle Mouse Hover / Crosshair on Canvas
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    if (isDragging) {
+      const deltaX = mouseX - dragStartX;
+      const pointsShift = Math.round((deltaX / (rect.width - 80)) * viewPointsCount);
+      const newOffset = Math.max(0, Math.min(maxAvailablePoints - viewPointsCount, dragStartOffset + pointsShift));
+      setPanOffset(newOffset);
+      return;
+    }
+
+    const padding = { top: 20, right: 60, bottom: 26, left: 20 };
+    const chartW = rect.width - padding.left - padding.right;
+
+    if (mouseX < padding.left || mouseX > padding.left + chartW) {
+      setHoverInfo(null);
+      return;
+    }
+
+    const totalPointsInWindow = windowSliceRange.endIdx - windowSliceRange.startIdx;
+    if (totalPointsInWindow <= 0) {
+      setHoverInfo(null);
+      return;
+    }
+
+    const relX = mouseX - padding.left;
+    const pointIdxInWindow = Math.round((relX / chartW) * (totalPointsInWindow - 1));
+    const targetIdx = windowSliceRange.startIdx + pointIdxInWindow;
+
+    // Collect point info from all visible traces
+    let sampleTime = '';
+    const sampledPoints: { label: string; value: number; unit: string; color: string }[] = [];
+
+    visibleTraces.forEach((trace) => {
+      const pts = activeData[trace.id] || [];
+      if (targetIdx >= 0 && targetIdx < pts.length) {
+        const pt = pts[targetIdx];
+        if (!sampleTime) sampleTime = pt.timestamp;
+        sampledPoints.push({
+          label: `${trace.displayAddress} ${trace.label}`,
+          value: pt.value,
+          unit: trace.unit,
+          color: trace.color,
+        });
+      }
+    });
+
+    if (sampledPoints.length > 0) {
+      setHoverInfo({
+        x: mouseX,
+        y: mouseY,
+        timestamp: sampleTime,
+        points: sampledPoints,
+      });
+    } else {
+      setHoverInfo(null);
+    }
+  };
+
+  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    setIsDragging(true);
+    setDragStartX(e.clientX - rect.left);
+    setDragStartOffset(panOffset);
+  };
+
+  const handleCanvasMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleCanvasMouseLeave = () => {
+    setIsDragging(false);
+    setHoverInfo(null);
+  };
+
+  // Mouse Wheel Zoom
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (e.deltaY < 0) {
+      // Zoom in
+      setViewPointsCount((prev) => Math.max(15, prev - 10));
+    } else {
+      // Zoom out
+      setViewPointsCount((prev) => Math.min(300, prev + 15));
+    }
+  };
+
+  // Export CSV for all traces
+  const handleExportCSV = () => {
+    if (traces.length === 0 || maxAvailablePoints === 0) return;
+
+    // Get union of timestamps or base on trace 0
+    const primaryTrace = traces[0];
+    const primaryPts = activeData[primaryTrace.id] || [];
+
+    const headers = ['Timestamp', ...traces.map((t) => `"${t.displayAddress} - ${t.label} (${t.unit})"` )];
+    const lines = [headers.join(',')];
+
+    primaryPts.forEach((p, idx) => {
+      const row = [p.timestamp];
+      traces.forEach((t) => {
+        const pts = activeData[t.id] || [];
+        const val = pts[idx] ? pts[idx].value : '';
+        row.push(String(val));
+      });
+      lines.push(row.join(','));
+    });
+
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Trend_MultiTrace_${Date.now()}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (traces.length === 0) return null;
+
+  return (
+    <div
+      ref={containerRef}
+      className={`flex flex-col bg-slate-950 border-t border-cyan-800/40 text-xs font-sans transition-all duration-300 shadow-2xl relative ${
+        isExpanded ? 'h-96' : 'h-72'
+      }`}
+    >
+      {/* Top Header & Toolbar */}
+      <div className="flex flex-wrap items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-slate-200 select-none gap-2">
+        {/* Left: Title & Realtime Status */}
+        <div className="flex items-center space-x-2">
+          <TrendingUp className="w-4 h-4 text-cyan-400" />
+          <span className="font-bold text-slate-100 text-sm">Biểu Đồ Xu Hướng Đa Kênh</span>
+          <span className="text-slate-500 font-mono text-[11px]">
+            ({traces.length} đường, hiển thị {Math.min(viewPointsCount, maxAvailablePoints)}/{maxAvailablePoints} mẫu)
+          </span>
+
+          {/* Pan offset badge / Back to Live */}
+          {panOffset > 0 && (
+            <button
+              onClick={() => setPanOffset(0)}
+              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-600/30 text-rose-300 border border-rose-500/50 hover:bg-rose-600/40 text-[11px] animate-pulse transition-all font-medium"
+              title="Đang xem lịch sử cũ. Nhấp để quay về bám sát thời gian thực (Auto Follow)"
+            >
+              <Radio className="w-3 h-3 text-rose-400" />
+              <span>Trở Về Live</span>
+            </button>
+          )}
+        </div>
+
+        {/* Center: Zoom / Navigation Controls */}
+        <div className="flex items-center space-x-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+          <button
+            onClick={() => setViewPointsCount((p) => Math.max(15, p - 10))}
+            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            title="Phóng to dòng thời gian (Zoom In)"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          <span className="text-[11px] font-mono text-cyan-300 px-1">{viewPointsCount} pts</span>
+          <button
+            onClick={() => setViewPointsCount((p) => Math.min(300, p + 15))}
+            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            title="Thu nhỏ dòng thời gian (Zoom Out)"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <div className="h-3.5 w-px bg-slate-800 mx-1" />
+          <button
+            onClick={() => {
+              setPanOffset(0);
+              setViewPointsCount(60);
+            }}
+            className="flex items-center space-x-1 px-1.5 py-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors text-[10px]"
+            title="Đặt lại khung nhìn mặc định"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset</span>
+          </button>
+        </div>
+
+        {/* Right Actions */}
+        <div className="flex items-center space-x-1.5">
+          {/* Pause / Resume */}
+          <button
+            onClick={() => setIsPaused(!isPaused)}
+            className={`px-2 py-1 rounded flex items-center space-x-1 transition-colors ${
+              isPaused
+                ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+            }`}
+            title={isPaused ? 'Tiếp tục bám sóng trực tiếp' : 'Tạm dừng đóng băng biểu đồ để phân tích'}
+          >
+            {isPaused ? <Play className="w-3 h-3 fill-current" /> : <Pause className="w-3 h-3" />}
+            <span className="text-[11px]">{isPaused ? 'Resume' : 'Pause'}</span>
+          </button>
+
+          {/* Export CSV */}
+          <button
+            onClick={handleExportCSV}
+            className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+            title="Xuất toàn bộ dữ liệu các kênh ra file CSV"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Clear history */}
+          <button
+            onClick={onClear}
+            className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-400 transition-colors"
+            title="Xóa toàn bộ lịch sử đo"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Expand / Minimize */}
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+            title={isExpanded ? 'Thu nhỏ biểu đồ' : 'Mở rộng biểu đồ'}
+          >
+            {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+
+          {/* Close */}
+          <button
+            onClick={onClose}
+            className="p-1 rounded hover:bg-rose-900/50 text-slate-400 hover:text-white transition-colors"
+            title="Đóng bảng biểu đồ"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Traces Legend Pill Bar */}
+      <div className="flex items-center space-x-2 px-3 py-1 bg-slate-950 border-b border-slate-900 overflow-x-auto select-none">
+        <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider shrink-0">
+          Các kênh:
+        </span>
+        {traces.map((trace) => {
+          const stats = traceStats[trace.id] || { current: 0, min: 0, max: 0, avg: 0 };
+          return (
+            <div
+              key={trace.id}
+              className={`flex items-center space-x-1.5 px-2 py-0.5 rounded-full border transition-all shrink-0 ${
+                trace.visible
+                  ? 'bg-slate-900/90 border-slate-700'
+                  : 'bg-slate-950/60 border-slate-900 opacity-50'
+              }`}
+            >
+              {/* Color indicator dot */}
+              <div
+                className="w-2.5 h-2.5 rounded-full shadow-sm"
+                style={{ backgroundColor: trace.color }}
+              />
+
+              {/* Trace Label */}
+              <span className="font-semibold text-slate-200 text-xs">
+                {trace.displayAddress}
+              </span>
+              <span className="text-slate-400 text-[11px] truncate max-w-[120px]">
+                {trace.label}
+              </span>
+
+              {/* Current Value Readout */}
+              <span
+                className="font-mono font-bold text-xs ml-1"
+                style={{ color: trace.color }}
+              >
+                {stats.current.toFixed(2)} {trace.unit}
+              </span>
+
+              {/* Visibility Toggle */}
+              <button
+                onClick={() => onToggleTraceVisibility(trace.id)}
+                className="text-slate-400 hover:text-slate-200 transition-colors p-0.5"
+                title={trace.visible ? 'Ẩn đường này' : 'Hiện đường này'}
+              >
+                {trace.visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-slate-600" />}
+              </button>
+
+              {/* Remove Trace Button */}
+              <button
+                onClick={() => onRemoveTrace(trace.id)}
+                className="text-slate-500 hover:text-rose-400 transition-colors p-0.5"
+                title="Bỏ theo dõi đường này"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Canvas Area with Pan/Zoom & Inspection Cursor */}
+      <div className="flex-1 relative w-full h-full bg-slate-950/90 cursor-crosshair overflow-hidden">
+        <canvas
+          ref={canvasRef}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseDown={handleCanvasMouseDown}
+          onMouseUp={handleCanvasMouseUp}
+          onMouseLeave={handleCanvasMouseLeave}
+          onWheel={handleWheel}
+          className="w-full h-full block"
+        />
+
+        {/* Floating Crosshair HUD Tooltip */}
+        {hoverInfo && (
+          <div
+            className="absolute z-20 pointer-events-none bg-slate-900/95 border border-slate-700/80 rounded-lg p-2.5 shadow-2xl backdrop-blur-sm text-xs font-mono min-w-[180px]"
+            style={{
+              left: Math.min(hoverInfo.x + 15, (containerRef.current?.clientWidth || 800) - 210),
+              top: Math.max(10, Math.min(hoverInfo.y - 40, (containerRef.current?.clientHeight || 300) - 130)),
+            }}
+          >
+            <div className="text-slate-400 font-sans border-b border-slate-800 pb-1 mb-1.5 flex items-center justify-between text-[11px]">
+              <span>Mốc thời gian:</span>
+              <span className="text-cyan-400 font-bold">{hoverInfo.timestamp}</span>
+            </div>
+            <div className="space-y-1">
+              {hoverInfo.points.map((pt, i) => (
+                <div key={i} className="flex items-center justify-between space-x-3">
+                  <div className="flex items-center space-x-1.5 truncate max-w-[130px]">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: pt.color }} />
+                    <span className="text-slate-300 font-sans truncate">{pt.label}</span>
+                  </div>
+                  <span className="font-bold font-mono" style={{ color: pt.color }}>
+                    {pt.value.toFixed(2)} {pt.unit}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Pan helper hint */}
+        <div className="absolute bottom-1 right-14 text-[10px] text-slate-600 font-sans pointer-events-none select-none">
+          Kéo chuột để di chuyển (Pan) • Lăn chuột để phóng to/thu nhỏ (Zoom)
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,42 @@
+# Executables & Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.bin
+build/bin/
+NXChieu-modbus-tool.exe
+
+# Dependencies & Build artifacts
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Tauri legacy build cache (3.3GB)
+src-tauri/target/
+
+# Go artifacts
+*.test
+*.prof
+
+# Logs & temp files
+*.log
+err.txt
+out.txt
+package.json.md5
+
+# Large third-party installers & inputs
+input/
+
+# IDE & OS files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
