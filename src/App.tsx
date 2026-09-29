@@ -360,6 +360,9 @@ export const App: React.FC = () => {
       } else if (e.key === 'F9') {
         e.preventDefault();
         setIsMobileModalOpen((prev) => !prev);
+      } else if (e.key === 'F10') {
+        e.preventDefault();
+        setIsProtocolAnalyzerOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1516,6 +1519,7 @@ export const App: React.FC = () => {
         onOpenHelp={() => setIsHelpModalOpen(true)}
         onOpenScanner={() => setIsScannerModalOpen(true)}
         onOpenMobileRemote={() => setIsMobileModalOpen(true)}
+        onOpenProtocolAnalyzer={() => setIsProtocolAnalyzerOpen(true)}
       />
 
 

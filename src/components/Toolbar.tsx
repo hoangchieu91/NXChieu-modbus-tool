@@ -54,6 +54,7 @@ interface ToolbarProps {
   onOpenHelp?: () => void;
   onOpenScanner?: () => void;
   onOpenMobileRemote?: () => void;
+  onOpenProtocolAnalyzer?: () => void;
 }
 
 
@@ -85,6 +86,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onOpenHelp,
   onOpenScanner,
   onOpenMobileRemote,
+  onOpenProtocolAnalyzer,
 }) => {
   return (
     <div className="flex flex-wrap items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs gap-2">
@@ -354,6 +356,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Terminal className="w-3.5 h-3.5" />
           <span>Traffic Log</span>
         </button>
+
+        {/* Protocol Analyzer & Bus Health Modal Trigger */}
+        {onOpenProtocolAnalyzer && (
+          <button
+            onClick={onOpenProtocolAnalyzer}
+            className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-cyan-950/70 hover:bg-cyan-900/90 text-cyan-300 border border-cyan-500/50 hover:border-cyan-400 transition-all font-medium shadow-sm"
+            title="Mở Protocol Analyzer & Bus Health (F10)"
+          >
+            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Analyzer</span>
+          </button>
+        )}
 
         {/* User Guide Modal Trigger */}
         {onOpenHelp && (
