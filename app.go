@@ -344,6 +344,17 @@ func (a *App) OpenSnifferCapture() (string, error) {
 	return path, nil
 }
 
+// PickCaptureFile opens an Open File dialog without replacing the current active sniffer frames.
+func (a *App) PickCaptureFile(title string) (string, error) {
+	if title == "" {
+		title = "Chọn tệp Modbus capture (.nxcap)"
+	}
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   title,
+		Filters: []runtime.FileFilter{{DisplayName: "NXChieu Capture (*.nxcap)", Pattern: "*.nxcap"}},
+	})
+}
+
 func (a *App) ExportSnifferCSV() (string, error) {
 	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           "Xuất báo cáo Modbus CSV",
@@ -354,6 +365,61 @@ func (a *App) ExportSnifferCSV() (string, error) {
 		return path, err
 	}
 	return path, sniffer.ExportCSV(path, a.sniffer.Snapshot(0))
+}
+
+// LoadSnifferProfileFile opens a file dialog to import a register profile catalog (.nxprof or .json).
+func (a *App) LoadSnifferProfileFile() (string, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Nạp Profile thanh ghi thiết bị Modbus",
+		Filters: []runtime.FileFilter{{DisplayName: "Modbus Profile (*.nxprof;*.json)", Pattern: "*.nxprof;*.json"}},
+	})
+	if err != nil || path == "" {
+		return path, err
+	}
+	cat, err := sniffer.LoadProfileCatalogFile(path)
+	if err != nil {
+		return path, err
+	}
+	a.sniffer.SetProfileCatalog(cat)
+	return path, nil
+}
+
+// SetSnifferProfileCatalog sets the active profile catalog from a JSON string.
+func (a *App) SetSnifferProfileCatalog(jsonContent string) error {
+	cat, err := sniffer.LoadProfileCatalog([]byte(jsonContent))
+	if err != nil {
+		return err
+	}
+	a.sniffer.SetProfileCatalog(cat)
+	return nil
+}
+
+// GetSnifferProfileCatalog returns the currently loaded profile catalog.
+func (a *App) GetSnifferProfileCatalog() *sniffer.ProfileCatalog {
+	return a.sniffer.GetProfileCatalog()
+}
+
+// CompareSnifferCaptures performs differential health analysis between two capture files.
+func (a *App) CompareSnifferCaptures(pathA, pathB string) (*sniffer.CaptureDiffResult, error) {
+	return sniffer.DiffCaptureFiles(pathA, pathB)
+}
+
+// ExportSnifferHTMLReport exports a self-contained, printable HTML Shift Health Report.
+func (a *App) ExportSnifferHTMLReport(opts sniffer.ShiftReportOptions) (string, error) {
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Xuất Báo Cáo Sức Khỏe Modbus (HTML)",
+		DefaultFilename: "modbus-shift-report.html",
+		Filters:         []runtime.FileFilter{{DisplayName: "HTML Report (*.html)", Pattern: "*.html"}},
+	})
+	if err != nil || path == "" {
+		return path, err
+	}
+	return path, sniffer.ExportShiftReport(path, a.sniffer.Snapshot(0), opts)
+}
+
+// CheckNpcapStatus checks whether the Npcap/WinPcap driver is installed and lists adapters.
+func (a *App) CheckNpcapStatus() sniffer.NpcapStatus {
+	return sniffer.CheckNpcapStatus()
 }
 
 // --- Web Remote Server Operations ---

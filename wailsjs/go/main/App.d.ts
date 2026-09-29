@@ -79,3 +79,17 @@ export function StopRemoteServer():Promise<web.RemoteServerStatus>;
 export function StopSniffer():Promise<sniffer.CaptureStatus>;
 
 export function UpdateRemoteServerState(arg1:Record<string, any>):Promise<void>;
+
+export function PickCaptureFile(arg1:string):Promise<string>;
+
+export function LoadSnifferProfileFile():Promise<string>;
+
+export function SetSnifferProfileCatalog(arg1:string):Promise<void>;
+
+export function GetSnifferProfileCatalog():Promise<any>;
+
+export function CompareSnifferCaptures(arg1:string,arg2:string):Promise<any>;
+
+export function ExportSnifferHTMLReport(arg1:any):Promise<string>;
+
+export function CheckNpcapStatus():Promise<any>;

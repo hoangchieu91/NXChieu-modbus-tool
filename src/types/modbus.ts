@@ -115,6 +115,7 @@ export interface DecodedModbusFrame {
   and_mask?: number;
   or_mask?: number;
   text_data?: string;
+  engineering_values?: EngineeringValue[];
 }
 
 export interface CapturedModbusFrame {
@@ -193,7 +194,15 @@ export interface SnifferSnapshot {
   baseline?: SnifferBaselineProfile;
 }
 
-export type SnifferCaptureMode = 'tcp_proxy' | 'rtu_over_tcp_proxy' | 'passive_serial';
+export interface EngineeringValue {
+  address: number;
+  name: string;
+  value: string;
+  numeric_value: number;
+  unit: string;
+}
+
+export type SnifferCaptureMode = 'tcp_proxy' | 'rtu_over_tcp_proxy' | 'passive_serial' | 'passive_pcap';
 
 export interface SnifferCaptureConfig {
   mode: SnifferCaptureMode;
@@ -206,6 +215,75 @@ export interface SnifferCaptureConfig {
   data_bits?: number;
   parity?: string;
   stop_bits?: number;
+  interface_name?: string;
+  bpf_filter?: string;
+}
+
+export interface DeviceDiff {
+  unit_id: number;
+  status: 'new' | 'missing' | 'regressed' | 'improved' | 'unchanged';
+  health_score_a: number;
+  health_score_b: number;
+  score_delta: number;
+  requests_a: number;
+  requests_b: number;
+  success_rate_a: number;
+  success_rate_b: number;
+  success_rate_delta: number;
+  p95_latency_us_a: number;
+  p95_latency_us_b: number;
+  latency_delta_us: number;
+  remarks: string;
+}
+
+export interface CaptureDiffResult {
+  total_frames_a: number;
+  total_frames_b: number;
+  health_score_a: number;
+  health_score_b: number;
+  health_score_delta: number;
+  bus_state_a: string;
+  bus_state_b: string;
+  p95_latency_us_a: number;
+  p95_latency_us_b: number;
+  p95_delta_us: number;
+  error_rate_a: number;
+  error_rate_b: number;
+  error_rate_delta: number;
+  timeout_count_a: number;
+  timeout_count_b: number;
+  new_devices: number[];
+  missing_devices: number[];
+  regressed_devices: number[];
+  improved_devices: number[];
+  device_diffs: DeviceDiff[];
+  verdict: string;
+  summary: string;
+}
+
+export interface ShiftReportOptions {
+  title: string;
+  operator: string;
+  shift: string;
+  notes: string;
+}
+
+export interface NetworkInterfaceInfo {
+  index: number;
+  name: string;
+  hardware_addr: string;
+  ips?: string[];
+  is_up: boolean;
+  is_loopback: boolean;
+}
+
+export interface NpcapStatus {
+  installed: boolean;
+  version: string;
+  driver_path?: string;
+  interfaces: NetworkInterfaceInfo[];
+  download_url: string;
+  instructions: string;
 }
 
 export interface SnifferCaptureStatus {

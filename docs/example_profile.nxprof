@@ -1,0 +1,92 @@
+{
+  "name": "Hệ thống Tủ Điện & Môi trường Trạm (MSB & Sensors)",
+  "version": "1.0",
+  "devices": {
+    "1": {
+      "unit_id": 1,
+      "device_name": "Đồng hồ đa năng Schneider PM5350",
+      "model": "PM5350",
+      "registers": [
+        {
+          "address": 3000,
+          "name": "Điện áp Pha L1-N",
+          "data_type": "float32_abcd",
+          "scale": 1.0,
+          "unit": "V",
+          "description": "Điện áp pha A"
+        },
+        {
+          "address": 3002,
+          "name": "Điện áp Pha L2-N",
+          "data_type": "float32_abcd",
+          "scale": 1.0,
+          "unit": "V",
+          "description": "Điện áp pha B"
+        },
+        {
+          "address": 3004,
+          "name": "Điện áp Pha L3-N",
+          "data_type": "float32_abcd",
+          "scale": 1.0,
+          "unit": "V",
+          "description": "Điện áp pha C"
+        },
+        {
+          "address": 3006,
+          "name": "Dòng điện Pha L1",
+          "data_type": "float32_cdba",
+          "scale": 1.0,
+          "unit": "A",
+          "description": "Dòng tải pha A"
+        },
+        {
+          "address": 3010,
+          "name": "Tần số lưới điện",
+          "data_type": "uint16",
+          "scale": 0.01,
+          "unit": "Hz",
+          "description": "Tần số hệ thống"
+        },
+        {
+          "address": 3020,
+          "name": "Tổng công suất tác dụng",
+          "data_type": "int32",
+          "scale": 0.001,
+          "unit": "kW",
+          "description": "Tổng Active Power"
+        }
+      ]
+    },
+    "2": {
+      "unit_id": 2,
+      "device_name": "Cảm biến Nhiệt ẩm Phòng Server",
+      "model": "TH-01",
+      "registers": [
+        {
+          "address": 100,
+          "name": "Nhiệt độ môi trường",
+          "data_type": "int16",
+          "scale": 0.1,
+          "unit": "°C",
+          "description": "Ambient Temperature"
+        },
+        {
+          "address": 101,
+          "name": "Độ ẩm không khí",
+          "data_type": "uint16",
+          "scale": 0.1,
+          "unit": "%RH",
+          "description": "Relative Humidity"
+        },
+        {
+          "address": 102,
+          "name": "Áp suất khí quyển",
+          "data_type": "uint16",
+          "scale": 0.1,
+          "unit": "hPa",
+          "description": "Atmospheric Pressure"
+        }
+      ]
+    }
+  }
+}

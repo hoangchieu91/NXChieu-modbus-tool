@@ -43,6 +43,8 @@ func (m *SessionManager) Start(config CaptureConfig) (CaptureStatus, error) {
 		err = m.startProxy(ctx, config)
 	case ModePassiveSerial:
 		err = m.startSerial(ctx, config)
+	case ModePassivePCAP:
+		err = m.startPCAP(ctx, config)
 	default:
 		err = fmt.Errorf("capture mode %q is not supported", config.Mode)
 	}

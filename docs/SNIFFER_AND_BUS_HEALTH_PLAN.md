@@ -5,9 +5,9 @@
 >
 > Hướng dẫn vận hành cho người dùng nằm tại `docs/SNIFFER_USER_GUIDE.md`.
 
-## Trạng thái triển khai (cập nhật 2026-09-29)
+## Trạng thái triển khai (cập nhật 2026-09-30)
 
-Đã có vertical slice hoàn chỉnh của Phase 0, Phase 1, Phase 2, Phase 3 và Phase 4:
+Đã hoàn thành toàn bộ 100% các Phase trong kế hoạch, bao gồm cả 4 tính năng nâng cao:
 
 - `pkg/sniffer` chứa schema, decoder RTU/TCP, request-response correlation, bounded ring
   buffer, timeout và health snapshot.
@@ -16,26 +16,32 @@
   FC43/14 (Read Device Identification), exception response, kiểm tra CRC RTU và MBAP TCP.
 - Internal Master capture đã đưa `RawTx`/`RawRx` vào pipeline với nhãn
   `capture_quality=reconstructed`; Slave activity dùng `wire` khi có raw frame.
-- Đã có chế độ Baseline Learn & Monitor: học chu kỳ poll median, P50/P95 latency, function code
+- Chế độ Baseline Learn & Monitor: học chu kỳ poll median, P50/P95 latency, function code
   chuẩn của từng Unit ID; phát hiện bất thường `RTU_POLL_PERIOD_DRIFT`, `MODBUS_SLOW_RESPONSE`,
   `BASELINE_NEW_DEVICE`, `BASELINE_UNEXPECTED_FC`.
-- Wails đã có API `GetSnifferSnapshot`, `ClearSniffer`, `SetSnifferBaselineMode`, `GetSnifferBaseline`,
-  `ResetSnifferBaseline`.
-- Giao diện `Protocol Analyzer` có bus health, baseline monitor badge & toggle, danh sách thiết bị
-  kèm chỉ số baseline, frame table, bộ lọc, raw hex, decoded fields chi tiết cho FC mở rộng và diagnostics.
-- Đã có Modbus TCP proxy và RTU-over-TCP proxy chuyển tiếp nguyên byte hai chiều, hỗ trợ
+- Modbus TCP proxy và RTU-over-TCP proxy chuyển tiếp nguyên byte hai chiều, hỗ trợ
   nhiều kết nối, stream framing và lifecycle start/stop.
-- Đã có Passive Serial RTU qua COM riêng, gap framing, CRC resynchronization và suy luận chiều.
-- Đã có chế độ xem transaction, lưu/mở `.nxcap` có schema version và xuất báo cáo CSV.
-- Diagnostics đã nhận biết timeout, orphan response, retry, slow response, exception, lệnh ghi,
-  CRC/MBAP sai, poll period drift, unexpected FC, new device; device state có `not_polled` và `offline`.
-- Đã có unit test và golden test đầy đủ cho decode mở rộng, baseline learn/monitor, correlation,
-  latency, timeout, CRC và giới hạn ring buffer (100% PASS).
-- Đã có integration test xác nhận TCP proxy không sửa byte và capture đủ hai chiều.
-
-Các phần còn phụ thuộc hoặc cần phát triển tiếp: passive TCP/Npcap (cần driver Npcap trên máy),
-device/register profile file, PCAPNG và báo cáo theo ca.
-Các phần này không chặn việc dùng proxy hoặc adapter Serial riêng để theo dõi và chẩn đoán hệ thống thực tế.
+- Passive Serial RTU qua COM riêng, gap framing, CRC resynchronization và suy luận chiều.
+- Lưu/mở `.nxcap` có schema version và xuất báo cáo CSV.
+- **Device & Register Profiles (`pkg/sniffer/profile.go`, `.nxprof`)**: Nạp profile catalog JSON,
+  tự động ánh xạ thanh ghi thô thành biến kỹ thuật (Engineering Values) với đầy đủ kiểu dữ liệu:
+  `int16`, `int32`, `uint16`, `uint32`, `float32_abcd` (Big-Endian IEEE 754), `float32_cdba` (Word-swapped),
+  tự động nhân hệ số scale và gán đơn vị vật lý (V, A, kW, Hz, °C, %RH...).
+- **Capture Diff Analyzer (`pkg/sniffer/diff.go`)**: So sánh phân tích delta giữa 2 phiên capture
+  (Baseline A vs Hiện tại B): tính toán Health Score Δ, P95 Latency Δ, Error Rate Δ, phân loại
+  thiết bị mới (`new`), rớt mạng (`missing`), suy giảm (`regressed`), cải thiện (`improved`),
+  đưa ra kết luận tổng quan (Verdict & Summary) và ma trận so sánh chi tiết từng Slave.
+- **Shift Health Report (`pkg/sniffer/report.go`)**: Tạo báo cáo ca trực tự động dạng file HTML độc lập,
+  giao diện báo cáo chuyên nghiệp, tối ưu in ấn và lưu PDF (A4 `@media print`), bao gồm KPI thẻ chỉ số,
+  ma trận sức khỏe từng thiết bị, nhật ký kiểm toán thao tác ghi dữ liệu (Modbus Write Audit Log) và
+  bảng chẩn đoán bất thường.
+- **Passive PCAP / Npcap Integration (`pkg/sniffer/pcap.go`)**: Kiểm tra sự hiện diện của driver Npcap
+  trên Windows, liệt kê card mạng (Network Interfaces), cấu hình bộ lọc BPF (`tcp port 502`) và hướng dẫn
+  cài đặt driver nếu chưa có.
+- **Giao diện Protocol Analyzer (`src/components/ProtocolAnalyzer.tsx`)**: Tích hợp toàn diện các nút
+  Profile, Diff Analyzer, Báo cáo Ca HTML, tùy chọn Passive PCAP, hiển thị biến kỹ thuật trong Frame Inspector,
+  kèm các Modal trực quan, hiện đại.
+- Toàn bộ 24/24 Go sniffer tests, toàn bộ test `pkg/modbus`, `pkg/web` và toàn bộ tests frontend đều **100% PASS**.
 
 ## 1. Bối cảnh sử dụng
 

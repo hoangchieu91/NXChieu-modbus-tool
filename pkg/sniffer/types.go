@@ -17,6 +17,7 @@ const (
 	ModeTCPProxy      CaptureMode = "tcp_proxy"
 	ModeRTUOverTCP    CaptureMode = "rtu_over_tcp_proxy"
 	ModePassiveSerial CaptureMode = "passive_serial"
+	ModePassivePCAP   CaptureMode = "passive_pcap"
 )
 
 type Direction string
@@ -63,9 +64,10 @@ type DecodedModbus struct {
 	WriteAddress  *uint16  `json:"write_address,omitempty"`
 	WriteQuantity *uint16  `json:"write_quantity,omitempty"`
 	WriteValues   []uint16 `json:"write_values,omitempty"`
-	AndMask       *uint16  `json:"and_mask,omitempty"`
-	OrMask        *uint16  `json:"or_mask,omitempty"`
-	TextData      string   `json:"text_data,omitempty"`
+	AndMask           *uint16            `json:"and_mask,omitempty"`
+	OrMask            *uint16            `json:"or_mask,omitempty"`
+	TextData          string             `json:"text_data,omitempty"`
+	EngineeringValues []EngineeringValue `json:"engineering_values,omitempty"`
 }
 
 type CapturedFrame struct {
@@ -159,8 +161,10 @@ type CaptureConfig struct {
 	SerialPort string      `json:"serial_port,omitempty"`
 	BaudRate   int         `json:"baud_rate,omitempty"`
 	DataBits   int         `json:"data_bits,omitempty"`
-	Parity     string      `json:"parity,omitempty"`
-	StopBits   int         `json:"stop_bits,omitempty"`
+	Parity        string      `json:"parity,omitempty"`
+	StopBits      int         `json:"stop_bits,omitempty"`
+	InterfaceName string      `json:"interface_name,omitempty"`
+	BPFFilter     string      `json:"bpf_filter,omitempty"`
 }
 
 type CaptureStatus struct {
@@ -189,4 +193,5 @@ type pendingRequest struct {
 	when    time.Time
 	unitID  uint8
 	fc      uint8
+	address *uint16
 }

@@ -67,8 +67,36 @@ export async function openSnifferCapture(): Promise<string> {
   return await (AppMethods as any).OpenSnifferCapture();
 }
 
+export async function pickCaptureFile(title?: string): Promise<string> {
+  return await (AppMethods as any).PickCaptureFile(title || '');
+}
+
 export async function exportSnifferCSV(): Promise<string> {
   return await (AppMethods as any).ExportSnifferCSV();
+}
+
+export async function loadSnifferProfileFile(): Promise<string> {
+  return await (AppMethods as any).LoadSnifferProfileFile();
+}
+
+export async function setSnifferProfileCatalog(jsonContent: string): Promise<void> {
+  return await (AppMethods as any).SetSnifferProfileCatalog(jsonContent);
+}
+
+export async function getSnifferProfileCatalog(): Promise<any> {
+  return await (AppMethods as any).GetSnifferProfileCatalog();
+}
+
+export async function compareSnifferCaptures(pathA: string, pathB: string): Promise<import('../types/modbus').CaptureDiffResult> {
+  return await (AppMethods as any).CompareSnifferCaptures(pathA, pathB);
+}
+
+export async function exportSnifferHTMLReport(opts: import('../types/modbus').ShiftReportOptions): Promise<string> {
+  return await (AppMethods as any).ExportSnifferHTMLReport(opts);
+}
+
+export async function checkNpcapStatus(): Promise<import('../types/modbus').NpcapStatus> {
+  return await (AppMethods as any).CheckNpcapStatus();
 }
 
 export async function listSerialPorts(): Promise<SerialPortDetail[]> {

@@ -35,6 +35,7 @@ type Engine struct {
 	devicePollIntervals map[uint8][]float64
 	deviceLatencies     map[uint8][]uint64
 	deviceFCs           map[uint8]map[uint8]bool
+	profiles            *ProfileCatalog
 }
 
 func NewEngine(capacity int) *Engine {
@@ -196,8 +197,11 @@ func (e *Engine) correlate(frame *CapturedFrame, now time.Time) {
 		if d.FunctionCode == 5 || d.FunctionCode == 6 || d.FunctionCode == 15 || d.FunctionCode == 16 || d.FunctionCode == 22 || d.FunctionCode == 23 {
 			frame.Diagnostics = append(frame.Diagnostics, DiagnosticItem{RuleID: "MODBUS_WRITE_OBSERVED", Severity: "info", Scope: "device", Message: "Phát hiện lệnh ghi dữ liệu Modbus", Recommendation: "Đối chiếu thao tác ghi với nhật ký vận hành nếu thay đổi không mong đợi", Confidence: 100})
 		}
+		if e.profiles != nil && d.Address != nil && len(d.Values) > 0 {
+			d.EngineeringValues = e.profiles.DecodeEngineeringValues(d.UnitID, *d.Address, d.Values)
+		}
 		e.processBaselineRequest(frame, d, now)
-		e.pending[key] = pendingRequest{frameID: frame.ID, convID: convID, seq: frame.Sequence, when: now, unitID: d.UnitID, fc: d.FunctionCode}
+		e.pending[key] = pendingRequest{frameID: frame.ID, convID: convID, seq: frame.Sequence, when: now, unitID: d.UnitID, fc: d.FunctionCode, address: d.Address}
 		e.recomputeDevice(dev)
 		return
 	}
@@ -217,6 +221,9 @@ func (e *Engine) correlate(frame *CapturedFrame, now time.Time) {
 	if ok {
 		delete(e.pending, key)
 		frame.ConversationID = pending.convID
+		if e.profiles != nil && pending.address != nil && len(d.Values) > 0 {
+			d.EngineeringValues = e.profiles.DecodeEngineeringValues(d.UnitID, *pending.address, d.Values)
+		}
 		if now.After(pending.when) {
 			frame.ResponseTimeUS = uint64(now.Sub(pending.when).Microseconds())
 			e.latencies = appendBounded(e.latencies, frame.ResponseTimeUS, 4096)
@@ -341,6 +348,18 @@ func (e *Engine) ResetBaseline() BaselineProfile {
 	defer e.mu.Unlock()
 	e.resetBaselineLocked()
 	return e.snapshotBaselineLocked()
+}
+
+func (e *Engine) SetProfileCatalog(cat *ProfileCatalog) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.profiles = cat
+}
+
+func (e *Engine) GetProfileCatalog() *ProfileCatalog {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.profiles
 }
 
 func (e *Engine) resetBaselineLocked() {
@@ -590,6 +609,7 @@ func cloneFrame(frame CapturedFrame) CapturedFrame {
 		p.Values = append([]uint16(nil), p.Values...)
 		p.Bits = append([]bool(nil), p.Bits...)
 		p.WriteValues = append([]uint16(nil), p.WriteValues...)
+		p.EngineeringValues = append([]EngineeringValue(nil), p.EngineeringValues...)
 		frame.Parsed = &p
 	}
 	return frame

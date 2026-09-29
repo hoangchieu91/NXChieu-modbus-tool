@@ -153,3 +153,31 @@ export function StopSniffer() {
 export function UpdateRemoteServerState(arg1) {
   return window['go']['main']['App']['UpdateRemoteServerState'](arg1);
 }
+
+export function PickCaptureFile(arg1) {
+  return window['go']['main']['App']['PickCaptureFile'](arg1);
+}
+
+export function LoadSnifferProfileFile() {
+  return window['go']['main']['App']['LoadSnifferProfileFile']();
+}
+
+export function SetSnifferProfileCatalog(arg1) {
+  return window['go']['main']['App']['SetSnifferProfileCatalog'](arg1);
+}
+
+export function GetSnifferProfileCatalog() {
+  return window['go']['main']['App']['GetSnifferProfileCatalog']();
+}
+
+export function CompareSnifferCaptures(arg1, arg2) {
+  return window['go']['main']['App']['CompareSnifferCaptures'](arg1, arg2);
+}
+
+export function ExportSnifferHTMLReport(arg1) {
+  return window['go']['main']['App']['ExportSnifferHTMLReport'](arg1);
+}
+
+export function CheckNpcapStatus() {
+  return window['go']['main']['App']['CheckNpcapStatus']();
+}
