@@ -13,6 +13,7 @@ import {
   Save,
   FileSpreadsheet,
   HelpCircle,
+  Search,
 } from 'lucide-react';
 import { SessionRole } from '../types/modbus';
 
@@ -35,7 +36,9 @@ interface MenuBarProps {
   onSaveProject: () => void;
   onExportCSV: () => void;
   onOpenHelp?: () => void;
+  onOpenScanner?: () => void;
 }
+
 
 export const MenuBar: React.FC<MenuBarProps> = ({
   role,
@@ -56,6 +59,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onSaveProject,
   onExportCSV,
   onOpenHelp,
+  onOpenScanner,
 }) => {
   return (
     <div className="flex items-center justify-between px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 select-none">
@@ -135,7 +139,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 {isPolling ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
                 <span>{isPolling ? 'Pause Polling' : 'Start Polling'}</span>
               </button>
+
+              {/* Modbus Scanner Trigger */}
+              {onOpenScanner && (
+                <button
+                  onClick={onOpenScanner}
+                  className="px-2 py-0.5 rounded hover:bg-slate-800 text-cyan-300 flex items-center space-x-1 transition-colors font-medium border border-cyan-800/40 bg-cyan-950/40 ml-1"
+                  title="Mở Bộ Quét & Thám Tử Modbus (Slave ID, Baudrate, Register Explorer)"
+                >
+                  <Search className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Bộ Quét (Scanner)</span>
+                </button>
+              )}
             </>
+
           ) : (
             <>
               {/* Slave Setup */}

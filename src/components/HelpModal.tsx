@@ -10,6 +10,7 @@ import {
   Keyboard,
   CheckCircle2,
   FileSpreadsheet,
+  Search,
 } from 'lucide-react';
 
 interface HelpModalProps {
@@ -17,7 +18,8 @@ interface HelpModalProps {
   onClose: () => void;
 }
 
-type HelpTab = 'quickstart' | 'master' | 'slave' | 'splitview' | 'chart' | 'hotkeys';
+type HelpTab = 'quickstart' | 'master' | 'slave' | 'splitview' | 'chart' | 'scanner' | 'hotkeys';
+
 
 export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
   const [activeTab, setActiveTab] = useState<HelpTab>('quickstart');
@@ -116,6 +118,18 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
           </button>
 
           <button
+            onClick={() => setActiveTab('scanner')}
+            className={`flex items-center space-x-1.5 px-3 py-2 border-b-2 font-medium transition-all ${
+              activeTab === 'scanner'
+                ? 'border-emerald-400 text-emerald-300 bg-emerald-950/30 rounded-t'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>Bộ Quét & Thám Tử (F4)</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('hotkeys')}
             className={`flex items-center space-x-1.5 px-3 py-2 border-b-2 font-medium transition-all ${
               activeTab === 'hotkeys'
@@ -127,6 +141,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
             <span>Phím Tắt</span>
           </button>
         </div>
+
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4 text-sm leading-relaxed">
@@ -410,7 +425,75 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
             </div>
           )}
 
-          {/* TAB 6: HOTKEYS */}
+          {/* TAB 6: SCANNER & MULTI-COLUMN EXPLORER */}
+          {activeTab === 'scanner' && (
+            <div className="space-y-4">
+              <div className="bg-slate-950/60 p-4 rounded-lg border border-slate-800">
+                <h3 className="text-base font-semibold text-emerald-400 flex items-center space-x-2">
+                  <Search className="w-4 h-4" />
+                  <span>Bộ Quét & Thám Tử Modbus (Industrial Scanner & Explorer)</span>
+                </h3>
+                <p className="text-slate-300 mt-2">
+                  Khi đến hiện trường tích hợp thiết bị mới mà không có tài liệu kỹ thuật hoặc không rõ thông số truyền thông, bộ quét sẽ tự động kiểm tra và phân tích giải mã toàn diện mà không cần đoán mò.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                  <div className="p-3 bg-slate-900/80 rounded border border-slate-800">
+                    <span className="font-semibold text-cyan-300 text-xs block mb-1">
+                      1. Quét Địa Chỉ Slave ID
+                    </span>
+                    <p className="text-slate-400 text-xs">
+                      Dò tìm tuần tự dải địa chỉ Slave (ví dụ 1 - 247). Hệ thống phân biệt rõ: Phản hồi hợp lệ (Online), Phản hồi lỗi Modbus Exception (Online - có thiết bị nhưng sai FC/Address), và Timeout (Offline).
+                    </p>
+                  </div>
+                  <div className="p-3 bg-slate-900/80 rounded border border-slate-800">
+                    <span className="font-semibold text-amber-300 text-xs block mb-1">
+                      2. Tự Động Dò Tốc Độ Baudrate
+                    </span>
+                    <p className="text-slate-400 text-xs">
+                      Thử nghiệm lần lượt các cặp Baudrate (2400 đến 115200) và Parity (None, Even, Odd). Khi thiết bị phản hồi ACK, hệ thống báo ngay thông số chính xác và cho phép kết nối 1-click.
+                    </p>
+                  </div>
+                  <div className="p-3 bg-slate-900/80 rounded border border-slate-800">
+                    <span className="font-semibold text-fuchsia-300 text-xs block mb-1">
+                      3. Giải Mã Đa Cột Động
+                    </span>
+                    <p className="text-slate-400 text-xs">
+                      Hiển thị đồng thời tất cả các dạng giải mã: Int16, UInt16, Int32 (ABCD/CDAB), UInt32, Float32 (4 byte-order), Int64/UInt64, và đặc biệt là <strong>Đồng hồ nước 48-bit (BE/LE & BCD 12 số)</strong>!
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Water meter detailed guide */}
+              <div className="bg-slate-950/60 p-4 rounded-lg border border-slate-800">
+                <h4 className="text-sm font-bold text-fuchsia-400 flex items-center space-x-1.5">
+                  <span>🌊 Chuyên Đề: Giải Mã Đồng Hồ Nước 48-bit (3 Thanh Ghi 16-bit / 6 Bytes)</span>
+                </h4>
+                <p className="text-slate-300 mt-2 text-xs">
+                  Nhiều dòng lưu lượng kế và đồng hồ nước công nghiệp (Zenner, George Fischer, Kent/Elster, Unimag...) sử dụng 3 thanh ghi 16-bit liên tiếp để truyền chỉ số tổng (Totalizer):
+                </p>
+                <div className="space-y-2 mt-2 text-xs">
+                  <div className="p-2.5 bg-slate-900/80 rounded border border-slate-800 font-mono">
+                    <strong className="text-cyan-400">1. Số nguyên 48-bit (Integer 48-bit):</strong>
+                    <div className="text-slate-300 mt-1">
+                      • Big-Endian: <code className="text-amber-300">(R0 &lt;&lt; 32) | (R1 &lt;&lt; 16) | R2</code>
+                      <br />
+                      • Little-Endian: <code className="text-amber-300">(R2 &lt;&lt; 32) | (R1 &lt;&lt; 16) | R0</code>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-slate-900/80 rounded border border-slate-800 font-mono">
+                    <strong className="text-pink-400">2. Mã hóa BCD 48-bit (Binary Coded Decimal - 12 Con Lăn Cơ Khí):</strong>
+                    <div className="text-slate-300 mt-1">
+                      Mỗi byte chứa 2 chữ số BCD (tổng 12 chữ số cho 6 bytes). Ví dụ giá trị hex <code className="text-amber-300">0x0012 0x3456 0x7890</code> sẽ giải mã thành chỉ số cơ học thực tế: <code className="text-emerald-400">1234567890</code>.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 7: HOTKEYS */}
           {activeTab === 'hotkeys' && (
             <div className="space-y-4">
               <div className="bg-slate-950/60 p-4 rounded-lg border border-slate-800">
@@ -432,6 +515,10 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                     <kbd className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-cyan-400 font-mono font-bold">F3</kbd>
                   </div>
                   <div className="py-2.5 flex items-center justify-between">
+                    <span className="text-slate-300 font-semibold text-emerald-400">Mở Bộ Quét & Thám Tử Modbus (Scanner)</span>
+                    <kbd className="px-2 py-1 bg-emerald-950 border border-emerald-700 rounded text-emerald-300 font-mono font-bold">F4</kbd>
+                  </div>
+                  <div className="py-2.5 flex items-center justify-between">
                     <span className="text-slate-300">Đọc 1 lần (Read Once)</span>
                     <kbd className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-cyan-400 font-mono font-bold">F7</kbd>
                   </div>
@@ -451,6 +538,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
               </div>
             </div>
           )}
+
         </div>
 
         {/* Footer */}

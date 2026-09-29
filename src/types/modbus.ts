@@ -9,7 +9,15 @@ export type DataFormat =
   | 'float_dcba'
   | 'long_abcd'
   | 'long_cdab'
+  | 'uint32_abcd'
+  | 'uint32_cdab'
+  | 'int64'
+  | 'uint64'
+  | 'water_48_be'
+  | 'water_48_le'
+  | 'water_48_bcd'
   | 'ascii';
+
 
 export interface SerialPortDetail {
   port_name: string;
@@ -190,3 +198,52 @@ export interface WriteCoilParam {
   address: number;
   value: boolean;
 }
+
+export interface SlaveScanItem {
+  slave_id: number;
+  status: 'online' | 'exception' | 'offline' | string;
+  detail: string;
+  latency_ms: number;
+  raw_rx?: string;
+}
+
+export interface BaudScanItem {
+  baud_rate: number;
+  parity: string;
+  stop_bits: number;
+  success: boolean;
+  latency_ms: number;
+  detail: string;
+}
+
+export interface RegisterScanItem {
+  address: number;
+  valid: boolean;
+  value: number;
+  hex: string;
+  detail: string;
+}
+
+export interface MultiColumnDecoded {
+  address: number;
+  displayAddress: string;
+  hex: string;
+  bin: string;
+  int16: number;
+  uint16: number;
+  int32_abcd: number;
+  int32_cdab: number;
+  uint32_abcd: number;
+  uint32_cdab: number;
+  float_abcd: string;
+  float_cdab: string;
+  float_badc: string;
+  float_dcba: string;
+  int64: string;
+  uint64: string;
+  water_48_be: string;
+  water_48_le: string;
+  water_48_bcd: string;
+  ascii: string;
+}
+

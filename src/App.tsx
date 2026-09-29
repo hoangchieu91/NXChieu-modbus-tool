@@ -31,6 +31,8 @@ import { WriteModal } from './components/WriteModal';
 import { SlaveModal } from './components/SlaveModal';
 import { TrendChart } from './components/TrendChart';
 import { HelpModal } from './components/HelpModal';
+import { ScannerModal } from './components/ScannerModal';
+
 
 import {
   ChartDataPoint,
@@ -180,12 +182,15 @@ export const App: React.FC = () => {
     []
   );
 
-  // Global F1 Hotkey for Help
+  // Global Hotkeys: F1 (Help), F4 (Scanner)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F1') {
         e.preventDefault();
         setIsHelpModalOpen((prev) => !prev);
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        setIsScannerModalOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -202,8 +207,10 @@ export const App: React.FC = () => {
   const [isDefinitionModalOpen, setIsDefinitionModalOpen] = useState<boolean>(false);
   const [isWriteModalOpen, setIsWriteModalOpen] = useState<boolean>(false);
   const [isSlaveModalOpen, setIsSlaveModalOpen] = useState<boolean>(false);
+  const [isScannerModalOpen, setIsScannerModalOpen] = useState<boolean>(false);
   const [selectedRowForWrite, setSelectedRowForWrite] = useState<RegisterRow | null>(null);
   const [selectedTabForWrite, setSelectedTabForWrite] = useState<TabSession | null>(null);
+
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const activeState = tabStates[activeTab.id] || createEmptyTabState();
@@ -576,7 +583,51 @@ export const App: React.FC = () => {
     refreshSlaveSlice(activeTab.id, table, activeTab.slaveStartAddr, activeTab.slaveQuantity);
   };
 
+  // --- Scanner Apply Handlers ---
+
+  const handleApplySlaveId = (slaveId: number) => {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId
+          ? { ...t, definition: { ...t.definition, slave_id: slaveId } }
+          : t
+      )
+    );
+  };
+
+  const handleApplyScannerConnection = async (port: string, baud: number, parity: string) => {
+    const cfg: ConnectionConfig = {
+      type: 'serial',
+      port,
+      baud_rate: baud,
+      data_bits: 8,
+      parity,
+      stop_bits: 1,
+      timeout_ms: 1000,
+    };
+    await handleConnect(cfg);
+  };
+
+  const handleApplyScannerRange = (fc: number, startAddr: number, qty: number) => {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              definition: {
+                ...t.definition,
+                function_code: fc,
+                start_address: startAddr,
+                quantity: Math.min(100, Math.max(1, qty)),
+              },
+            }
+          : t
+      )
+    );
+  };
+
   // --- Inline Write & Coil Toggle Handlers ---
+
 
   const handleInlineWriteForTab = async (tabId: string, address: number, valueStr: string) => {
     const targetTab = tabs.find((t) => t.id === tabId) || activeTab;
@@ -1019,6 +1070,7 @@ export const App: React.FC = () => {
         onSaveProject={handleSaveProject}
         onExportCSV={handleExportCSV}
         onOpenHelp={() => setIsHelpModalOpen(true)}
+        onOpenScanner={() => setIsScannerModalOpen(true)}
       />
 
       {/* 2. Toolbar */}
@@ -1052,7 +1104,9 @@ export const App: React.FC = () => {
         hasActiveChart={chartTraces.length > 0}
         onToggleChart={() => setIsChartVisible(!isChartVisible)}
         onOpenHelp={() => setIsHelpModalOpen(true)}
+        onOpenScanner={() => setIsScannerModalOpen(true)}
       />
+
 
       {/* 3. Tab Bar */}
       <TabBar
@@ -1272,7 +1326,18 @@ export const App: React.FC = () => {
 
       {/* 7. Comprehensive Interactive User Guide Modal */}
       <HelpModal isOpen={isHelpModalOpen} onClose={() => setIsHelpModalOpen(false)} />
+
+      {/* 8. Modbus Industrial Scanner & Multi-Column Explorer Modal */}
+      <ScannerModal
+        isOpen={isScannerModalOpen}
+        onClose={() => setIsScannerModalOpen(false)}
+        activeSession={activeTab}
+        onApplySlaveId={handleApplySlaveId}
+        onApplyConnection={handleApplyScannerConnection}
+        onApplyRange={handleApplyScannerRange}
+      />
     </div>
+
   );
 };
 

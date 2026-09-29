@@ -239,3 +239,70 @@ export function subscribeSlaveActivity(callback: (data: SlaveActivityEvent) => v
     return () => {};
   }
 }
+
+// --- Diagnostic & Scanner API Wrappers ---
+
+export async function scanSlaveIDs(
+  sessionId: string,
+  startId: number,
+  endId: number,
+  timeoutMs: number = 100
+): Promise<import('../types/modbus').SlaveScanItem[]> {
+  try {
+    const results = await AppMethods.ScanSlaveIDs(sessionId, startId, endId, timeoutMs);
+    return (results || []).map((r) => ({
+      slave_id: r.slave_id,
+      status: r.status,
+      detail: r.detail,
+      latency_ms: r.latency_ms,
+      raw_rx: r.raw_rx,
+    }));
+  } catch (e: any) {
+    console.error('scanSlaveIDs error:', e);
+    return [];
+  }
+}
+
+export async function autoDetectBaudrate(
+  port: string,
+  slaveId: number,
+  bauds: number[] = [9600, 19200, 115200, 38400, 4800, 2400, 57600],
+  parities: string[] = ['none', 'even', 'odd']
+): Promise<import('../types/modbus').BaudScanItem[]> {
+  try {
+    const results = await AppMethods.AutoDetectBaudrate(port, slaveId, bauds, parities);
+    return (results || []).map((r) => ({
+      baud_rate: r.baud_rate,
+      parity: r.parity,
+      stop_bits: r.stop_bits,
+      success: r.success,
+      latency_ms: r.latency_ms,
+      detail: r.detail,
+    }));
+  } catch (e: any) {
+    console.error('autoDetectBaudrate error:', e);
+    return [];
+  }
+}
+
+export async function scanRegisters(
+  sessionId: string,
+  fc: number,
+  startAddr: number,
+  endAddr: number
+): Promise<import('../types/modbus').RegisterScanItem[]> {
+  try {
+    const results = await AppMethods.ScanRegisters(sessionId, fc, startAddr, endAddr);
+    return (results || []).map((r) => ({
+      address: r.address,
+      valid: r.valid,
+      value: r.value,
+      hex: r.hex,
+      detail: r.detail,
+    }));
+  } catch (e: any) {
+    console.error('scanRegisters error:', e);
+    return [];
+  }
+}
+

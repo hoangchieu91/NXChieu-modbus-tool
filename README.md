@@ -79,7 +79,27 @@
 ### 7. Quản Lý Dự Án & Hướng Dẫn Tích Hợp
 - **Auto-Save:** Mọi cài đặt, tên biến, định dạng, hệ số scale và các Sheet đều được lưu tự động vào `localStorage`.
 - **Lưu/Mở Dự Án (.nxmodbus):** Dễ dàng xuất/nhập toàn bộ cấu hình dự án ra file JSON chuẩn để bàn giao hoặc lưu trữ.
-- **Giao diện Hướng Dẫn Sử Dụng (Help Modal / F1):** Tích hợp cẩm nang vận hành chi tiết 6 chuyên đề, nhấn **`F1`** để mở bất kỳ lúc nào.
+- **Giao diện Hướng Dẫn Sử Dụng (Help Modal / F1):** Tích hợp cẩm nang vận hành chi tiết 7 chuyên đề, nhấn **`F1`** để mở bất kỳ lúc nào.
+
+---
+
+### 8. Bộ Quét & Thám Tử Modbus (Industrial Scanner & Explorer / F4)
+- **1. Quét Địa Chỉ Slave ID (Slave ID Scanner):**
+  - Quét tự động dải ID từ 1 đến 247 trên đường truyền RS485 / TCP với thời gian timeout tùy chỉnh (50 - 500ms).
+  - Phân loại trạng thái thông minh: **Online (ACK)**, **Online (Modbus Exception 01/02/03)** - giúp kỹ sư nhận diện thiết bị ngay cả khi hỏi sai vùng thanh ghi, và **Offline (Timeout)**.
+  - Áp dụng ngay Slave ID tìm thấy vào Sheet hiện tại chỉ với 1 cú click chuột.
+- **2. Tự Động Dò Tốc Độ Truyền (Baudrate / Parity Auto-detect):**
+  - Tự động thử nghiệm tất cả các tổ hợp Baudrate (`2400`, `4800`, `9600`, `19200`, `38400`, `57600`, `115200`) và Parity (`None 8N1`, `Even 8E1`, `Odd 8O1`).
+  - Phát hiện tức thì cấu hình đúng của thiết bị và cung cấp nút kết nối 1-click.
+- **3. Quét Thanh Ghi & Bảng Giải Mã Đa Cột Linh Hoạt (Multi-Column Inspector):**
+  - Quét dải thanh ghi (0 - 1000) phát hiện vùng địa chỉ có dữ liệu.
+  - Hiển thị đồng thời tất cả các dạng biểu diễn dữ liệu trên cùng một bảng: `Int16`, `UInt16`, `Int32 (ABCD / CDAB)`, `UInt32`, `Float32 (ABCD / CDAB / BADC / DCBA)`, `Int64 / UInt64 (4 thanh ghi)`, `ASCII`, `Binary`.
+  - **🌊 Giải mã chuyên dụng Đồng Hồ Nước 48-bit (3 thanh ghi 16-bit / 6 bytes):**
+    - **48-bit Unsigned Integer Big-Endian:** `(R0 << 32) | (R1 << 16) | R2`
+    - **48-bit Unsigned Integer Little-Endian Word Swap:** `(R2 << 32) | (R1 << 16) | R0`
+    - **48-bit BCD (12 Con Lăn Cơ Khí):** Giải mã 6 bytes thành chuỗi số thập phân con lăn cơ học (chuẩn đồng hồ nước George Fischer, Zenner, Kent/Elster...).
+  - **Bộ chọn cột động (Dynamic Column Selector):** Cho phép bật/tắt hiển thị từng cột tùy ý, có các preset nhanh: Chuẩn PLC/Inverter, Đồng hồ nước, hoặc Bật tất cả.
+  - Xuất toàn bộ bảng giải mã đa cột ra tệp **CSV** phục vụ lập báo cáo và nghiệm thu công trình.
 
 ---
 
@@ -89,10 +109,12 @@
 |:---:|---|
 | **F1** | Mở / Đóng Hướng dẫn sử dụng chi tiết (Help Modal) |
 | **F3** | Kết nối / Ngắt kết nối cổng truyền thông (Connect / Disconnect) |
+| **F4** | Mở Bộ Quét & Thám Tử Modbus (Slave ID, Baudrate, Register Scanner) |
 | **F7** | Đọc đơn lẻ 1 khung quét (Read Once) |
 | **F8** | Mở hộp thoại cài đặt khung đọc (Poll Definition Setup) |
 | **Enter ↵** | Ghi giá trị xuống thanh ghi (khi đang nhập trực tiếp tại ô Value) |
 | **Esc** | Đóng các cửa sổ Modal hoặc hủy bỏ chế độ sửa giá trị |
+
 
 ---
 

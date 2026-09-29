@@ -229,3 +229,27 @@ func (a *App) WriteSingleRegister(param modbus.WriteRegisterParam) error {
 func (a *App) WriteSingleCoil(param modbus.WriteCoilParam) error {
 	return a.SessionWriteCoil("default", param)
 }
+
+// --- Diagnostic & Scanning Tools ---
+
+// ScanSlaveIDs scans a range of slave IDs [startID, endID] on the given session.
+func (a *App) ScanSlaveIDs(sessionID string, startID, endID uint8, timeoutMs uint) []modbus.SlaveScanItem {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	return a.sessMgr.ScanSlaveIDs(sessionID, startID, endID, timeoutMs)
+}
+
+// AutoDetectBaudrate probes multiple Baudrate & Parity configurations on a COM port.
+func (a *App) AutoDetectBaudrate(port string, slaveID uint8, bauds []uint, parities []string) []modbus.BaudScanItem {
+	return modbus.AutoDetectBaudrate(port, slaveID, bauds, parities)
+}
+
+// ScanRegisters scans a range of register addresses to inspect availability.
+func (a *App) ScanRegisters(sessionID string, fc uint8, startAddr, endAddr uint16) []modbus.RegisterScanItem {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	return a.sessMgr.ScanRegisters(sessionID, fc, startAddr, endAddr)
+}
+

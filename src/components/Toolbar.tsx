@@ -18,6 +18,7 @@ import {
   Columns2,
   LineChart,
   HelpCircle,
+  Search,
 } from 'lucide-react';
 import { DataFormat, SessionRole, SlaveTable } from '../types/modbus';
 
@@ -50,7 +51,9 @@ interface ToolbarProps {
   hasActiveChart?: boolean;
   onToggleChart?: () => void;
   onOpenHelp?: () => void;
+  onOpenScanner?: () => void;
 }
+
 
 export const Toolbar: React.FC<ToolbarProps> = ({
   role,
@@ -78,6 +81,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   hasActiveChart,
   onToggleChart,
   onOpenHelp,
+  onOpenScanner,
 }) => {
   return (
     <div className="flex flex-wrap items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs gap-2">
@@ -257,6 +261,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <option value="float_dcba" className="bg-slate-900 text-slate-100">Float 32 (DCBA - Little Endian)</option>
             <option value="long_abcd" className="bg-slate-900 text-slate-100">Long 32 (ABCD)</option>
             <option value="long_cdab" className="bg-slate-900 text-slate-100">Long 32 (CDAB)</option>
+            <option value="uint32_abcd" className="bg-slate-900 text-slate-100">UInt 32 (ABCD)</option>
+            <option value="uint32_cdab" className="bg-slate-900 text-slate-100">UInt 32 (CDAB)</option>
+            <option value="water_48_be" className="bg-slate-900 text-cyan-300 font-semibold">🌊 Đồng Hồ Nước 48-bit (BE)</option>
+            <option value="water_48_le" className="bg-slate-900 text-cyan-300 font-semibold">🌊 Đồng Hồ Nước 48-bit (LE)</option>
+            <option value="water_48_bcd" className="bg-slate-900 text-pink-300 font-semibold">🌊 Đồng Hồ Nước 48-bit BCD</option>
+            <option value="int64" className="bg-slate-900 text-slate-100">Int 64 (4 Regs)</option>
+            <option value="uint64" className="bg-slate-900 text-slate-100">UInt 64 (4 Regs)</option>
             <option value="ascii" className="bg-slate-900 text-slate-100">ASCII Text</option>
           </select>
         </div>
@@ -264,12 +275,25 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Right tool group */}
       <div className="flex items-center space-x-1.5">
+        {/* Scanner Trigger */}
+        {onOpenScanner && (
+          <button
+            onClick={onOpenScanner}
+            className="flex items-center space-x-1 px-2.5 py-1 rounded bg-gradient-to-r from-cyan-600/30 to-blue-600/30 hover:from-cyan-600/50 hover:to-blue-600/50 text-cyan-300 border border-cyan-500/50 shadow-sm transition-all font-semibold"
+            title="Mở Bộ Quét & Thám Tử Modbus: Dò tìm Slave ID, tốc độ Baudrate, và giải mã thanh ghi đa cột"
+          >
+            <Search className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Bộ Quét (Scanner)</span>
+          </button>
+        )}
+
         {/* New Tab */}
         <button
           onClick={onNewTab}
           className="flex items-center space-x-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all font-medium"
           title="Thêm Tab / Sheet làm việc mới"
         >
+
           <Plus className="w-3.5 h-3.5 text-cyan-400" />
           <span>New Sheet</span>
         </button>

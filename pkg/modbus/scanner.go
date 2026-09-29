@@ -1,0 +1,362 @@
+package modbus
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	simonmodbus "github.com/simonvetter/modbus"
+)
+
+// SlaveScanItem represents the probe outcome for a single Slave ID.
+type SlaveScanItem struct {
+	SlaveID   uint8  `json:"slave_id"`
+	Status    string `json:"status"` // "online", "exception", "offline"
+	Detail    string `json:"detail"`
+	LatencyMs uint64 `json:"latency_ms"`
+	RawRx     string `json:"raw_rx,omitempty"`
+}
+
+// BaudScanItem represents the probe outcome for a specific Baud/Parity combination.
+type BaudScanItem struct {
+	BaudRate  uint   `json:"baud_rate"`
+	Parity    string `json:"parity"`
+	StopBits  uint   `json:"stop_bits"`
+	Success   bool   `json:"success"`
+	LatencyMs uint64 `json:"latency_ms"`
+	Detail    string `json:"detail"`
+}
+
+// RegisterScanItem represents the scan outcome for a single register.
+type RegisterScanItem struct {
+	Address uint16 `json:"address"`
+	Valid   bool   `json:"valid"`
+	Value   uint16 `json:"value"`
+	Hex     string `json:"hex"`
+	Detail  string `json:"detail"`
+}
+
+// isModbusExceptionError checks if an error from simonmodbus represents a valid Modbus exception response.
+func isModbusExceptionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Direct error comparison with known simonmodbus exception errors
+	if err == simonmodbus.ErrIllegalFunction ||
+		err == simonmodbus.ErrIllegalDataAddress ||
+		err == simonmodbus.ErrIllegalDataValue ||
+		err == simonmodbus.ErrServerDeviceFailure ||
+		err == simonmodbus.ErrAcknowledge ||
+		err == simonmodbus.ErrServerDeviceBusy ||
+		err == simonmodbus.ErrMemoryParityError {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "exception") ||
+		strings.Contains(msg, "illegal") ||
+		strings.Contains(msg, "device failure") ||
+		strings.Contains(msg, "busy") ||
+		strings.Contains(msg, "acknowledged")
+}
+
+// ProbeSlave probes a single slave ID on the wrapper's active connection.
+func (m *ModbusClientWrapper) ProbeSlave(slaveID uint8, timeoutMs uint) SlaveScanItem {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	startTime := time.Now()
+
+	// 1. Virtual Simulator Mode
+	if m.isSimulator {
+		time.Sleep(10 * time.Millisecond)
+		// Simulate presence for ID 1 and ID 2
+		if slaveID == 1 || slaveID == 2 {
+			val := m.simRegisters[0]
+			return SlaveScanItem{
+				SlaveID:   slaveID,
+				Status:    "online",
+				Detail:    fmt.Sprintf("OK (Reg 0 = %d)", val),
+				LatencyMs: uint64(time.Since(startTime).Milliseconds()),
+				RawRx:     fmt.Sprintf("%02X 03 02 %04X ...", slaveID, val),
+			}
+		}
+		return SlaveScanItem{
+			SlaveID:   slaveID,
+			Status:    "offline",
+			Detail:    "No response (Timeout)",
+			LatencyMs: 10,
+		}
+	}
+
+	if !m.isConnected || m.client == nil {
+		return SlaveScanItem{
+			SlaveID:   slaveID,
+			Status:    "offline",
+			Detail:    "Client not connected",
+			LatencyMs: 0,
+		}
+	}
+
+	// 2. Hardware Live Client
+	m.client.SetUnitId(slaveID)
+
+	// Try reading Holding Register 0
+	val, err := m.client.ReadRegister(0, simonmodbus.HOLDING_REGISTER)
+	latency := uint64(time.Since(startTime).Milliseconds())
+
+	if err == nil {
+		return SlaveScanItem{
+			SlaveID:   slaveID,
+			Status:    "online",
+			Detail:    fmt.Sprintf("OK (Reg 0 = 0x%04X / %d)", val, val),
+			LatencyMs: latency,
+			RawRx:     fmt.Sprintf("%02X 03 02 %04X ...", slaveID, val),
+		}
+	}
+
+	if isModbusExceptionError(err) {
+		return SlaveScanItem{
+			SlaveID:   slaveID,
+			Status:    "exception",
+			Detail:    fmt.Sprintf("Online (Exception: %s)", err.Error()),
+			LatencyMs: latency,
+		}
+	}
+
+	return SlaveScanItem{
+		SlaveID:   slaveID,
+		Status:    "offline",
+		Detail:    "No response (Timeout)",
+		LatencyMs: latency,
+	}
+}
+
+// ScanSlaveRange sequentially probes a range of Slave IDs [startID, endID].
+func (m *ModbusClientWrapper) ScanSlaveRange(startID, endID uint8, timeoutMs uint) []SlaveScanItem {
+	var results []SlaveScanItem
+	if startID < 1 {
+		startID = 1
+	}
+	if endID < startID {
+		endID = startID
+	}
+	if endID > 247 {
+		endID = 247
+	}
+
+	for id := int(startID); id <= int(endID); id++ {
+		res := m.ProbeSlave(uint8(id), timeoutMs)
+		results = append(results, res)
+	}
+
+	return results
+}
+
+// ScanRegisters scans a range of registers [startAddr, endAddr] to detect available addresses.
+func (m *ModbusClientWrapper) ScanRegisters(fc uint8, startAddr, endAddr uint16) []RegisterScanItem {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var results []RegisterScanItem
+
+	if endAddr < startAddr {
+		endAddr = startAddr
+	}
+	// Limit max batch to 1000 to prevent locking UI
+	if endAddr-startAddr > 1000 {
+		endAddr = startAddr + 1000
+	}
+
+	regType := simonmodbus.HOLDING_REGISTER
+	if fc == 4 {
+		regType = simonmodbus.INPUT_REGISTER
+	}
+
+	for addr := int(startAddr); addr <= int(endAddr); addr++ {
+		uAddr := uint16(addr)
+
+		if m.isSimulator {
+			if val, ok := m.simRegisters[uAddr]; ok {
+				results = append(results, RegisterScanItem{
+					Address: uAddr,
+					Valid:   true,
+					Value:   val,
+					Hex:     fmt.Sprintf("0x%04X", val),
+					Detail:  "OK",
+				})
+			} else {
+				// Simulate default address
+				val := uAddr * 10
+				results = append(results, RegisterScanItem{
+					Address: uAddr,
+					Valid:   true,
+					Value:   val,
+					Hex:     fmt.Sprintf("0x%04X", val),
+					Detail:  "OK",
+				})
+			}
+			continue
+		}
+
+		if !m.isConnected || m.client == nil {
+			results = append(results, RegisterScanItem{
+				Address: uAddr,
+				Valid:   false,
+				Detail:  "Not connected",
+			})
+			continue
+		}
+
+		val, err := m.client.ReadRegister(uAddr, regType)
+		if err == nil {
+			results = append(results, RegisterScanItem{
+				Address: uAddr,
+				Valid:   true,
+				Value:   val,
+				Hex:     fmt.Sprintf("0x%04X", val),
+				Detail:  "OK",
+			})
+		} else {
+			results = append(results, RegisterScanItem{
+				Address: uAddr,
+				Valid:   false,
+				Detail:  err.Error(),
+			})
+		}
+	}
+
+	return results
+}
+
+// AutoDetectBaudrate probes multiple Baudrate and Parity combinations on a serial port to find the device.
+func AutoDetectBaudrate(port string, slaveID uint8, bauds []uint, parities []string) []BaudScanItem {
+	var results []BaudScanItem
+
+	if len(bauds) == 0 {
+		bauds = []uint{9600, 19200, 115200, 38400, 4800, 2400, 57600}
+	}
+	if len(parities) == 0 {
+		parities = []string{"none", "even", "odd"}
+	}
+
+	pLower := strings.ToLower(port)
+	if pLower == "simulator" || pLower == "sim" {
+		// Mock scan for simulator
+		for _, b := range bauds {
+			for _, p := range parities {
+				success := (b == 9600 && p == "none")
+				detail := "Timeout"
+				if success {
+					detail = "Device matched (ACK)"
+				}
+				results = append(results, BaudScanItem{
+					BaudRate:  b,
+					Parity:    p,
+					StopBits:  1,
+					Success:   success,
+					LatencyMs: 12,
+					Detail:    detail,
+				})
+				if success {
+					return results
+				}
+			}
+		}
+		return results
+	}
+
+	formattedPort := port
+	p := strings.TrimSpace(port)
+	if idx := strings.Index(p, " "); idx != -1 {
+		p = p[:idx]
+	}
+	p = strings.TrimSpace(p)
+	if strings.HasPrefix(strings.ToUpper(p), "COM") && !strings.HasPrefix(p, `\\.\`) {
+		formattedPort = `\\.\` + strings.ToUpper(p)
+	}
+
+	for _, baud := range bauds {
+		for _, parityStr := range parities {
+			var parity uint = simonmodbus.PARITY_NONE
+			switch strings.ToLower(parityStr) {
+			case "even":
+				parity = simonmodbus.PARITY_EVEN
+			case "odd":
+				parity = simonmodbus.PARITY_ODD
+			}
+
+			clientConfig := simonmodbus.ClientConfiguration{
+				URL:      fmt.Sprintf("rtu://%s", formattedPort),
+				Speed:    baud,
+				DataBits: 8,
+				Parity:   parity,
+				StopBits: 1,
+				Timeout:  160 * time.Millisecond,
+			}
+
+			client, err := simonmodbus.NewClient(&clientConfig)
+			if err != nil {
+				results = append(results, BaudScanItem{
+					BaudRate: baud,
+					Parity:   parityStr,
+					StopBits: 1,
+					Success:  false,
+					Detail:   fmt.Sprintf("Config error: %v", err),
+				})
+				continue
+			}
+
+			startTime := time.Now()
+			openErr := client.Open()
+			if openErr != nil {
+				results = append(results, BaudScanItem{
+					BaudRate: baud,
+					Parity:   parityStr,
+					StopBits: 1,
+					Success:  false,
+					Detail:   fmt.Sprintf("Open error: %v", openErr),
+				})
+				continue
+			}
+
+			client.SetUnitId(slaveID)
+			// Probe read holding register 0
+			val, readErr := client.ReadRegister(0, simonmodbus.HOLDING_REGISTER)
+			latency := uint64(time.Since(startTime).Milliseconds())
+			_ = client.Close()
+
+			if readErr == nil {
+				results = append(results, BaudScanItem{
+					BaudRate:  baud,
+					Parity:    parityStr,
+					StopBits:  1,
+					Success:   true,
+					LatencyMs: latency,
+					Detail:    fmt.Sprintf("Success (Reg 0 = %d)", val),
+				})
+				return results // Found matched baudrate!
+			} else if isModbusExceptionError(readErr) {
+				results = append(results, BaudScanItem{
+					BaudRate:  baud,
+					Parity:    parityStr,
+					StopBits:  1,
+					Success:   true,
+					LatencyMs: latency,
+					Detail:    fmt.Sprintf("Found (Exception: %s)", readErr.Error()),
+				})
+				return results // Also valid device response!
+			} else {
+				results = append(results, BaudScanItem{
+					BaudRate:  baud,
+					Parity:    parityStr,
+					StopBits:  1,
+					Success:   false,
+					LatencyMs: latency,
+					Detail:    "No response (Timeout)",
+				})
+			}
+		}
+	}
+
+	return results
+}

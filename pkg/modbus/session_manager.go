@@ -253,3 +253,16 @@ func (sm *SessionManager) SlaveStopSimulation(sessionID string) {
 	sess := sm.GetOrCreateSession(sessionID, RoleSlave)
 	sess.Slave.StopSimulation()
 }
+
+// ScanSlaveIDs probes a range of Slave IDs on the session's master connection.
+func (sm *SessionManager) ScanSlaveIDs(sessionID string, startID, endID uint8, timeoutMs uint) []SlaveScanItem {
+	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
+	return sess.Master.ScanSlaveRange(startID, endID, timeoutMs)
+}
+
+// ScanRegisters scans a range of registers on the session's master connection.
+func (sm *SessionManager) ScanRegisters(sessionID string, fc uint8, startAddr, endAddr uint16) []RegisterScanItem {
+	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
+	return sess.Master.ScanRegisters(fc, startAddr, endAddr)
+}
+

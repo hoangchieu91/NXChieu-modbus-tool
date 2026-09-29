@@ -1,5 +1,27 @@
 export namespace modbus {
 	
+	export class BaudScanItem {
+	    baud_rate: number;
+	    parity: string;
+	    stop_bits: number;
+	    success: boolean;
+	    latency_ms: number;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BaudScanItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.baud_rate = source["baud_rate"];
+	        this.parity = source["parity"];
+	        this.stop_bits = source["stop_bits"];
+	        this.success = source["success"];
+	        this.latency_ms = source["latency_ms"];
+	        this.detail = source["detail"];
+	    }
+	}
 	export class ConnectionConfig {
 	    type: string;
 	    port?: string;
@@ -78,6 +100,26 @@ export namespace modbus {
 	        this.error = source["error"];
 	        this.raw_tx = source["raw_tx"];
 	        this.raw_rx = source["raw_rx"];
+	    }
+	}
+	export class RegisterScanItem {
+	    address: number;
+	    valid: boolean;
+	    value: number;
+	    hex: string;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RegisterScanItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.address = source["address"];
+	        this.valid = source["valid"];
+	        this.value = source["value"];
+	        this.hex = source["hex"];
+	        this.detail = source["detail"];
 	    }
 	}
 	export class SerialPortDetail {
@@ -170,6 +212,26 @@ export namespace modbus {
 	        this.quantity = source["quantity"];
 	        this.values = source["values"];
 	        this.bool_values = source["bool_values"];
+	    }
+	}
+	export class SlaveScanItem {
+	    slave_id: number;
+	    status: string;
+	    detail: string;
+	    latency_ms: number;
+	    raw_rx?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SlaveScanItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slave_id = source["slave_id"];
+	        this.status = source["status"];
+	        this.detail = source["detail"];
+	        this.latency_ms = source["latency_ms"];
+	        this.raw_rx = source["raw_rx"];
 	    }
 	}
 	export class WriteCoilParam {

@@ -248,18 +248,26 @@ export const DataGrid: React.FC<DataGridProps> = ({
                         title="Định dạng giải mã riêng cho thanh ghi này"
                       >
                         <option value="">Theo Sheet ({sheetFormat})</option>
-                        <option value="unsigned16">Unsigned 16-bit</option>
-                        <option value="signed16">Signed 16-bit</option>
+                        <option value="unsigned16">Unsigned 16-bit (0..65535)</option>
+                        <option value="signed16">Signed 16-bit (-32768..32767)</option>
                         <option value="hex16">Hex (0x...)</option>
                         <option value="bin16">Binary (16-bit)</option>
-                        <option value="float_abcd">Float 32 (ABCD)</option>
-                        <option value="float_cdab">Float 32 (CDAB)</option>
-                        <option value="float_badc">Float 32 (BADC)</option>
-                        <option value="float_dcba">Float 32 (DCBA)</option>
-                        <option value="long_abcd">Long 32 (ABCD)</option>
-                        <option value="long_cdab">Long 32 (CDAB)</option>
-                        <option value="ascii">ASCII Text</option>
+                        <option value="float_abcd">Float 32 (ABCD - Big Endian)</option>
+                        <option value="float_cdab">Float 32 (CDAB - Word Swap)</option>
+                        <option value="float_badc">Float 32 (BADC - Byte Swap)</option>
+                        <option value="float_dcba">Float 32 (DCBA - Little Endian)</option>
+                        <option value="long_abcd">Int 32 (ABCD Signed)</option>
+                        <option value="long_cdab">Int 32 (CDAB Signed)</option>
+                        <option value="uint32_abcd">UInt 32 (ABCD Unsigned)</option>
+                        <option value="uint32_cdab">UInt 32 (CDAB Unsigned)</option>
+                        <option value="water_48_be">🌊 Đồng Hồ Nước 48-bit (Big-Endian 3 Regs)</option>
+                        <option value="water_48_le">🌊 Đồng Hồ Nước 48-bit (Little-Endian 3 Regs)</option>
+                        <option value="water_48_bcd">🌊 Đồng Hồ Nước 48-bit BCD (12 Chữ Số)</option>
+                        <option value="int64">Int 64 (4 Regs Signed)</option>
+                        <option value="uint64">UInt 64 (4 Regs Unsigned)</option>
+                        <option value="ascii">ASCII Text (2 Ký Tự)</option>
                       </select>
+
                     </td>
                   )}
 
