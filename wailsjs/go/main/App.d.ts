@@ -34,7 +34,11 @@ export function GetSnifferStatus():Promise<sniffer.CaptureStatus>;
 
 export function ListSerialPorts():Promise<Array<modbus.SerialPortDetail>>;
 
+export function LoadDefaultProject():Promise<string>;
+
 export function LoadSnifferProfileFile():Promise<string>;
+
+export function OpenProjectFile():Promise<string>;
 
 export function OpenSnifferCapture():Promise<string>;
 

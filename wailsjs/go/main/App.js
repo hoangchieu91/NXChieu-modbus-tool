@@ -62,8 +62,16 @@ export function ListSerialPorts() {
   return window['go']['main']['App']['ListSerialPorts']();
 }
 
+export function LoadDefaultProject() {
+  return window['go']['main']['App']['LoadDefaultProject']();
+}
+
 export function LoadSnifferProfileFile() {
   return window['go']['main']['App']['LoadSnifferProfileFile']();
+}
+
+export function OpenProjectFile() {
+  return window['go']['main']['App']['OpenProjectFile']();
 }
 
 export function OpenSnifferCapture() {

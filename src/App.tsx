@@ -256,42 +256,56 @@ interface PerTabState {
 }
 
 const INITIAL_TAB: TabSession = {
-  id: 'tab-1',
-  title: 'Sheet 1',
-  role: 'master',
-  definition: DEFAULT_DEFINITION,
+  id: 'tab-com3-slaves-airmeter',
+  title: 'Slave 1..20 (Đồng hồ khí nén)',
+  role: 'slave',
+  definition: {
+    slave_id: 1,
+    function_code: 3,
+    start_address: 512,
+    quantity: 25,
+    scan_rate_ms: 1000,
+  },
   format: 'unsigned16',
+  formats: {
+    512: 'long_abcd',
+    514: 'signed16',
+    515: 'signed16',
+    531: 'uint32_abcd',
+  },
   aliases: {
-    0: 'Điện áp pha A (Ua)',
-    1: 'Dòng điện pha A (Ia)',
-    2: 'Công suất tác dụng (P)',
-    3: 'Hệ số công suất (PF)',
-    4: 'Tần số lưới (Freq)',
-    5: 'Nhiệt độ cuộn dây',
-    6: 'Trạng thái cảnh báo',
+    512: 'Lưu lượng tức thời (Flow Rate)',
+    513: 'Lưu lượng tức thời (Low Word)',
+    514: 'Áp suất khí nén (Pressure)',
+    515: 'Nhiệt độ khí nén (Temperature)',
+    531: 'Tổng thể tích khí tích lũy (Total m3)',
+    532: 'Tổng thể tích khí (Low Word)',
   },
   units: {
-    0: 'V',
-    1: 'A',
-    2: 'W',
-    3: '',
-    4: 'Hz',
-    5: '°C',
-    6: '',
+    512: 'Nm3/h',
+    514: 'bar',
+    515: '°C',
+    531: 'm3',
   },
   scalings: {
-    0: 0.1,
-    1: 0.01,
-    2: 1,
-    3: 0.01,
-    4: 0.01,
-    5: 1,
-    6: 1,
+    512: 0.01,
+    514: 1,
+    515: 0.1,
+    531: 0.1,
   },
-  slaveConfig: DEFAULT_SLAVE_CONFIG,
+  slaveConfig: {
+    type: 'serial',
+    port: 'COM3',
+    baud_rate: 9600,
+    data_bits: 8,
+    parity: 'none',
+    stop_bits: 1,
+    slave_id: 1,
+    slave_id_end: 20,
+  },
   slaveTable: 'holding',
-  slaveStartAddr: 0,
-  slaveQuantity: 10,
+  slaveStartAddr: 512,
+  slaveQuantity: 25,
 };
 
 const createEmptyTabState = (): PerTabState => ({
@@ -470,19 +484,6 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     refreshPorts();
-    // Auto-load default project if current workspace is unmodified initial state
-    try {
-      if ((window as any).go?.main?.App?.LoadDefaultProject) {
-        (window as any).go.main.App.LoadDefaultProject().then((content: string) => {
-          if (content && (!localStorage.getItem('nxchieu_modbus_workspace_v1') || tabsRef.current.length === 1 && tabsRef.current[0].id === 'tab-1')) {
-            const imported = parseProjectJsonString(content);
-            applyImportedProject(imported);
-          }
-        }).catch(() => undefined);
-      }
-    } catch {
-      // ignore
-    }
   }, [refreshPorts]);
 
   // Helper to update state for a specific tab
@@ -1224,6 +1225,26 @@ export const App: React.FC = () => {
     setActiveTabId(imported.activeTabId);
     notify('success', `Đã nạp dự án "${imported.projectName}" gồm ${imported.tabs.length} sheet.`);
   };
+
+  // Attempt to load default project (e.g. COM3_Master_Slaves_Simulation.nxmodbus) on first mount if no saved project exists
+  useEffect(() => {
+    const tryAutoLoad = async () => {
+      try {
+        const saved = loadWorkspace();
+        // If workspace was never saved or only has standard initial tab, load default project file
+        if (!saved && (window as any).go?.main?.App?.LoadDefaultProject) {
+          const content = await (window as any).go.main.App.LoadDefaultProject();
+          if (content) {
+            const imported = parseProjectJsonString(content);
+            await applyImportedProject(imported);
+          }
+        }
+      } catch (err) {
+        console.warn('Auto-load default project skipped:', err);
+      }
+    };
+    tryAutoLoad();
+  }, []);
 
   const handleOpenProjectClick = async () => {
     // Try native Wails file dialog first if available

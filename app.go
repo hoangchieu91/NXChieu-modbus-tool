@@ -180,6 +180,7 @@ func (a *App) CompleteRemoteWrite(id string, errMsg string) {
 // startup is called when the app starts. The context is saved so we can emit events.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	runtime.WindowShow(ctx)
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -469,11 +470,18 @@ func (a *App) OpenProjectFile() (string, error) {
 	return string(content), nil
 }
 
-// LoadDefaultProject reads the default project file (e.g. COM3_Master_Slaves_Simulation.nxmodbus) from current dir if it exists.
+// LoadDefaultProject reads the default project file (e.g. COM3_Master_Slaves_Simulation.nxmodbus) from current dir or next to exe.
 func (a *App) LoadDefaultProject() string {
 	candidateFiles := []string{
 		"COM3_Master_Slaves_Simulation.nxmodbus",
 		filepath.Join(".", "COM3_Master_Slaves_Simulation.nxmodbus"),
+	}
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidateFiles = append(candidateFiles,
+			filepath.Join(exeDir, "COM3_Master_Slaves_Simulation.nxmodbus"),
+			filepath.Join(exeDir, "..", "..", "COM3_Master_Slaves_Simulation.nxmodbus"),
+		)
 	}
 	for _, f := range candidateFiles {
 		if content, err := os.ReadFile(f); err == nil && len(content) > 0 {
