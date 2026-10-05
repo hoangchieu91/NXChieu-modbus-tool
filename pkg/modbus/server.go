@@ -51,6 +51,18 @@ func NewSlaveMemoryStore(sessionID string, slaveID uint8, onActivity func(SlaveA
 	store.HoldingRegisters[6] = 100  // SP = 100%
 	store.HoldingRegisters[7] = 0    // Status OK
 
+	// Seed Compressed Air Meter registers (Đồng hồ đo khí nén)
+	// 512..513: Flow rate (Int32, scaling 0.01) -> 12500 * 0.01 = 125.00 Nm3/h (0x000030D4)
+	store.HoldingRegisters[512] = 0
+	store.HoldingRegisters[513] = 12500
+	// 514: Pressure (Int16) -> 65 bar (or 6.5 bar scaled) / raw 650
+	store.HoldingRegisters[514] = 650
+	// 515: Temperature (Int16, scaling 0.1 °C) -> 285 * 0.1 = 28.5 °C
+	store.HoldingRegisters[515] = 285
+	// 531..532: Total Compressed Air m3 (UInt32, scaling 0.1 m3) -> 15420 * 0.1 = 1542.0 m3 (0x00003C3C)
+	store.HoldingRegisters[531] = 0
+	store.HoldingRegisters[532] = 15420
+
 	store.InputRegisters[0] = 2400 // 24.0 V DC
 	store.InputRegisters[1] = 125  // 12.5 bar
 	store.InputRegisters[2] = 300  // 30.0 °C ambient

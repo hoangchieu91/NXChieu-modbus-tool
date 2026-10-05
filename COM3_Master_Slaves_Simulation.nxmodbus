@@ -1,42 +1,48 @@
 {
   "app": "NXChieu-Modbus-Tool",
   "version": "1.0",
-  "projectName": "COM3_Master_Slaves_Simulation",
-  "exportedAt": "2026-10-05T15:05:00.000Z",
-  "activeTabId": "tab-com3-slaves-all",
+  "projectName": "Dong_Ho_Khi_Nen_COM3",
+  "exportedAt": "2026-10-05T15:17:00.000Z",
+  "activeTabId": "tab-com3-slaves-airmeter",
   "tabs": [
     {
-      "id": "tab-com3-slaves-all",
-      "title": "COM3 Multi-Slave (1..20)",
+      "id": "tab-com3-slaves-airmeter",
+      "title": "Slave 1..20 (Đồng hồ khí nén)",
       "role": "slave",
       "definition": {
         "slave_id": 1,
         "function_code": 3,
         "start_address": 512,
-        "quantity": 30,
+        "quantity": 25,
         "scan_rate_ms": 1000
       },
       "format": "unsigned16",
-      "formats": {},
+      "formats": {
+        "512": "long_abcd",
+        "514": "signed16",
+        "515": "signed16",
+        "531": "uint32_abcd"
+      },
       "aliases": {
-        "514": "Slave Status / Data 514 (0x0202)",
-        "515": "Telemetry Value 515 (0x0203)",
-        "531": "Measured Param 531 (0x0213)",
-        "532": "Measured Param 532 (0x0214)",
-        "1002": "Meter Counter High (0x03EA)",
-        "1003": "Meter Counter Low (0x03EB)",
-        "1042": "Device Config High (0x0412)",
-        "1043": "Device Config Low (0x0413)"
+        "512": "Lưu lượng tức thời (Flow Rate)",
+        "513": "Lưu lượng tức thời (Low Word)",
+        "514": "Áp suất khí nén (Pressure)",
+        "515": "Nhiệt độ khí nén (Temperature)",
+        "531": "Tổng thể tích khí tích lũy (Total m3)",
+        "532": "Tổng thể tích khí (Low Word)"
       },
       "units": {
-        "514": "RAW",
-        "515": "mA",
-        "531": "V",
-        "532": "Hz",
-        "1002": "m3",
-        "1042": "kW"
+        "512": "Nm3/h",
+        "514": "bar",
+        "515": "°C",
+        "531": "m3"
       },
-      "scalings": {},
+      "scalings": {
+        "512": 0.01,
+        "514": 1,
+        "515": 0.1,
+        "531": 0.1
+      },
       "slaveConfig": {
         "type": "serial",
         "port": "COM3",
@@ -48,36 +54,52 @@
         "slave_id_end": 20
       },
       "slaveTable": "holding",
-      "slaveStartAddr": 500,
-      "slaveQuantity": 50,
+      "slaveStartAddr": 512,
+      "slaveQuantity": 25,
       "isListening": false,
       "isSimulating": false
     },
     {
-      "id": "tab-com3-master-monitor",
-      "title": "Master Monitor (Slave 2)",
+      "id": "tab-com3-master-airmeter",
+      "title": "Master Poll (Đồng hồ khí nén)",
       "role": "master",
       "definition": {
         "slave_id": 2,
         "function_code": 3,
-        "start_address": 514,
-        "quantity": 20,
+        "start_address": 512,
+        "quantity": 25,
         "scan_rate_ms": 1000
       },
       "format": "unsigned16",
-      "formats": {},
+      "formats": {
+        "512": "long_abcd",
+        "514": "signed16",
+        "515": "signed16",
+        "531": "uint32_abcd"
+      },
       "aliases": {
-        "514": "Status Reg (0x0202)",
-        "531": "Measured Param (0x0213)"
+        "512": "Lưu lượng tức thời (Flow Rate)",
+        "513": "Lưu lượng tức thời (Low Word)",
+        "514": "Áp suất khí nén (Pressure)",
+        "515": "Nhiệt độ khí nén (Temperature)",
+        "531": "Tổng thể tích khí tích lũy (Total m3)",
+        "532": "Tổng thể tích khí (Low Word)"
       },
       "units": {
-        "514": "HEX",
-        "531": "V"
+        "512": "Nm3/h",
+        "514": "bar",
+        "515": "°C",
+        "531": "m3"
       },
-      "scalings": {},
+      "scalings": {
+        "512": 0.01,
+        "514": 1,
+        "515": 0.1,
+        "531": 0.1
+      },
       "slaveTable": "holding",
       "slaveStartAddr": 0,
-      "slaveQuantity": 20,
+      "slaveQuantity": 25,
       "isListening": false,
       "isSimulating": false
     }
