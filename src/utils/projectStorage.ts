@@ -139,6 +139,19 @@ export function exportProjectToFile(tabs: TabSession[], activeTabId: string, pro
   URL.revokeObjectURL(url);
 }
 
+export function parseProjectJsonString(content: string, fallbackName: string = 'Modbus_Project'): { tabs: TabSession[]; activeTabId: string; projectName: string } {
+  const data = JSON.parse(content);
+  const tabs = normalizeTabs(data?.tabs);
+  if (tabs.length === 0) {
+    throw new Error('File không đúng định dạng cấu hình dự án Modbus (thiếu danh sách tabs).');
+  }
+  return {
+    tabs,
+    activeTabId: pickActiveTabId(tabs, data.activeTabId),
+    projectName: data.projectName || fallbackName,
+  };
+}
+
 /**
  * Parses an uploaded .nxmodbus or .json file and reconstructs the sheets.
  */
@@ -148,18 +161,7 @@ export function importProjectFromFile(file: File): Promise<{ tabs: TabSession[];
     reader.onload = (e) => {
       try {
         const content = e.target?.result as string;
-        const data = JSON.parse(content);
-
-        const tabs = normalizeTabs(data?.tabs);
-        if (tabs.length === 0) {
-          throw new Error('File không đúng định dạng cấu hình dự án Modbus (thiếu danh sách tabs).');
-        }
-
-        resolve({
-          tabs,
-          activeTabId: pickActiveTabId(tabs, data.activeTabId),
-          projectName: data.projectName || file.name.replace(/\.[^/.]+$/, ''),
-        });
+        resolve(parseProjectJsonString(content, file.name.replace(/\.[^/.]+$/, '')));
       } catch (err) {
         reject(err);
       }

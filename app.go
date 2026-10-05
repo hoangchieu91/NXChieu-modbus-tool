@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -447,6 +449,38 @@ func (a *App) ExportSnifferHTMLReport(opts sniffer.ShiftReportOptions) (string, 
 		return path, err
 	}
 	return path, sniffer.ExportShiftReport(path, a.sniffer.Snapshot(0), opts)
+}
+
+// OpenProjectFile opens a native Open File dialog to pick a .nxmodbus project file and returns its content.
+func (a *App) OpenProjectFile() (string, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Mở dự án Modbus (.nxmodbus)",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Dự Án Modbus (*.nxmodbus;*.json)", Pattern: "*.nxmodbus;*.json"},
+		},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("không thể đọc file dự án: %w", err)
+	}
+	return string(content), nil
+}
+
+// LoadDefaultProject reads the default project file (e.g. COM3_Master_Slaves_Simulation.nxmodbus) from current dir if it exists.
+func (a *App) LoadDefaultProject() string {
+	candidateFiles := []string{
+		"COM3_Master_Slaves_Simulation.nxmodbus",
+		filepath.Join(".", "COM3_Master_Slaves_Simulation.nxmodbus"),
+	}
+	for _, f := range candidateFiles {
+		if content, err := os.ReadFile(f); err == nil && len(content) > 0 {
+			return string(content)
+		}
+	}
+	return ""
 }
 
 // CheckNpcapStatus checks whether the Npcap/WinPcap driver is installed and lists adapters.

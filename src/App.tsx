@@ -83,6 +83,7 @@ import {
   saveWorkspace,
   exportProjectToFile,
   importProjectFromFile,
+  parseProjectJsonString,
   exportSheetToCSV,
 } from './utils/projectStorage';
 
@@ -469,6 +470,19 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     refreshPorts();
+    // Auto-load default project if current workspace is unmodified initial state
+    try {
+      if ((window as any).go?.main?.App?.LoadDefaultProject) {
+        (window as any).go.main.App.LoadDefaultProject().then((content: string) => {
+          if (content && (!localStorage.getItem('nxchieu_modbus_workspace_v1') || tabsRef.current.length === 1 && tabsRef.current[0].id === 'tab-1')) {
+            const imported = parseProjectJsonString(content);
+            applyImportedProject(imported);
+          }
+        }).catch(() => undefined);
+      }
+    } catch {
+      // ignore
+    }
   }, [refreshPorts]);
 
   // Helper to update state for a specific tab
@@ -1192,7 +1206,40 @@ export const App: React.FC = () => {
     exportProjectToFile(tabs, activeTabId, 'NXChieu_Modbus_Project');
   };
 
-  const handleOpenProjectClick = () => {
+  const applyImportedProject = async (imported: { tabs: TabSession[]; activeTabId: string; projectName: string }) => {
+    for (const t of tabs) {
+      try {
+        await closeSession(t.id);
+      } catch (err) {
+        console.error(`Lỗi dọn dẹp session cũ ${t.id}:`, err);
+      }
+    }
+
+    setTabStates({});
+    setChartTraces([]);
+    setTraceData({});
+    setIsSplitView(false);
+    setSplitTabId('');
+    setTabs(imported.tabs);
+    setActiveTabId(imported.activeTabId);
+    notify('success', `Đã nạp dự án "${imported.projectName}" gồm ${imported.tabs.length} sheet.`);
+  };
+
+  const handleOpenProjectClick = async () => {
+    // Try native Wails file dialog first if available
+    try {
+      if ((window as any).go?.main?.App?.OpenProjectFile) {
+        const content = await (window as any).go.main.App.OpenProjectFile();
+        if (content) {
+          const imported = parseProjectJsonString(content);
+          await applyImportedProject(imported);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Native OpenProjectFile dialog canceled or failed:', err);
+    }
+    // Web fallback
     fileInputRef.current?.click();
   };
 
@@ -1200,27 +1247,8 @@ export const App: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      // Parse and validate first: a bad file must not tear down the current workspace.
       const imported = await importProjectFromFile(file);
-
-      for (const t of tabs) {
-        try {
-          await closeSession(t.id);
-        } catch (err) {
-          console.error(`Lỗi dọn dẹp session cũ ${t.id}:`, err);
-        }
-      }
-
-      // Imported tabs may reuse IDs such as tab-1; drop every old runtime state so nothing shows
-      // Connected/Polling for sessions that were just closed.
-      setTabStates({});
-      setChartTraces([]);
-      setTraceData({});
-      setIsSplitView(false);
-      setSplitTabId('');
-      setTabs(imported.tabs);
-      setActiveTabId(imported.activeTabId);
-      notify('success', `Đã nạp dự án "${imported.projectName}" gồm ${imported.tabs.length} sheet.`);
+      await applyImportedProject(imported);
     } catch (err) {
       notify('error', `Lỗi nạp file dự án: ${err}`);
     } finally {
