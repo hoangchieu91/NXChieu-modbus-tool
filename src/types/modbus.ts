@@ -270,7 +270,10 @@ export interface ShiftReportOptions {
 
 export interface NetworkInterfaceInfo {
   index: number;
+  /** Capture device to open (\Device\NPF_{GUID} with Npcap). */
   name: string;
+  /** Readable adapter name, e.g. "Realtek Gaming 2.5GbE Family Controller" (may be empty). */
+  description: string;
   hardware_addr: string;
   ips?: string[];
   is_up: boolean;
@@ -295,6 +298,17 @@ export interface SnifferCaptureStatus {
   active_connections: number;
   bytes_captured: number;
   dropped_chunks: number;
+  /** Frames forwarded but not analyzed because the analyzer queue was full. */
+  dropped_frames?: number;
+  /** TCP stream statistics of a passive network capture. */
+  tcp?: {
+    packets: number;
+    retransmissions: number;
+    out_of_order: number;
+    gaps: number;
+    resets: number;
+    flows: number;
+  };
   last_error?: string;
 }
 

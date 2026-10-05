@@ -15,7 +15,7 @@ const FieldTooltip: React.FC<{ text: string }> = ({ text }) => (
 interface ConnectionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConnect: (config: ConnectionConfig) => void;
+  onConnect: (config: ConnectionConfig) => Promise<boolean>;
   availablePorts: SerialPortDetail[];
   onRefreshPorts: () => void;
   currentConfig: ConnectionConfig | null;
@@ -45,6 +45,7 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
   const [tcpTimeout, setTcpTimeout] = useState<number>(1000);
 
   const [formError, setFormError] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
 
   // The <select> can only show listed ports. If the selected one is not listed (never scanned,
   // or unplugged), pick the first listed port so what is shown is what gets opened.
@@ -105,14 +106,15 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
     return null;
   };
 
-  const handleConnect = () => {
+  const handleConnect = async () => {
     const error = validate();
     if (error) {
       setFormError(error);
       return;
     }
+    let config: ConnectionConfig;
     if (tab === 'serial') {
-      onConnect({
+      config = {
         type: 'serial',
         port: selectedPort,
         baud_rate: baudRate,
@@ -120,17 +122,17 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
         parity: parity,
         stop_bits: stopBits,
         timeout_ms: serialTimeout,
-      });
+      };
     } else if (tab === 'tcp' || tab === 'rtu_over_tcp') {
-      onConnect({
+      config = {
         type: tab,
         host: tcpHost.trim(),
         port: tcpPort,
         timeout_ms: tcpTimeout,
-      });
+      };
     } else {
       // Simulator
-      onConnect({
+      config = {
         type: 'serial',
         port: 'simulator',
         baud_rate: 9600,
@@ -138,9 +140,15 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
         parity: 'none',
         stop_bits: 1,
         timeout_ms: 1000,
-      });
+      };
     }
-    onClose();
+    setConnecting(true);
+    try {
+      const connected = await onConnect(config);
+      if (connected) onClose();
+    } finally {
+      setConnecting(false);
+    }
   };
 
   return (
@@ -150,7 +158,7 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
         <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800/90 border-b border-slate-700 text-slate-100">
           <div className="flex items-center space-x-2 font-semibold">
             <Server className="w-4 h-4 text-cyan-400" />
-            <span>Connection Setup (Cài Đặt Kết Nối)</span>
+            <span>Thiết lập kết nối</span>
           </div>
           <button
             onClick={onClose}
@@ -438,17 +446,19 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
         {/* Footer actions */}
         <div className="flex items-center justify-end px-4 py-2.5 bg-slate-800/80 border-t border-slate-700 space-x-2">
           <button
+            disabled={connecting}
             onClick={onClose}
-            className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors"
+            className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors disabled:opacity-40"
           >
-            Hủy / Cancel
+            Hủy
           </button>
           <button
+            disabled={connecting}
             onClick={handleConnect}
-            className="px-4 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-medium shadow-md shadow-cyan-900/30 transition-colors flex items-center space-x-1"
+            className="px-4 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-medium shadow-md shadow-cyan-900/30 transition-colors flex items-center space-x-1 disabled:cursor-wait disabled:opacity-60"
           >
             <Check className="w-3.5 h-3.5" />
-            <span>Kết Nối (Connect)</span>
+            <span>{connecting ? 'Đang kết nối…' : 'Kết nối'}</span>
           </button>
         </div>
       </div>

@@ -179,7 +179,7 @@ export const MobileRemoteModal: React.FC<MobileRemoteModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold text-white tracking-wide uppercase">
-                  Giám Sát Modbus Từ Xa Trên Điện Thoại
+                  Giám sát từ xa
                 </h2>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800 font-semibold">
                   4G VPN & LAN

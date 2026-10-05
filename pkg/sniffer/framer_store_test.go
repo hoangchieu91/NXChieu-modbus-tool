@@ -110,6 +110,15 @@ func TestCaptureRoundTripAndCSV(t *testing.T) {
 	if err != nil || len(frames) != 1 || !bytes.Equal(frames[0].Raw, rtu(1, 3, 0, 0, 0, 1)) {
 		t.Fatalf("round trip failed: %v %+v", err, frames)
 	}
+	replacement := NewEngine(10)
+	replacement.AddRaw("replacement", DirectionMasterToSlave, rtu(2, 3, 0, 0, 0, 1), QualityWire, time.Unix(101, 0))
+	if err := SaveCapture(capturePath, replacement.Snapshot(0)); err != nil {
+		t.Fatalf("overwrite capture failed: %v", err)
+	}
+	frames, err = LoadCapture(capturePath)
+	if err != nil || len(frames) != 1 || frames[0].Parsed == nil || frames[0].Parsed.UnitID != 2 {
+		t.Fatalf("replacement capture was not installed: %v %+v", err, frames)
+	}
 	csvPath := filepath.Join(dir, "test.csv")
 	if err := ExportCSV(csvPath, engine.Snapshot(0)); err != nil {
 		t.Fatal(err)
@@ -117,5 +126,48 @@ func TestCaptureRoundTripAndCSV(t *testing.T) {
 	data, err := os.ReadFile(csvPath)
 	if err != nil || !bytes.Contains(data, []byte("FC03 Read Holding Registers")) {
 		t.Fatalf("CSV missing decoded data: %v", err)
+	}
+}
+
+func TestCapturePersistsBaselineAndProfileMetadata(t *testing.T) {
+	engine := NewEngine(10)
+	engine.AddRaw("test", DirectionMasterToSlave, rtu(1, 3, 0, 0, 0, 1), QualityWire, time.Now())
+	profile := NewProfileCatalog()
+	profile.Devices[1] = &DeviceProfile{UnitID: 1, DeviceName: "Meter", Registers: []ProfileRegister{{Address: 0, Name: "Voltage", DataType: "uint16", Scale: 1}}}
+	profile.Devices[1].BuildIndex()
+
+	path := filepath.Join(t.TempDir(), "metadata.nxcap")
+	if err := SaveCaptureWithMetadata(path, engine.Snapshot(0), profile); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := LoadCaptureDocument(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.SchemaVersion != 2 || doc.Baseline == nil || doc.Profile == nil || doc.Profile.Devices[1] == nil {
+		t.Fatalf("capture metadata missing: %+v", doc)
+	}
+}
+
+func TestRestoreBaselineFreezesLearnedProfileForMonitoring(t *testing.T) {
+	engine := NewEngine(10)
+	restored := engine.RestoreBaseline(BaselineProfile{
+		Mode: BaselineModeLearn,
+		Devices: map[uint8]*DeviceBaseline{
+			1: {UnitID: 1, P95LatencyUS: 5000},
+		},
+	})
+	if restored.Mode != BaselineModeMonitor || restored.Devices[1] == nil {
+		t.Fatalf("restored learned baseline must become a monitoring reference: %+v", restored)
+	}
+}
+
+func TestLoadCaptureAcceptsSchemaOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.nxcap")
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"frames":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCaptureDocument(path); err != nil {
+		t.Fatalf("legacy capture rejected: %v", err)
 	}
 }

@@ -359,7 +359,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-bold text-white tracking-wide flex items-center gap-2">
-                Bộ Quét & Thám Tử Modbus (Industrial Scanner & Explorer)
+                Scanner và khám phá thiết bị
               </h2>
               <p className="text-xs text-slate-400">
                 Tự động tìm kiếm Slave ID, dò thông số Baudrate/Parity và giải mã thanh ghi đa cột

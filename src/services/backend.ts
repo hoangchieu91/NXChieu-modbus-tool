@@ -19,6 +19,11 @@ import {
   WriteRegistersParam,
 } from '../types/modbus';
 
+/** Frames of the built-in self-test sessions, kept out of the main analyzer. */
+export async function getDiagnosticSnifferSnapshot(limit = 50): Promise<SnifferSnapshot> {
+  return (AppMethods as any).GetDiagnosticSnifferSnapshot(limit);
+}
+
 export async function getSnifferSnapshot(limit = 1000): Promise<SnifferSnapshot> {
   try {
     return await (AppMethods as any).GetSnifferSnapshot(limit);

@@ -2,6 +2,7 @@ package sniffer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,30 +13,65 @@ import (
 	"go.bug.st/serial"
 )
 
+const (
+	// captureQueueSize bounds frames waiting for the analyzer. Forwarding never waits for the
+	// analyzer: when the queue is full the frame is dropped from analysis and counted.
+	captureQueueSize = 4096
+	// maxProxyConnections caps simultaneous masters through one proxy.
+	maxProxyConnections = 64
+	// proxyDialTimeout bounds connecting to the proxied device.
+	proxyDialTimeout = 5 * time.Second
+)
+
+// observedFrame is a framed ADU waiting to be handed to the analyzer engine.
+type observedFrame struct {
+	source, captureSource string
+	transport             Transport
+	direction             Direction
+	raw                   []byte
+	at                    time.Time
+}
+
 // SessionManager owns the active external capture adapter. Internal capture remains available
 // independently through Engine.
 type SessionManager struct {
-	mu       sync.RWMutex
-	engine   *Engine
-	status   CaptureStatus
-	cancel   context.CancelFunc
-	listener net.Listener
-	serial   serial.Port
-	conns    map[net.Conn]struct{}
-	wg       sync.WaitGroup
+	// lifecycleMu serializes Start and Stop as a whole, so two concurrent Starts can never leave
+	// an orphaned listener that Stop cannot close.
+	lifecycleMu sync.Mutex
+
+	mu        sync.RWMutex
+	engine    *Engine
+	status    CaptureStatus
+	cancel    context.CancelFunc
+	listener  net.Listener
+	serial    serial.Port
+	conns     map[net.Conn]struct{} // proxied master connections
+	upstreams map[net.Conn]struct{} // their connections to the device
+	wg        sync.WaitGroup        // capture goroutines (accept, proxy, forward, serial)
+
+	queue     chan observedFrame
+	analyzeWG sync.WaitGroup // the analyzer goroutine draining queue
 }
 
 func NewSessionManager(engine *Engine) *SessionManager {
-	return &SessionManager{engine: engine, conns: make(map[net.Conn]struct{})}
+	return &SessionManager{engine: engine, conns: make(map[net.Conn]struct{}), upstreams: make(map[net.Conn]struct{})}
 }
 
 func (m *SessionManager) Start(config CaptureConfig) (CaptureStatus, error) {
-	m.Stop()
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+
+	m.stopLocked()
 	ctx, cancel := context.WithCancel(context.Background())
+	queue := make(chan observedFrame, captureQueueSize)
 	m.mu.Lock()
 	m.cancel = cancel
+	m.queue = queue
 	m.status = CaptureStatus{Mode: config.Mode, StartedAt: time.Now().Format(time.RFC3339)}
 	m.mu.Unlock()
+
+	m.analyzeWG.Add(1)
+	go m.analyzeLoop(queue)
 
 	var err error
 	switch config.Mode {
@@ -49,7 +85,7 @@ func (m *SessionManager) Start(config CaptureConfig) (CaptureStatus, error) {
 		err = fmt.Errorf("capture mode %q is not supported", config.Mode)
 	}
 	if err != nil {
-		cancel()
+		m.stopLocked()
 		m.setError(err)
 		return m.Status(), err
 	}
@@ -60,11 +96,22 @@ func (m *SessionManager) Start(config CaptureConfig) (CaptureStatus, error) {
 }
 
 func (m *SessionManager) Stop() CaptureStatus {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	m.stopLocked()
+	return m.Status()
+}
+
+// stopLocked tears the capture down and joins every goroutine. Requires lifecycleMu.
+func (m *SessionManager) stopLocked() {
 	m.mu.Lock()
-	cancel, listener, port := m.cancel, m.listener, m.serial
-	m.cancel, m.listener, m.serial = nil, nil, nil
-	connections := make([]net.Conn, 0, len(m.conns))
+	cancel, listener, port, queue := m.cancel, m.listener, m.serial, m.queue
+	m.cancel, m.listener, m.serial, m.queue = nil, nil, nil, nil
+	connections := make([]net.Conn, 0, len(m.conns)+len(m.upstreams))
 	for conn := range m.conns {
+		connections = append(connections, conn)
+	}
+	for conn := range m.upstreams {
 		connections = append(connections, conn)
 	}
 	m.status.Running = false
@@ -82,7 +129,31 @@ func (m *SessionManager) Stop() CaptureStatus {
 		_ = conn.Close()
 	}
 	m.wg.Wait()
-	return m.Status()
+	// Every producer has exited: drain what is queued, then stop the analyzer.
+	if queue != nil {
+		close(queue)
+		m.analyzeWG.Wait()
+	}
+}
+
+// fail ends a capture whose source died (listener error, unplugged USB adapter) so the status
+// does not keep claiming "running" with the port still held. It runs in a capture goroutine,
+// so it only cancels and closes; the goroutines are joined by the next Stop/Start.
+func (m *SessionManager) fail(err error) {
+	m.mu.Lock()
+	m.status.LastError = err.Error()
+	m.status.Running = false
+	cancel, listener, port := m.cancel, m.listener, m.serial
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if listener != nil {
+		_ = listener.Close()
+	}
+	if port != nil {
+		_ = port.Close()
+	}
 }
 
 func (m *SessionManager) Status() CaptureStatus {
@@ -93,9 +164,48 @@ func (m *SessionManager) Status() CaptureStatus {
 	return status
 }
 
-func (m *SessionManager) startProxy(ctx context.Context, config CaptureConfig) error {
+func (m *SessionManager) analyzeLoop(queue <-chan observedFrame) {
+	defer m.analyzeWG.Done()
+	for f := range queue {
+		m.engine.AddObserved(f.source, f.captureSource, f.transport, f.direction, f.raw, QualityWire, f.at)
+	}
+}
+
+func validateProxyConfig(config CaptureConfig) error {
 	if config.TargetHost == "" || config.TargetPort == 0 {
 		return fmt.Errorf("target host and target port are required")
+	}
+	// ListenPort 0 lets the OS pick a free port; the chosen address is reported in the status.
+	if config.ListenPort == config.TargetPort && isLocalHost(config.TargetHost) {
+		// The proxy would connect to itself, recursively, until sockets run out.
+		return fmt.Errorf("proxy target %s:%d is the proxy itself", config.TargetHost, config.TargetPort)
+	}
+	return nil
+}
+
+func isLocalHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "0.0.0.0", "::", "":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.String() == host {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *SessionManager) startProxy(ctx context.Context, config CaptureConfig) error {
+	if err := validateProxyConfig(config); err != nil {
+		return err
 	}
 	host := config.ListenHost
 	if host == "" {
@@ -121,60 +231,83 @@ func (m *SessionManager) acceptLoop(ctx context.Context, listener net.Listener, 
 		client, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() == nil {
-				m.setError(fmt.Errorf("accept proxy connection: %w", err))
+				m.fail(fmt.Errorf("accept proxy connection: %w", err))
 			}
 			return
 		}
-		upstream, err := net.DialTimeout("tcp", net.JoinHostPort(config.TargetHost, fmt.Sprint(config.TargetPort)), 5*time.Second)
-		if err != nil {
+		m.mu.Lock()
+		full := len(m.conns) >= maxProxyConnections
+		if !full {
+			m.conns[client] = struct{}{}
+		}
+		m.mu.Unlock()
+		if full {
 			_ = client.Close()
-			m.setError(fmt.Errorf("connect proxy target: %w", err))
+			m.setError(fmt.Errorf("proxy connection limit (%d) reached", maxProxyConnections))
 			continue
 		}
-		m.trackConn(client, true)
+		// Dial in the connection goroutine: an unreachable target must not block other accepts,
+		// and Stop cancels the dial.
 		m.wg.Add(1)
-		go m.proxyConnection(ctx, client, upstream, config.Mode)
+		go m.proxyConnection(ctx, client, config)
 	}
 }
 
-func (m *SessionManager) proxyConnection(ctx context.Context, client, upstream net.Conn, mode CaptureMode) {
+func (m *SessionManager) proxyConnection(ctx context.Context, client net.Conn, config CaptureConfig) {
 	defer m.wg.Done()
 	defer func() {
 		_ = client.Close()
-		_ = upstream.Close()
 		m.trackConn(client, false)
 	}()
+
+	dialer := net.Dialer{Timeout: proxyDialTimeout}
+	upstream, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(config.TargetHost, fmt.Sprint(config.TargetPort)))
+	if err != nil {
+		if ctx.Err() == nil {
+			m.setError(fmt.Errorf("connect proxy target: %w", err))
+		}
+		return
+	}
+	m.trackUpstream(upstream, true)
+	defer func() {
+		_ = upstream.Close()
+		m.trackUpstream(upstream, false)
+	}()
+
 	transport := TransportTCP
-	if mode == ModeRTUOverTCP {
+	if config.Mode == ModeRTUOverTCP {
 		transport = TransportRTU
 	}
 	source := fmt.Sprintf("proxy:%s", client.RemoteAddr())
-	done := make(chan struct{}, 2)
+	var forwards sync.WaitGroup
+	forwards.Add(2)
 	go func() {
+		defer forwards.Done()
 		m.forward(ctx, source, client, upstream, transport, DirectionMasterToSlave)
-		done <- struct{}{}
 	}()
 	go func() {
+		defer forwards.Done()
 		m.forward(ctx, source, upstream, client, transport, DirectionSlaveToMaster)
-		done <- struct{}{}
 	}()
-	select {
-	case <-ctx.Done():
-	case <-done:
-	}
+	// Both directions finish on their own (EOF is propagated with a half-close); Stop closes
+	// the sockets, which ends both reads.
+	forwards.Wait()
 }
 
 func (m *SessionManager) forward(ctx context.Context, source string, from, to net.Conn, transport Transport, direction Direction) {
 	framer := NewStreamFramer(transport)
 	buffer := make([]byte, 32*1024)
+	gap := 20 * time.Millisecond // RTU over TCP: packetization by the gateway dominates t3.5
 	for {
 		if transport == TransportRTU {
-			_ = from.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+			_ = from.SetReadDeadline(time.Now().Add(gap))
 		}
 		n, err := from.Read(buffer)
 		if n > 0 {
 			chunk := buffer[:n]
+			// Forward first: capture must never delay or alter the bytes on the wire.
 			if _, writeErr := to.Write(chunk); writeErr != nil {
+				_ = from.Close()
 				return
 			}
 			m.addBytes(uint64(n))
@@ -182,17 +315,39 @@ func (m *SessionManager) forward(ctx context.Context, source string, from, to ne
 			m.addFramed(source, "proxy", transport, direction, framer, beforeDrop, framer.Feed(chunk))
 		}
 		if err != nil {
-			if timeout, ok := err.(net.Error); ok && timeout.Timeout() && ctx.Err() == nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() && ctx.Err() == nil {
 				beforeDrop := framer.Dropped()
 				m.addFramed(source, "proxy", transport, direction, framer, beforeDrop, framer.FlushGap())
 				continue
 			}
-			if err != io.EOF && ctx.Err() == nil && !strings.Contains(err.Error(), "closed") {
-				m.setError(fmt.Errorf("proxy read: %w", err))
+			if err == io.EOF {
+				// The sender finished: pass the half-close on so a reply already on its way in
+				// the other direction is still delivered.
+				if tcp, ok := to.(*net.TCPConn); ok {
+					_ = tcp.CloseWrite()
+				} else {
+					_ = to.Close()
+				}
+			} else {
+				if ctx.Err() == nil && !strings.Contains(err.Error(), "closed") {
+					m.setError(fmt.Errorf("proxy read: %w", err))
+				}
+				_ = to.Close()
 			}
 			return
 		}
 	}
+}
+
+// rtuGap is the silent interval that ends an RTU frame: t3.5 (3.5 characters of 11 bits,
+// fixed at 1.75 ms above 19200 baud) plus margin for USB adapter latency.
+func rtuGap(baud int) time.Duration {
+	t35 := 1750 * time.Microsecond
+	if baud > 0 && baud <= 19200 {
+		t35 = time.Duration(float64(time.Second) * 3.5 * 11 / float64(baud))
+	}
+	return t35 + 15*time.Millisecond
 }
 
 func (m *SessionManager) startSerial(ctx context.Context, config CaptureConfig) error {
@@ -220,7 +375,9 @@ func (m *SessionManager) startSerial(ctx context.Context, config CaptureConfig) 
 	if err != nil {
 		return fmt.Errorf("open passive serial %s: %w", config.SerialPort, err)
 	}
-	_ = port.SetReadTimeout(20 * time.Millisecond)
+	// The read timeout is the frame gap, so it follows the baud rate (a fixed 20 ms split
+	// frames below ~600 baud).
+	_ = port.SetReadTimeout(rtuGap(config.BaudRate))
 	m.mu.Lock()
 	m.serial = port
 	m.status.ListenAddress = fmt.Sprintf("%s @ %d", config.SerialPort, config.BaudRate)
@@ -245,15 +402,9 @@ func (m *SessionManager) serialLoop(ctx context.Context, port serial.Port, sourc
 			m.addFramed("serial:"+source, "passive_serial", TransportRTU, DirectionUnknown, framer, beforeDrop, framer.FlushGap())
 		}
 		if err != nil && ctx.Err() == nil {
-			m.setError(fmt.Errorf("serial capture: %w", err))
+			m.fail(fmt.Errorf("serial capture: %w", err))
 			return
 		}
-	}
-}
-
-func (m *SessionManager) addFrames(source, captureSource string, transport Transport, direction Direction, frames [][]byte) {
-	for _, frame := range frames {
-		m.engine.AddObserved(source, captureSource, transport, direction, frame, QualityWire, time.Now())
 	}
 }
 
@@ -264,7 +415,28 @@ func (m *SessionManager) addFramed(source, captureSource string, transport Trans
 		m.status.DroppedChunks += dropped - before
 		m.mu.Unlock()
 	}
-	m.addFrames(source, captureSource, transport, direction, frames)
+	if len(frames) == 0 {
+		return
+	}
+	now := time.Now()
+	for _, frame := range frames {
+		// The framer reuses its buffer; the queued frame needs its own copy.
+		m.enqueue(observedFrame{source, captureSource, transport, direction, append([]byte(nil), frame...), now})
+	}
+}
+
+// enqueue hands a frame to the analyzer without ever blocking the capture path.
+func (m *SessionManager) enqueue(f observedFrame) {
+	m.mu.RLock()
+	queue := m.queue
+	m.mu.RUnlock()
+	select {
+	case queue <- f:
+	default:
+		m.mu.Lock()
+		m.status.DroppedFrames++
+		m.mu.Unlock()
+	}
 }
 
 func (m *SessionManager) addBytes(count uint64) {
@@ -276,6 +448,16 @@ func (m *SessionManager) addBytes(count uint64) {
 func (m *SessionManager) setError(err error) {
 	m.mu.Lock()
 	m.status.LastError = err.Error()
+	m.mu.Unlock()
+}
+
+func (m *SessionManager) trackUpstream(conn net.Conn, add bool) {
+	m.mu.Lock()
+	if add {
+		m.upstreams[conn] = struct{}{}
+	} else {
+		delete(m.upstreams, conn)
+	}
 	m.mu.Unlock()
 }
 

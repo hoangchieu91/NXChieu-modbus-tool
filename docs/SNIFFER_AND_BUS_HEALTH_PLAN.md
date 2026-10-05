@@ -5,9 +5,11 @@
 >
 > Hướng dẫn vận hành cho người dùng nằm tại `docs/SNIFFER_USER_GUIDE.md`.
 
-## Trạng thái triển khai (cập nhật 2026-09-30)
+## Trạng thái triển khai (cập nhật 2026-10-02)
 
-Đã hoàn thành toàn bộ 100% các Phase trong kế hoạch, bao gồm cả 4 tính năng nâng cao:
+Tất cả các phase trong lộ trình đã được triển khai, gồm cả Phase 5 Passive TCP/Npcap.
+Phase 5 đã được kiểm chứng end-to-end qua Npcap Loopback Adapter
+(`pkg/sniffer/pcap_live_windows_test.go`); chưa kiểm chứng trên switch có port mirroring thật.
 
 - `pkg/sniffer` chứa schema, decoder RTU/TCP, request-response correlation, bounded ring
   buffer, timeout và health snapshot.
@@ -29,19 +31,40 @@
   tự động nhân hệ số scale và gán đơn vị vật lý (V, A, kW, Hz, °C, %RH...).
 - **Capture Diff Analyzer (`pkg/sniffer/diff.go`)**: So sánh phân tích delta giữa 2 phiên capture
   (Baseline A vs Hiện tại B): tính toán Health Score Δ, P95 Latency Δ, Error Rate Δ, phân loại
-  thiết bị mới (`new`), rớt mạng (`missing`), suy giảm (`regressed`), cải thiện (`improved`),
+  thiết bị mới (`new`), không quan sát thấy trong capture B (`missing`), suy giảm (`regressed`), cải thiện (`improved`),
   đưa ra kết luận tổng quan (Verdict & Summary) và ma trận so sánh chi tiết từng Slave.
 - **Shift Health Report (`pkg/sniffer/report.go`)**: Tạo báo cáo ca trực tự động dạng file HTML độc lập,
   giao diện báo cáo chuyên nghiệp, tối ưu in ấn và lưu PDF (A4 `@media print`), bao gồm KPI thẻ chỉ số,
   ma trận sức khỏe từng thiết bị, nhật ký kiểm toán thao tác ghi dữ liệu (Modbus Write Audit Log) và
   bảng chẩn đoán bất thường.
-- **Passive PCAP / Npcap Integration (`pkg/sniffer/pcap.go`)**: Kiểm tra sự hiện diện của driver Npcap
-  trên Windows, liệt kê card mạng (Network Interfaces), cấu hình bộ lọc BPF (`tcp port 502`) và hướng dẫn
-  cài đặt driver nếu chưa có.
+- **Passive PCAP / Npcap (`pkg/sniffer/pcap*.go`)**: Gọi `wpcap.dll` trực tiếp qua syscall (không cần
+  cgo; DLL nạp từ `System32\Npcap`), liệt kê card mạng bằng `pcap_findalldevs` với tên dễ đọc, áp
+  BPF filter. `pcap_decode.go` tách Ethernet/VLAN/Loopback(DLT_NULL)/IPv4/IPv6/TCP và ghép luồng TCP
+  theo từng chiều: xử lý retransmission, out-of-order (đệm giới hạn 64 segment/256 KB), gap không bắt
+  được (đếm `gaps` rồi resync), RST/FIN, bảng flow giới hạn 1024. Chiều request/response xác định
+  theo server port (target port → `port N` trong filter → 502). Bộ đếm TCP hiển thị trong status.
+  Chỉ hỗ trợ Windows; bản dựng khác trả lỗi rõ ràng (`pcap_other.go`).
+- **Capture pipeline**: mọi adapter (proxy, serial, NIC) đẩy frame qua hàng đợi giới hạn 4096; khi
+  đầy, frame bị bỏ khỏi phân tích và đếm `dropped_frames`, còn proxy vẫn chuyển tiếp nguyên byte.
+- **File capture lớn**: `.nxcap` được đọc theo luồng (`capture_stream.go`) hai lượt — lượt 1 kiểm tra
+  schema/frame/profile mà không đụng analyzer, lượt 2 đổ frame vào engine. Bộ nhớ theo ring
+  (50.000 frame), không theo kích thước file (giới hạn an toàn 4 GB).
 - **Giao diện Protocol Analyzer (`src/components/ProtocolAnalyzer.tsx`)**: Tích hợp toàn diện các nút
   Profile, Diff Analyzer, Báo cáo Ca HTML, tùy chọn Passive PCAP, hiển thị biến kỹ thuật trong Frame Inspector,
   kèm các Modal trực quan, hiện đại.
-- Toàn bộ 24/24 Go sniffer tests, toàn bộ test `pkg/modbus`, `pkg/web` và toàn bộ tests frontend đều **100% PASS**.
+- **Frontend Studio song song (`src/components/WorkspaceStudio.tsx`)**: Shell mới cho toàn bộ ứng dụng,
+  dùng chung session/backend với giao diện cổ điển. Bao gồm Master/Slave, session tabs, register/coil grid,
+  point inspector, ghi nhanh, chart, split view, traffic, project, scanner, mobile và lối vào Bus Analyzer.
+  Người dùng chuyển bằng nút `UI mới` và quay lại bằng `Giao diện cũ`; lựa chọn được lưu trong local storage.
+- **Dashboard điều tra sự cố (`src/components/AnalyzerStudio.tsx`)**: Hiển thị health score, timeline tải bus
+  và cảnh báo, nhận định nhanh, bộ lọc thời gian 1/5/15 phút, lọc theo Unit ID và chuỗi giao tiếp
+  Master–Slave của từng transaction. Register grid của Studio dùng windowing/virtual scrolling để số lượng
+  địa chỉ lớn không tạo toàn bộ DOM cùng lúc. Workspace và hai Analyzer được tách thành bundle tải theo nhu cầu.
+- **Tự kiểm tra Studio (`src/components/StudioDiagnostics.tsx`, `app_integration_test.go`)**: Kiểm tra trực tiếp
+  Wails bridge, COM discovery, Master simulator, Read/Write, Scanner, Polling → Analyzer, Slave memory và
+  Slave simulation. Luồng này đã phát hiện và khóa hồi quy cho lỗi simulator ghi xong bị ghi đè, Read Once
+  không vào Analyzer và chu kỳ simulation dưới 100 ms bị đổi sai thành một giây.
+- Trạng thái kiểm thử phải được xác nhận lại sau mỗi thay đổi bằng Go tests, frontend tests và production build.
 
 ## 1. Bối cảnh sử dụng
 

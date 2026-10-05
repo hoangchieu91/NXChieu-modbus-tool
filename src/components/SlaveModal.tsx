@@ -119,7 +119,7 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
         <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800/90 border-b border-slate-700 text-slate-100">
           <div className="flex items-center space-x-2 font-semibold">
             <Server className="w-4 h-4 text-amber-400" />
-            <span>Modbus Slave Setup (Bộ Giả Lập Server / PLC)</span>
+            <span>Thiết lập Modbus Slave</span>
           </div>
           <button
             onClick={onClose}
@@ -333,7 +333,7 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-1.5 text-slate-300 font-medium">
                 <Activity className="w-3.5 h-3.5 text-amber-400" />
-                <span>Mô Phỏng Tự Động (Auto Value Generator):</span>
+                <span>Mô phỏng giá trị tự động</span>
               </div>
               <select
                 value={simMode}

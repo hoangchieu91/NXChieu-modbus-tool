@@ -23,6 +23,7 @@ type ModbusClientWrapper struct {
 	// Virtual simulator state
 	simRegisters map[uint16]uint16
 	simCoils     map[uint16]bool
+	simOverrides map[uint16]bool
 	simTick      uint64
 
 	// clientConfig is the configuration of the live client; timeout is its current request
@@ -53,6 +54,7 @@ func NewModbusClientWrapper() *ModbusClientWrapper {
 	return &ModbusClientWrapper{
 		simRegisters: make(map[uint16]uint16),
 		simCoils:     make(map[uint16]bool),
+		simOverrides: make(map[uint16]bool),
 	}
 }
 
@@ -125,6 +127,7 @@ func (m *ModbusClientWrapper) Connect(config ConnectionConfig) (string, error) {
 			1: false,
 			2: true,
 		}
+		m.simOverrides = make(map[uint16]bool)
 		m.simTick = 0
 
 		return "Connected to Virtual Simulator", nil
@@ -406,15 +409,23 @@ func (m *ModbusClientWrapper) executeRead(def PollDefinition) PollResult {
 	if m.isSimulator {
 		m.simTick++
 		noise := int16(m.simTick%7) - 3
-		v := uint16(2205 + noise)
-		m.simRegisters[0] = v
-		m.simRegisters[1] = uint16(510 + (m.simTick % 6))
-		m.simRegisters[2] = uint16(1120 + noise*5)
-		m.simRegisters[3] = 98
-		m.simRegisters[4] = uint16(5000 + (m.simTick % 4))
-		m.simRegisters[5] = uint16(45 + (m.simTick % 3))
-		m.simRegisters[6] = 200
-		m.simRegisters[7] = uint16(m.simTick % 65535)
+		dynamicValues := map[uint16]uint16{
+			0: uint16(2205 + noise),
+			1: uint16(510 + (m.simTick % 6)),
+			2: uint16(1120 + noise*5),
+			3: 98,
+			4: uint16(5000 + (m.simTick % 4)),
+			5: uint16(45 + (m.simTick % 3)),
+			6: 200,
+			7: uint16(m.simTick % 65535),
+		}
+		for address, value := range dynamicValues {
+			// A manual FC06/FC16 write must remain observable on the next read. Previously the
+			// automatic demo waveform overwrote addresses 0..7 before that read occurred.
+			if !m.simOverrides[address] {
+				m.simRegisters[address] = value
+			}
+		}
 
 		if isCoil {
 			bits := make([]bool, def.Quantity)
@@ -536,6 +547,7 @@ func (m *ModbusClientWrapper) WriteRegister(param WriteRegisterParam) error {
 
 	if m.isSimulator {
 		m.simRegisters[param.Address] = param.Value
+		m.simOverrides[param.Address] = true
 		return nil
 	}
 
@@ -558,7 +570,9 @@ func (m *ModbusClientWrapper) WriteRegisters(param WriteRegistersParam) error {
 
 	if m.isSimulator {
 		for i, v := range param.Values {
-			m.simRegisters[param.Address+uint16(i)] = v
+			address := param.Address + uint16(i)
+			m.simRegisters[address] = v
+			m.simOverrides[address] = true
 		}
 		return nil
 	}

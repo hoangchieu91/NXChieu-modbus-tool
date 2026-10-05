@@ -1,6 +1,7 @@
 package sniffer
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -27,6 +28,7 @@ type Engine struct {
 	capacity            int
 	sequence            uint64
 	pending             map[string]pendingRequest
+	lastExpiry          time.Time
 	devices             map[uint8]*deviceAccumulator
 	health              HealthSnapshot
 	latencies           []uint64
@@ -117,6 +119,10 @@ func (e *Engine) AddObserved(sourceID, captureSource string, transport Transport
 	_, parsed, diagnostics := DecodeTransport(raw, transport, direction)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.addDecodedLocked(sourceID, captureSource, transport, direction, raw, quality, capturedAt, parsed, diagnostics)
+}
+
+func (e *Engine) addDecodedLocked(sourceID, captureSource string, transport Transport, direction Direction, raw []byte, quality CaptureQuality, capturedAt time.Time, parsed *DecodedModbus, diagnostics []DiagnosticItem) CapturedFrame {
 	if direction == DirectionUnknown && parsed != nil {
 		switch parsed.Kind {
 		case "request":
@@ -124,15 +130,31 @@ func (e *Engine) AddObserved(sourceID, captureSource string, transport Transport
 		case "response", "exception":
 			direction = DirectionSlaveToMaster
 		default:
+			// Ambiguous layout: a frame answers the request waiting for this unit. For echo
+			// function codes the response repeats the request byte for byte, so a different frame
+			// is a new request (the previous response was lost) and must not shift the pairing.
 			probe := &CapturedFrame{SourceID: sourceID, Transport: transport, Parsed: parsed}
-			if _, waiting := e.pending[correlationKey(probe)]; waiting {
+			pending, waiting := e.pending[correlationKey(probe)]
+			isResponse := waiting && pending.fc == parsed.FunctionCode
+			if isResponse && isEchoFunction(parsed.FunctionCode) {
+				isResponse = bytes.Equal(pending.pdu, pduOf(raw, transport))
+			}
+			if isResponse {
 				direction = DirectionSlaveToMaster
-				parsed.Kind = "response"
 			} else {
 				direction = DirectionMasterToSlave
-				parsed.Kind = "request"
 			}
+			// Fields were decoded without knowing the direction; decode again so a request is
+			// not shown with response fields (or the reverse).
+			_, parsed, diagnostics = DecodeTransport(raw, transport, direction)
 		}
+	}
+
+	// Expire unanswered requests as frames arrive (not only when the UI polls a snapshot), using
+	// capture time so a replayed capture expires exactly as it did live.
+	if len(e.pending) > 0 && capturedAt.Sub(e.lastExpiry) >= 250*time.Millisecond {
+		e.lastExpiry = capturedAt
+		e.expirePendingLocked(capturedAt, pendingTimeout)
 	}
 
 	e.sequence++
@@ -162,14 +184,42 @@ func (e *Engine) AddObserved(sourceID, captureSource string, transport Transport
 
 // Replace restores a capture file into the bounded analyzer and recomputes correlation/health.
 func (e *Engine) Replace(frames []CapturedFrame) {
-	e.Clear()
-	for _, frame := range frames {
+	e.ReplaceWith(frames, nil, nil)
+}
+
+// ReplaceWith restores a capture under one lock, so live frames cannot interleave with restored
+// ones. The baseline and profile are applied *before* the frames are re-analyzed, so baseline
+// diagnostics are computed against the saved reference. A nil profile (older capture files)
+// keeps the profile the user has loaded.
+func (e *Engine) ReplaceWith(frames []CapturedFrame, baseline *BaselineProfile, profile *ProfileCatalog) {
+	_ = e.ReplaceStream(baseline, profile, func(add func(CapturedFrame)) error {
+		for _, frame := range frames {
+			add(frame)
+		}
+		return nil
+	})
+}
+
+// ReplaceStream is ReplaceWith for frames produced one at a time (e.g. decoded from a file),
+// so a large capture never has to be held in memory as a whole.
+func (e *Engine) ReplaceStream(baseline *BaselineProfile, profile *ProfileCatalog, produce func(add func(CapturedFrame)) error) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clearLocked()
+	if baseline != nil {
+		e.restoreBaselineLocked(*baseline)
+	}
+	if profile != nil {
+		e.profiles = profile
+	}
+	return produce(func(frame CapturedFrame) {
 		capturedAt := time.Unix(0, frame.CapturedAtUnixNS)
 		if frame.CapturedAtUnixNS == 0 {
 			capturedAt = time.Now()
 		}
-		e.AddObserved(frame.SourceID, frame.CaptureSource, frame.Transport, frame.Direction, frame.Raw, frame.CaptureQuality, capturedAt)
-	}
+		_, parsed, diagnostics := DecodeTransport(frame.Raw, frame.Transport, frame.Direction)
+		e.addDecodedLocked(frame.SourceID, frame.CaptureSource, frame.Transport, frame.Direction, frame.Raw, frame.CaptureQuality, capturedAt, parsed, diagnostics)
+	})
 }
 
 func (e *Engine) correlate(frame *CapturedFrame, now time.Time) {
@@ -198,10 +248,15 @@ func (e *Engine) correlate(frame *CapturedFrame, now time.Time) {
 			frame.Diagnostics = append(frame.Diagnostics, DiagnosticItem{RuleID: "MODBUS_WRITE_OBSERVED", Severity: "info", Scope: "device", Message: "Phát hiện lệnh ghi dữ liệu Modbus", Recommendation: "Đối chiếu thao tác ghi với nhật ký vận hành nếu thay đổi không mong đợi", Confidence: 100})
 		}
 		if e.profiles != nil && d.Address != nil && len(d.Values) > 0 {
-			d.EngineeringValues = e.profiles.DecodeEngineeringValues(d.UnitID, *d.Address, d.Values)
+			d.EngineeringValues = e.profiles.DecodeForFunction(d.UnitID, d.FunctionCode, *d.Address, d.Values)
 		}
 		e.processBaselineRequest(frame, d, now)
-		e.pending[key] = pendingRequest{frameID: frame.ID, convID: convID, seq: frame.Sequence, when: now, unitID: d.UnitID, fc: d.FunctionCode, address: d.Address}
+		e.pending[key] = pendingRequest{frameID: frame.ID, convID: convID, seq: frame.Sequence, when: now, unitID: d.UnitID, fc: d.FunctionCode, address: d.Address, pdu: append([]byte(nil), pduOf(frame.Raw, frame.Transport)...)}
+		if len(e.pending) > maxPendingRequests {
+			// Masters reconnecting to a dead slave (new TCP source per connection) must not grow
+			// the map without bound: give up on the oldest request.
+			e.expireOldestPendingLocked()
+		}
 		e.recomputeDevice(dev)
 		return
 	}
@@ -222,7 +277,7 @@ func (e *Engine) correlate(frame *CapturedFrame, now time.Time) {
 		delete(e.pending, key)
 		frame.ConversationID = pending.convID
 		if e.profiles != nil && pending.address != nil && len(d.Values) > 0 {
-			d.EngineeringValues = e.profiles.DecodeEngineeringValues(d.UnitID, *pending.address, d.Values)
+			d.EngineeringValues = e.profiles.DecodeForFunction(d.UnitID, pending.fc, *pending.address, d.Values)
 		}
 		if now.After(pending.when) {
 			frame.ResponseTimeUS = uint64(now.Sub(pending.when).Microseconds())
@@ -275,7 +330,7 @@ func (e *Engine) updateConversation(seq uint64, convID string) {
 func (e *Engine) Snapshot(limit int) Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.expirePendingLocked(time.Now(), 5*time.Second)
+	e.expirePendingLocked(time.Now(), pendingTimeout)
 	if limit <= 0 || limit > e.count {
 		limit = e.count
 	}
@@ -316,6 +371,10 @@ func (e *Engine) Snapshot(limit int) Snapshot {
 func (e *Engine) Clear() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.clearLocked()
+}
+
+func (e *Engine) clearLocked() {
 	e.frames = make([]CapturedFrame, e.capacity)
 	e.start, e.count, e.sequence = 0, 0, 0
 	e.pending = make(map[string]pendingRequest)
@@ -354,12 +413,79 @@ func (e *Engine) SetProfileCatalog(cat *ProfileCatalog) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.profiles = cat
+	e.applyProfilesLocked()
 }
 
 func (e *Engine) GetProfileCatalog() *ProfileCatalog {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.profiles
+}
+
+// RestoreBaseline restores a persisted baseline as a frozen monitoring reference.
+// Raw learning samples are intentionally not reconstructed from a capture file.
+func (e *Engine) RestoreBaseline(profile BaselineProfile) BaselineProfile {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.restoreBaselineLocked(profile)
+}
+
+func (e *Engine) restoreBaselineLocked(profile BaselineProfile) BaselineProfile {
+	e.baseline = BaselineProfile{
+		Mode: profile.Mode, LearnedAt: profile.LearnedAt, SampleFrames: profile.SampleFrames,
+		Devices: make(map[uint8]*DeviceBaseline, len(profile.Devices)),
+	}
+	for unitID, device := range profile.Devices {
+		if device == nil {
+			continue
+		}
+		copyDevice := *device
+		copyDevice.ObservedFunctionCodes = append([]uint8(nil), device.ObservedFunctionCodes...)
+		e.baseline.Devices[unitID] = &copyDevice
+	}
+	if len(e.baseline.Devices) > 0 && e.baseline.Mode == BaselineModeLearn {
+		e.baseline.Mode = BaselineModeMonitor
+	}
+	e.lastPollTime = make(map[uint8]time.Time)
+	e.devicePollIntervals = make(map[uint8][]float64)
+	e.deviceLatencies = make(map[uint8][]uint64)
+	e.deviceFCs = make(map[uint8]map[uint8]bool)
+	return e.snapshotBaselineLocked()
+}
+
+func (e *Engine) applyProfilesLocked() {
+	requestAddresses := make(map[string]uint16)
+	for i := 0; i < e.count; i++ {
+		idx := (e.start + i) % e.capacity
+		frame := &e.frames[idx]
+		if frame.Parsed == nil {
+			continue
+		}
+		decoded := frame.Parsed
+		decoded.EngineeringValues = nil
+		if frame.Direction == DirectionMasterToSlave || decoded.Kind == "request" {
+			address := decoded.Address
+			values := decoded.Values
+			// The response of FC23 returns the *read* range, so that is what it maps to.
+			if decoded.Address != nil && frame.ConversationID != "" {
+				requestAddresses[frame.ConversationID] = *decoded.Address
+			}
+			if decoded.WriteAddress != nil && len(decoded.WriteValues) > 0 {
+				address = decoded.WriteAddress
+				values = decoded.WriteValues
+			}
+			if e.profiles != nil && address != nil && len(values) > 0 {
+				decoded.EngineeringValues = e.profiles.DecodeForFunction(decoded.UnitID, decoded.FunctionCode, *address, values)
+			}
+			continue
+		}
+		if e.profiles == nil || len(decoded.Values) == 0 {
+			continue
+		}
+		if address, ok := requestAddresses[frame.ConversationID]; ok {
+			decoded.EngineeringValues = e.profiles.DecodeForFunction(decoded.UnitID, decoded.FunctionCode, address, decoded.Values)
+		}
+	}
 }
 
 func (e *Engine) resetBaselineLocked() {
@@ -504,6 +630,13 @@ func (e *Engine) recomputeBaselineDeviceLocked(unitID uint8) {
 	}
 }
 
+const (
+	// pendingTimeout: a request without a response after this long is reported as a timeout.
+	pendingTimeout = 5 * time.Second
+	// maxPendingRequests bounds requests awaiting a response.
+	maxPendingRequests = 4096
+)
+
 func (e *Engine) expirePendingLocked(now time.Time, timeout time.Duration) {
 	for key, pending := range e.pending {
 		if now.Sub(pending.when) >= timeout {
@@ -519,21 +652,66 @@ func (e *Engine) timeoutPendingLocked(key string, pending pendingRequest) {
 		dev.health.Timeouts++
 		e.recomputeDevice(dev)
 	}
-	for i := 0; i < e.count; i++ {
-		idx := (e.start + e.count - 1 - i + e.capacity) % e.capacity
-		if e.frames[idx].Sequence == pending.seq {
-			e.frames[idx].Diagnostics = append(e.frames[idx].Diagnostics, DiagnosticItem{
-				RuleID: "MODBUS_NO_RESPONSE", Severity: "error",
-				Message: "Request đã được gửi nhưng không nhận được response", Confidence: 95,
-			})
-			return
+	// Ring frames have consecutive sequence numbers, so the request's slot is computed directly
+	// (scanning the ring per expiry stalled every capture for seconds).
+	if e.count == 0 {
+		return
+	}
+	newest := (e.start + e.count - 1) % e.capacity
+	back := e.frames[newest].Sequence - pending.seq
+	if pending.seq > e.frames[newest].Sequence || back >= uint64(e.count) {
+		return // already evicted from the ring
+	}
+	idx := (newest - int(back) + e.capacity) % e.capacity
+	if e.frames[idx].Sequence == pending.seq {
+		e.frames[idx].Diagnostics = append(e.frames[idx].Diagnostics, DiagnosticItem{
+			RuleID: "MODBUS_NO_RESPONSE", Severity: "error",
+			Message: "Request đã được gửi nhưng không nhận được response", Confidence: 95,
+		})
+	}
+}
+
+// expireOldestPendingLocked times out the oldest unanswered request.
+func (e *Engine) expireOldestPendingLocked() {
+	var oldestKey string
+	var oldest pendingRequest
+	found := false
+	for key, p := range e.pending {
+		if !found || p.when.Before(oldest.when) {
+			oldestKey, oldest, found = key, p, true
 		}
 	}
+	if found {
+		e.timeoutPendingLocked(oldestKey, oldest)
+	}
+}
+
+// isEchoFunction reports function codes whose normal response repeats the request.
+func isEchoFunction(fc uint8) bool {
+	return fc == 5 || fc == 6 || fc == 8 || fc == 22
+}
+
+// pduOf returns the PDU of an ADU (without MBAP header / unit and CRC).
+func pduOf(raw []byte, transport Transport) []byte {
+	if transport == TransportTCP {
+		if len(raw) < 8 {
+			return nil
+		}
+		return raw[7:]
+	}
+	if len(raw) < 4 {
+		return nil
+	}
+	return raw[1 : len(raw)-2]
 }
 
 func (e *Engine) recomputeDevice(d *deviceAccumulator) {
 	if d.health.Requests > 0 {
 		d.health.SuccessRate = float64(d.health.Responses-d.health.Exceptions) / float64(d.health.Requests) * 100
+		// Orphan responses (request not captured) also count as responses; cap at 100%.
+		if d.health.SuccessRate > 100 {
+			d.health.SuccessRate = 100
+		}
 	}
 	switch {
 	case d.health.Requests < 3 && d.health.Responses == 0:

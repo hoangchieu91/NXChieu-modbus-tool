@@ -2,6 +2,7 @@ package sniffer
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -66,6 +67,19 @@ func TestDiffSnapshots(t *testing.T) {
 	}
 	if diff.Verdict == "" || diff.Summary == "" {
 		t.Errorf("Verdict or Summary is empty: verdict=%q, summary=%q", diff.Verdict, diff.Summary)
+	}
+	if strings.Contains(diff.Summary, "rớt mạng") {
+		t.Fatalf("diff overstates missing observation as network failure: %s", diff.Summary)
+	}
+}
+
+func TestDiffErrorRateExcludesIntegrityFrames(t *testing.T) {
+	diff := DiffSnapshots(
+		Snapshot{Health: HealthSnapshot{Requests: 1, CRCErrorFrames: 5}},
+		Snapshot{Health: HealthSnapshot{Requests: 1, Exceptions: 1, CRCErrorFrames: 5}},
+	)
+	if diff.ErrorRateA != 0 || diff.ErrorRateB != 100 {
+		t.Fatalf("unexpected transaction error rates: %.1f, %.1f", diff.ErrorRateA, diff.ErrorRateB)
 	}
 }
 

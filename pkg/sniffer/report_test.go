@@ -12,12 +12,12 @@ func TestShiftReportGeneration(t *testing.T) {
 	snap := Snapshot{
 		Frames: []CapturedFrame{
 			{
-				ID:                "f-1",
-				CapturedAtUnixNS:  time.Now().UnixNano(),
-				Transport:         TransportRTU,
-				Direction:         DirectionMasterToSlave,
-				CaptureQuality:    QualityWire,
-				Hex:               "010600010064d9e2",
+				ID:               "f-1",
+				CapturedAtUnixNS: time.Now().UnixNano(),
+				Transport:        TransportRTU,
+				Direction:        DirectionMasterToSlave,
+				CaptureQuality:   QualityWire,
+				Hex:              "010600010064d9e2",
 				Parsed: &DecodedModbus{
 					UnitID:       1,
 					FunctionCode: 6,
@@ -36,12 +36,12 @@ func TestShiftReportGeneration(t *testing.T) {
 			},
 		},
 		Health: HealthSnapshot{
-			Score:            92,
-			State:            "good",
-			TotalFrames:      1,
-			Requests:         1,
-			Responses:        0,
-			P95LatencyUS:     5000,
+			Score:        92,
+			State:        "good",
+			TotalFrames:  1,
+			Requests:     1,
+			Responses:    0,
+			P95LatencyUS: 5000,
 			Devices: []DeviceHealth{
 				{
 					UnitID:       1,
@@ -91,6 +91,15 @@ func TestShiftReportGeneration(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Test Export") {
 		t.Error("Exported file does not contain expected title")
+	}
+}
+
+func TestShiftReportDoesNotDuplicateWriteEchoResponse(t *testing.T) {
+	request := CapturedFrame{Direction: DirectionMasterToSlave, Hex: "request-marker", Parsed: &DecodedModbus{UnitID: 1, FunctionCode: 6, FunctionName: "Write Single Register", Kind: "request", Address: uint16Ptr(1), Values: []uint16{100}}}
+	response := CapturedFrame{Direction: DirectionSlaveToMaster, Hex: "response-marker", Parsed: &DecodedModbus{UnitID: 1, FunctionCode: 6, FunctionName: "Write Single Register", Kind: "response", Address: uint16Ptr(1), Values: []uint16{100}}}
+	htmlContent := GenerateShiftReportHTML(Snapshot{Frames: []CapturedFrame{request, response}}, ShiftReportOptions{Title: "Audit"})
+	if !strings.Contains(htmlContent, "request-marker") || strings.Contains(htmlContent, "response-marker") {
+		t.Fatalf("write audit must contain only the master request")
 	}
 }
 

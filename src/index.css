@@ -36,3 +36,62 @@
 .flash-update {
   animation: highlight-flash 0.6s ease-out;
 }
+
+/* Shared operational dialogs adopt the parallel Studio shell without duplicating backend flows. */
+.nx-studio-mode > .fixed.inset-0.z-50 {
+  background: rgba(2, 9, 7, 0.86) !important;
+  backdrop-filter: blur(10px);
+}
+
+.nx-studio-mode > .fixed.inset-0.z-50 > div {
+  background: #091410 !important;
+  border-color: rgba(110, 231, 183, 0.16) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55) !important;
+}
+
+.nx-studio-mode > .fixed.inset-0.z-50 > div > div:first-child {
+  background: #0b1915 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Keep every reused operational screen in the same Studio design language. */
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-slate-950,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-slate-900 {
+  background-color: #091410 !important;
+}
+
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-slate-800,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-slate-800\/80,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-slate-800\/90,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-slate-950\/60,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-slate-950\/70 {
+  background-color: #0b1915 !important;
+}
+
+.nx-studio-mode > .fixed.inset-0.z-50 .border-slate-700,
+.nx-studio-mode > .fixed.inset-0.z-50 .border-slate-800 {
+  border-color: rgba(255, 255, 255, 0.09) !important;
+}
+
+.nx-studio-mode > .fixed.inset-0.z-50 .text-cyan-300,
+.nx-studio-mode > .fixed.inset-0.z-50 .text-cyan-400,
+.nx-studio-mode > .fixed.inset-0.z-50 .text-amber-300,
+.nx-studio-mode > .fixed.inset-0.z-50 .text-amber-400 {
+  color: #a7f3d0 !important;
+}
+
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-cyan-500,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-cyan-600,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-amber-500,
+.nx-studio-mode > .fixed.inset-0.z-50 .bg-amber-600 {
+  background-color: #6ee7b7 !important;
+  color: #07100e !important;
+}
+
+.nx-studio-mode > .fixed.inset-0.z-50 input:focus,
+.nx-studio-mode > .fixed.inset-0.z-50 select:focus,
+.nx-studio-mode > .fixed.inset-0.z-50 textarea:focus {
+  border-color: rgba(110, 231, 183, 0.55) !important;
+  outline: none;
+}

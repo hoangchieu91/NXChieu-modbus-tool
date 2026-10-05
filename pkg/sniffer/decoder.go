@@ -90,7 +90,13 @@ func DecodeTransport(raw []byte, transport Transport, direction Direction) (Tran
 	return transport, decoded, diagnostics
 }
 
+// detectTransport guesses the transport of an internally captured ADU. A valid RTU CRC wins:
+// many RTU frames also look like an MBAP header (e.g. "read 2 registers at 0":
+// 01 03 00 00 00 02 C4 0B), while a TCP frame matching a CRC by chance is a 1/65536 event.
 func detectTransport(raw []byte) Transport {
+	if len(raw) >= 4 && crc16(raw[:len(raw)-2]) == binary.LittleEndian.Uint16(raw[len(raw)-2:]) {
+		return TransportRTU
+	}
 	if len(raw) >= 8 && binary.BigEndian.Uint16(raw[2:4]) == 0 && int(binary.BigEndian.Uint16(raw[4:6])) == len(raw)-6 {
 		return TransportTCP
 	}
@@ -104,12 +110,30 @@ func classifyKind(fc uint8, pdu []byte, direction Direction) string {
 	if direction == DirectionSlaveToMaster {
 		return "response"
 	}
-	switch fc {
-	case 1, 2, 3, 4:
-		if len(pdu) == 5 {
+	// When the layout fits both a request and a response, return "unknown" and let the engine
+	// decide from the request it is waiting for.
+	byteCountFits := len(pdu) >= 2 && int(pdu[1])+2 == len(pdu) && pdu[1] > 0
+	pick := func(request, response bool) string {
+		switch {
+		case request && response:
+			return "unknown"
+		case request:
 			return "request"
+		case response:
+			return "response"
 		}
-		return "response"
+		return "unknown"
+	}
+	switch fc {
+	case 1, 2:
+		qty := 0
+		if len(pdu) == 5 {
+			qty = int(binary.BigEndian.Uint16(pdu[3:5]))
+		}
+		// FC01/02 responses with 3 data bytes (17-24 bits) are 5 bytes long, like a request.
+		return pick(len(pdu) == 5 && qty >= 1 && qty <= 2000, byteCountFits)
+	case 3, 4:
+		return pick(len(pdu) == 5, byteCountFits && pdu[1]%2 == 0)
 	case 7:
 		if len(pdu) == 1 {
 			return "request"
@@ -126,10 +150,9 @@ func classifyKind(fc uint8, pdu []byte, direction Direction) string {
 		}
 		return "response"
 	case 23:
-		if len(pdu) >= 10 {
-			return "request"
-		}
-		return "response"
+		// Request: fc, read addr/qty, write addr/qty, byte count (index 9), write values.
+		request := len(pdu) >= 10 && len(pdu) == 10+int(pdu[9])
+		return pick(request, byteCountFits && pdu[1]%2 == 0)
 	case 43:
 		if len(pdu) <= 4 {
 			return "request"
@@ -188,6 +211,13 @@ func decodeFields(d *DecodedModbus, pdu []byte) error {
 		if len(pdu) != 6+byteCount {
 			return fmt.Errorf("byte count FC%02d không khớp payload", fc)
 		}
+		// Quantity and byte count must agree, within the protocol limits.
+		if fc == 15 && (qty < 1 || qty > 1968 || byteCount != (int(qty)+7)/8) {
+			return fmt.Errorf("FC15 quantity %d / byte count %d không hợp lệ", qty, byteCount)
+		}
+		if fc == 16 && (qty < 1 || qty > 123 || byteCount != 2*int(qty)) {
+			return fmt.Errorf("FC16 quantity %d / byte count %d không hợp lệ", qty, byteCount)
+		}
 		if fc == 16 {
 			if byteCount%2 != 0 {
 				return fmt.Errorf("FC16 byte count phải là số chẵn")
@@ -223,8 +253,9 @@ func decodeFields(d *DecodedModbus, pdu []byte) error {
 		}
 		sub := binary.BigEndian.Uint16(pdu[1:3])
 		data := binary.BigEndian.Uint16(pdu[3:5])
+		// The sub-function is not a register address; leaving Address unset keeps diagnostics
+		// data out of register profiles.
 		d.SubFunction = &sub
-		d.Address = &sub
 		d.Values = []uint16{data}
 	case 17:
 		if d.Kind == "request" {

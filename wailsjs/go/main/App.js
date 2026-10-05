@@ -6,12 +6,20 @@ export function AutoDetectBaudrate(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['AutoDetectBaudrate'](arg1, arg2, arg3, arg4);
 }
 
+export function CheckNpcapStatus() {
+  return window['go']['main']['App']['CheckNpcapStatus']();
+}
+
 export function ClearSniffer() {
   return window['go']['main']['App']['ClearSniffer']();
 }
 
 export function CloseSession(arg1) {
   return window['go']['main']['App']['CloseSession'](arg1);
+}
+
+export function CompareSnifferCaptures(arg1, arg2) {
+  return window['go']['main']['App']['CompareSnifferCaptures'](arg1, arg2);
 }
 
 export function CompleteRemoteWrite(arg1, arg2) {
@@ -22,12 +30,24 @@ export function ExportSnifferCSV() {
   return window['go']['main']['App']['ExportSnifferCSV']();
 }
 
+export function ExportSnifferHTMLReport(arg1) {
+  return window['go']['main']['App']['ExportSnifferHTMLReport'](arg1);
+}
+
+export function GetDiagnosticSnifferSnapshot(arg1) {
+  return window['go']['main']['App']['GetDiagnosticSnifferSnapshot'](arg1);
+}
+
 export function GetRemoteServerStatus() {
   return window['go']['main']['App']['GetRemoteServerStatus']();
 }
 
 export function GetSnifferBaseline() {
   return window['go']['main']['App']['GetSnifferBaseline']();
+}
+
+export function GetSnifferProfileCatalog() {
+  return window['go']['main']['App']['GetSnifferProfileCatalog']();
 }
 
 export function GetSnifferSnapshot(arg1) {
@@ -42,8 +62,16 @@ export function ListSerialPorts() {
   return window['go']['main']['App']['ListSerialPorts']();
 }
 
+export function LoadSnifferProfileFile() {
+  return window['go']['main']['App']['LoadSnifferProfileFile']();
+}
+
 export function OpenSnifferCapture() {
   return window['go']['main']['App']['OpenSnifferCapture']();
+}
+
+export function PickCaptureFile(arg1) {
+  return window['go']['main']['App']['PickCaptureFile'](arg1);
 }
 
 export function ResetSnifferBaseline() {
@@ -52,10 +80,6 @@ export function ResetSnifferBaseline() {
 
 export function SaveSnifferCapture() {
   return window['go']['main']['App']['SaveSnifferCapture']();
-}
-
-export function SetSnifferBaselineMode(arg1) {
-  return window['go']['main']['App']['SetSnifferBaselineMode'](arg1);
 }
 
 export function ScanRegisters(arg1, arg2, arg3, arg4) {
@@ -106,6 +130,14 @@ export function SessionWriteRegisters(arg1, arg2) {
   return window['go']['main']['App']['SessionWriteRegisters'](arg1, arg2);
 }
 
+export function SetSnifferBaselineMode(arg1) {
+  return window['go']['main']['App']['SetSnifferBaselineMode'](arg1);
+}
+
+export function SetSnifferProfileCatalog(arg1) {
+  return window['go']['main']['App']['SetSnifferProfileCatalog'](arg1);
+}
+
 export function SlaveGetSlice(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SlaveGetSlice'](arg1, arg2, arg3, arg4);
 }
@@ -152,32 +184,4 @@ export function StopSniffer() {
 
 export function UpdateRemoteServerState(arg1) {
   return window['go']['main']['App']['UpdateRemoteServerState'](arg1);
-}
-
-export function PickCaptureFile(arg1) {
-  return window['go']['main']['App']['PickCaptureFile'](arg1);
-}
-
-export function LoadSnifferProfileFile() {
-  return window['go']['main']['App']['LoadSnifferProfileFile']();
-}
-
-export function SetSnifferProfileCatalog(arg1) {
-  return window['go']['main']['App']['SetSnifferProfileCatalog'](arg1);
-}
-
-export function GetSnifferProfileCatalog() {
-  return window['go']['main']['App']['GetSnifferProfileCatalog']();
-}
-
-export function CompareSnifferCaptures(arg1, arg2) {
-  return window['go']['main']['App']['CompareSnifferCaptures'](arg1, arg2);
-}
-
-export function ExportSnifferHTMLReport(arg1) {
-  return window['go']['main']['App']['ExportSnifferHTMLReport'](arg1);
-}
-
-export function CheckNpcapStatus() {
-  return window['go']['main']['App']['CheckNpcapStatus']();
 }

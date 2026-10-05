@@ -1,4 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualList } from '../utils/useVirtualList';
+
+// Fixed row height so the frame table can be windowed.
+const FRAME_ROW_HEIGHT = 36;
 import {
   Activity,
   ArrowDownLeft,
@@ -161,15 +165,28 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
 
   const [npcapStatus, setNpcapStatus] = useState<NpcapStatus | null>(null);
 
+  // Capture errors come from the periodic status; action errors (profile, diff, report) are kept
+  // separately so the next refresh does not erase them.
+  const [captureError, setCaptureError] = useState('');
+  const refreshing = useRef(false);
   const refresh = async () => {
+    if (refreshing.current) return; // a slow IPC call must not stack up overlapping refreshes
+    refreshing.current = true;
     try {
       const [next, status] = await Promise.all([getSnifferSnapshot(1500), getSnifferStatus()]);
       setSnapshot(next);
       setCaptureStatus(status);
-      setError(status.last_error || '');
-      if (!selectedFrameID && next.frames.length > 0) setSelectedFrameID(next.frames[next.frames.length - 1].id);
+      setCaptureError(status.last_error || '');
+      // Functional update: the interval keeps the first render's closure, where the selection
+      // was always empty, which made the inspector jump to the newest frame every tick.
+      if (next.frames.length > 0) {
+        const newest = next.frames[next.frames.length - 1].id;
+        setSelectedFrameID((current) => current || newest);
+      }
     } catch (err) {
-      setError(`Không đọc được analyzer: ${err}`);
+      setCaptureError(`Không đọc được analyzer: ${err}`);
+    } finally {
+      refreshing.current = false;
     }
   };
 
@@ -274,10 +291,13 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
 
   const displayRows = useMemo(() => {
     if (viewMode === 'frames') return frames.map((frame) => ({ key: frame.id, frame, summary: frame.parsed?.summary || 'Không giải mã được' }));
+    // Push into the group instead of copying it per frame (that was O(n^2) on every refresh).
     const groups = new Map<string, typeof frames>();
     for (const frame of frames) {
       const key = frame.conversation_id || frame.id;
-      groups.set(key, [...(groups.get(key) || []), frame]);
+      const group = groups.get(key);
+      if (group) group.push(frame);
+      else groups.set(key, [frame]);
     }
     return [...groups.entries()].map(([key, group]) => {
       const request = group.find((item) => item.direction === 'master_to_slave');
@@ -287,6 +307,7 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
       return { key, frame, summary: `${request?.parsed?.summary || frame.parsed?.summary || 'Transaction'} → ${outcome}` };
     });
   }, [frames, viewMode]);
+  const frameList = useVirtualList(displayRows, FRAME_ROW_HEIGHT);
 
   const selected = snapshot?.frames.find((frame) => frame.id === selectedFrameID) || frames[0];
   const health = snapshot?.health;
@@ -448,7 +469,7 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
               <option value="tcp_proxy">Modbus TCP Proxy</option>
               <option value="rtu_over_tcp_proxy">RTU over TCP Proxy</option>
               <option value="passive_serial">Passive Serial RTU</option>
-              <option value="passive_pcap">Passive NIC (Npcap / PCAP)</option>
+              <option value="passive_pcap">Passive NIC (Npcap)</option>
             </select>
           </label>
           {captureConfig.mode === 'passive_serial' ? <>
@@ -466,7 +487,7 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
                 <option value="">-- Chọn Interface --</option>
                 {(npcapStatus?.interfaces || []).map((iface) => (
                   <option key={iface.index} value={iface.name}>
-                    {iface.name} {iface.ips && iface.ips.length > 0 ? `(${iface.ips[0]})` : ''}
+                    {iface.description || iface.name} {iface.ips && iface.ips.length > 0 ? `(${iface.ips[0]})` : ''}
                   </option>
                 ))}
               </select>
@@ -485,9 +506,9 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
               className={`h-8 border px-2.5 text-[10px] flex items-center gap-1.5 transition ${
                 npcapStatus?.installed ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300 hover:border-amber-400'
               }`}
-              title={npcapStatus?.installed ? 'Npcap driver đã sẵn sàng' : 'Chưa cài Npcap driver'}
+              title={npcapStatus?.installed ? 'Đã phát hiện Npcap: bắt gói thụ động Modbus TCP trên card mạng đã chọn' : 'Chưa cài Npcap driver'}
             >
-              <Info className="h-3 w-3" /> Npcap: {npcapStatus?.installed ? 'Sẵn sàng' : 'Chưa cài đặt'}
+              <Info className="h-3 w-3" /> Npcap: {npcapStatus?.installed ? 'Đã phát hiện' : 'Chưa cài đặt'}
             </button>
             {!npcapStatus?.installed && (
               <a
@@ -500,12 +521,15 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
                 <ExternalLink className="h-3 w-3" /> Tải Npcap
               </a>
             )}
+            <div className="max-w-sm border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[10px] leading-4 text-amber-200">
+              Passive NIC chưa bắt packet trong bản này. Hãy dùng TCP Proxy hoặc Passive Serial để số liệu phản ánh lưu lượng thật.
+            </div>
           </> : <>
             <label className="text-[9px] uppercase text-slate-500">Listen port<input disabled={captureStatus?.running} type="number" value={captureConfig.listen_port} onChange={(e) => updateConfig('listen_port', Number(e.target.value))} className="mt-1 block h-8 w-24 border border-slate-700 bg-slate-950 px-2 text-[11px] text-slate-200" /></label>
             <label className="text-[9px] uppercase text-slate-500">Target host<input disabled={captureStatus?.running} value={captureConfig.target_host} onChange={(e) => updateConfig('target_host', e.target.value)} className="mt-1 block h-8 w-36 border border-slate-700 bg-slate-950 px-2 text-[11px] normal-case text-slate-200" /></label>
             <label className="text-[9px] uppercase text-slate-500">Target port<input disabled={captureStatus?.running} type="number" value={captureConfig.target_port} onChange={(e) => updateConfig('target_port', Number(e.target.value))} className="mt-1 block h-8 w-24 border border-slate-700 bg-slate-950 px-2 text-[11px] text-slate-200" /></label>
           </>}
-          {captureStatus?.running ? <button disabled={loading} onClick={() => runAction(stopSniffer)} className="flex h-8 items-center gap-1.5 border border-rose-500/50 bg-rose-500/10 px-3 text-[10px] uppercase text-rose-300"><Square className="h-3 w-3" /> Stop</button> : <button disabled={loading} onClick={() => runAction(() => startSniffer(captureConfig))} className="flex h-8 items-center gap-1.5 border border-emerald-500/50 bg-emerald-500/10 px-3 text-[10px] uppercase text-emerald-300"><Play className="h-3 w-3" /> Start</button>}
+          {captureStatus?.running ? <button disabled={loading} onClick={() => runAction(stopSniffer)} className="flex h-8 items-center gap-1.5 border border-rose-500/50 bg-rose-500/10 px-3 text-[10px] uppercase text-rose-300"><Square className="h-3 w-3" /> Stop</button> : <button disabled={loading || (captureConfig.mode === 'passive_pcap' && !captureConfig.interface_name)} onClick={() => runAction(() => startSniffer(captureConfig))} className="flex h-8 items-center gap-1.5 border border-emerald-500/50 bg-emerald-500/10 px-3 text-[10px] uppercase text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-3 w-3" /> Start</button>}
           <div className="ml-auto flex gap-2">
             <button disabled={loading} onClick={() => runAction(openSnifferCapture)} className="flex h-8 items-center gap-1.5 border border-slate-700 px-2.5 text-[10px] text-slate-300 hover:text-white"><FolderOpen className="h-3.5 w-3.5" /> Open</button>
             <button disabled={loading} onClick={() => runAction(saveSnifferCapture)} className="flex h-8 items-center gap-1.5 border border-slate-700 px-2.5 text-[10px] text-slate-300 hover:text-white"><Download className="h-3.5 w-3.5" /> NXCAP</button>
@@ -579,15 +603,18 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
           <div className="grid h-8 shrink-0 grid-cols-[82px_34px_58px_62px_1fr_82px] items-center border-b border-slate-800 bg-slate-900/60 px-3 text-[9px] font-bold uppercase tracking-[0.14em] text-slate-600">
             <span>Time</span><span>Dir</span><span>Unit</span><span>FC</span><span>Decode</span><span className="text-right">Latency</span>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto font-mono">
+          <div ref={frameList.ref} className="min-h-0 flex-1 overflow-y-auto font-mono">
             {frames.length === 0 ? (
               <div className="grid h-full place-items-center text-center">
                 <div><Radio className="mx-auto h-8 w-8 text-slate-800" /><p className="mt-3 text-xs text-slate-600">Đang chờ frame Modbus…</p></div>
               </div>
-            ) : displayRows.map(({ key, frame, summary }) => {
+            ) : (
+              <div style={{ height: frameList.totalHeight, position: 'relative' }}>
+              <div style={{ transform: `translateY(${frameList.offsetTop}px)` }}>
+              {frameList.visible.map(({ key, frame, summary }) => {
               const issue = (frame.diagnostics?.length || 0) > 0 || frame.parsed?.kind === 'exception';
               return (
-                <button key={key} onClick={() => setSelectedFrameID(frame.id)} className={`grid w-full grid-cols-[82px_34px_58px_62px_1fr_82px] items-center border-b px-3 py-2 text-left text-[10px] transition ${selected?.id === frame.id ? 'border-cyan-900 bg-cyan-400/[.08]' : 'border-slate-900 hover:bg-slate-900/70'}`}>
+                <button key={key} onClick={() => setSelectedFrameID(frame.id)} style={{ height: FRAME_ROW_HEIGHT }} className={`grid w-full grid-cols-[82px_34px_58px_62px_1fr_82px] items-center overflow-hidden border-b px-3 text-left text-[10px] transition ${selected?.id === frame.id ? 'border-cyan-900 bg-cyan-400/[.08]' : 'border-slate-900 hover:bg-slate-900/70'}`}>
                   <span className="text-slate-500">{frame.timestamp}</span>
                   <span>{frame.direction === 'master_to_slave' ? <ArrowUpRight className="h-3.5 w-3.5 text-sky-400" /> : frame.direction === 'slave_to_master' ? <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-400" /> : <span className="text-slate-600">?</span>}</span>
                   <span className="font-bold text-slate-300">{frame.parsed ? String(frame.parsed.unit_id).padStart(3, '0') : '—'}</span>
@@ -597,6 +624,9 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
                 </button>
               );
             })}
+              </div>
+              </div>
+            )}
           </div>
         </main>
 
@@ -736,8 +766,12 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
       </div>
 
       <footer className="relative flex h-7 shrink-0 items-center justify-between border-t border-slate-800 bg-[#060c13] px-4 font-mono text-[9px] uppercase tracking-wider text-slate-600">
-        <span>{captureStatus?.running ? `${captureStatus.mode} · ${captureStatus.listen_address || ''} · ${captureStatus.active_connections} connection(s) · ${captureStatus.bytes_captured} bytes` : 'Internal capture · reconstructed frames are labelled'}</span>
-        <span className={error ? 'text-rose-400' : 'text-emerald-500'}>{error || 'Analyzer pipeline online'}</span>
+        <span>{captureStatus?.running
+          ? captureStatus.tcp
+            ? `${captureStatus.mode} · ${captureStatus.tcp.packets} packets · ${captureStatus.tcp.flows} flow(s) · retrans ${captureStatus.tcp.retransmissions} · out-of-order ${captureStatus.tcp.out_of_order} · gaps ${captureStatus.tcp.gaps} · RST ${captureStatus.tcp.resets}${captureStatus.dropped_frames ? ` · dropped ${captureStatus.dropped_frames}` : ''}`
+            : `${captureStatus.mode} · ${captureStatus.listen_address || ''} · ${captureStatus.active_connections} connection(s) · ${captureStatus.bytes_captured} bytes${captureStatus.dropped_frames ? ` · dropped ${captureStatus.dropped_frames}` : ''}`
+          : 'Internal capture · reconstructed frames are labelled'}</span>
+        <span className={error || captureError ? 'text-rose-400' : 'text-emerald-500'}>{error || captureError || 'Analyzer pipeline online'}</span>
       </footer>
 
       {/* Toast Notification */}
@@ -831,7 +865,7 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
                   <div className="flex flex-wrap gap-2 text-xs">
                     {diffResult.missing_devices.length > 0 && (
                       <div className="rounded border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-rose-300">
-                        ⚠ Thiết bị rớt mạng ({diffResult.missing_devices.length}): Unit {diffResult.missing_devices.join(', ')}
+                        ⚠ Không quan sát thấy trong Capture B ({diffResult.missing_devices.length}): Unit {diffResult.missing_devices.join(', ')}
                       </div>
                     )}
                     {diffResult.new_devices.length > 0 && (

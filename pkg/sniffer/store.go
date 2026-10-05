@@ -10,13 +10,26 @@ import (
 	"time"
 )
 
-const CaptureSchemaVersion = 1
+const CaptureSchemaVersion = 2
 
 func SaveCapture(path string, snapshot Snapshot) error {
+	return SaveCaptureWithMetadata(path, snapshot, nil)
+}
+
+// SaveCaptureWithMetadata persists frames together with the baseline and active register profile.
+func SaveCaptureWithMetadata(path string, snapshot Snapshot, profile *ProfileCatalog) error {
 	if path == "" {
 		return fmt.Errorf("capture path is empty")
 	}
-	doc := CaptureFile{SchemaVersion: CaptureSchemaVersion, CreatedAt: time.Now().Format(time.RFC3339Nano), App: "NXChieu Modbus Tool", Frames: snapshot.Frames}
+	baseline := snapshot.Baseline
+	doc := CaptureFile{
+		SchemaVersion: CaptureSchemaVersion,
+		CreatedAt:     time.Now().Format(time.RFC3339Nano),
+		App:           "NXChieu Modbus Tool",
+		Frames:        snapshot.Frames,
+		Baseline:      &baseline,
+		Profile:       profile,
+	}
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("encode capture: %w", err)
@@ -25,30 +38,31 @@ func SaveCapture(path string, snapshot Snapshot) error {
 }
 
 func LoadCapture(path string) ([]CapturedFrame, error) {
-	info, err := os.Stat(path)
+	doc, err := LoadCaptureDocument(path)
 	if err != nil {
-		return nil, fmt.Errorf("open capture: %w", err)
-	}
-	if info.Size() > 512*1024*1024 {
-		return nil, fmt.Errorf("capture exceeds 512 MB safety limit")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read capture: %w", err)
-	}
-	var doc CaptureFile
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("decode capture: %w", err)
-	}
-	if doc.SchemaVersion != CaptureSchemaVersion {
-		return nil, fmt.Errorf("unsupported capture schema %d", doc.SchemaVersion)
-	}
-	for index := range doc.Frames {
-		if len(doc.Frames[index].Raw) > 260 {
-			return nil, fmt.Errorf("frame %d exceeds Modbus ADU limit", index+1)
-		}
+		return nil, err
 	}
 	return doc.Frames, nil
+}
+
+// LoadCaptureDocument loads a whole capture into memory. Prefer LoadCaptureInto for opening a
+// capture in the analyzer: it streams frames instead of holding them all.
+func LoadCaptureDocument(path string) (CaptureFile, error) {
+	var frames []CapturedFrame
+	meta, err := streamCaptureFile(path, func(_ int, frame CapturedFrame) error {
+		frames = append(frames, frame)
+		return nil
+	})
+	if err != nil {
+		return CaptureFile{}, err
+	}
+	if err := validateCaptureMetadata(meta); err != nil {
+		return CaptureFile{}, err
+	}
+	return CaptureFile{
+		SchemaVersion: meta.SchemaVersion, CreatedAt: meta.CreatedAt, App: meta.App,
+		Frames: frames, Baseline: meta.Baseline, Profile: meta.Profile,
+	}, nil
 }
 
 func ExportCSV(path string, snapshot Snapshot) error {
@@ -89,8 +103,7 @@ func ExportCSV(path string, snapshot Snapshot) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close export: %w", err)
 	}
-	_ = os.Remove(path)
-	if err := os.Rename(tempName, path); err != nil {
+	if err := replaceFile(tempName, path); err != nil {
 		return fmt.Errorf("finish export: %w", err)
 	}
 	return nil
@@ -115,10 +128,40 @@ func writeAtomic(path string, data []byte) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close capture: %w", err)
 	}
-	_ = os.Remove(path)
-	if err := os.Rename(tempName, path); err != nil {
+	if err := replaceFile(tempName, path); err != nil {
 		return fmt.Errorf("finish capture: %w", err)
 	}
+	return nil
+}
+
+// replaceFile preserves the existing destination until the new file can be moved into place.
+// This is needed on Windows, where os.Rename cannot replace an existing file directly.
+func replaceFile(tempName, path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return os.Rename(tempName, path)
+	} else if err != nil {
+		return err
+	}
+	backup, err := os.CreateTemp(filepath.Dir(path), ".nxchieu-backup-*.tmp")
+	if err != nil {
+		return err
+	}
+	backupName := backup.Name()
+	if err := backup.Close(); err != nil {
+		_ = os.Remove(backupName)
+		return err
+	}
+	if err := os.Remove(backupName); err != nil {
+		return err
+	}
+	if err := os.Rename(path, backupName); err != nil {
+		return err
+	}
+	if err := os.Rename(tempName, path); err != nil {
+		_ = os.Rename(backupName, path)
+		return err
+	}
+	_ = os.Remove(backupName)
 	return nil
 }
 

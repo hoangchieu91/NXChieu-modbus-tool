@@ -88,9 +88,29 @@ luôn mở frame và đọc evidence, raw hex, response time và capture quality
 File capture có thể chứa dữ liệu vận hành, địa chỉ thiết bị và giá trị thanh ghi. Xử lý file theo
 quy định bảo mật của hệ thống nhà máy.
 
+## Passive NIC (Npcap)
+
+Bắt Modbus TCP thụ động trên card mạng, không chen vào đường truyền như Proxy.
+
+1. Cài Npcap từ npcap.com (bật *WinPcap API-compatible Mode*; muốn bắt traffic trên chính máy này
+   thì bật *Support loopback traffic*).
+2. Chọn **Passive NIC (Npcap)**, chọn card mạng theo tên/địa chỉ IP, giữ filter `tcp port 502`
+   (hoặc cổng Modbus của hệ thống), bấm Start.
+3. Máy tính phải *thấy* được traffic: cắm vào cổng mirror/SPAN của switch, dùng network TAP, hoặc
+   chạy trên chính máy SCADA/HMI. Trên switch thường, card mạng chỉ thấy traffic của chính máy.
+
+Status hiển thị số packet, flow, retransmission, out-of-order, gap và RST. `gaps` > 0 nghĩa là
+capture đã bỏ sót byte (switch mirror quá tải, card mạng bận); analyzer bỏ đoạn đó và tự đồng bộ
+lại ở ADU kế tiếp. Chế độ này chỉ có trên Windows.
+
+## Register profile theo bảng
+
+Mỗi thanh ghi trong `.nxprof` có thể ghi `"table": "holding"` (FC03/06/16/23) hoặc
+`"table": "input"` (FC04). Bỏ trống `table` thì thanh ghi khớp cả hai bảng (tương thích profile cũ).
+Coil/discrete input (FC01/02/05/15) không bao giờ được ánh xạ thành giá trị kỹ thuật.
+`float32_cdab` là float đảo word; `float32_cdba` vẫn được nhận như tên cũ của cùng kiểu này.
+
 ## Giới hạn hiện tại
 
-Passive TCP trực tiếp từ card mạng chưa được bật trong bản này vì cần Npcap/driver capture và
-quyền hệ thống. Dùng TCP Proxy để có direction và byte chính xác mà không phụ thuộc driver.
 Analyzer không đo điện áp A/B, termination, bias, ringing hoặc nhiễu điện từ; CRC/timeout chỉ là
 dấu hiệu giao thức, không thay thế oscilloscope hay RS485 analyzer chuyên dụng.

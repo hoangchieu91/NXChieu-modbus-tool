@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listSerialPorts,
   sessionConnect,
@@ -21,7 +21,11 @@ import {
   subscribeSlaveActivity,
   subscribeRemoteWrite,
   sessionResetCounters,
+  scanRegisters,
+  scanSlaveIDs,
+  autoDetectBaudrate,
   completeRemoteWrite,
+  getDiagnosticSnifferSnapshot,
   updateRemoteServerState,
 } from './services/backend';
 
@@ -38,8 +42,14 @@ import { SlaveModal } from './components/SlaveModal';
 import { TrendChart } from './components/TrendChart';
 import { HelpModal } from './components/HelpModal';
 import { ScannerModal } from './components/ScannerModal';
-import { MobileRemoteModal } from './components/MobileRemoteModal';
-import { ProtocolAnalyzer } from './components/ProtocolAnalyzer';
+import { ActionNotice, ActionNoticeState } from './components/ActionNotice';
+import { DiagnosticCheck, StudioDiagnostics } from './components/StudioDiagnostics';
+import { ErrorBoundary } from './components/ErrorBoundary';
+const FRONTEND_MODE_KEY = 'nxchieu-frontend-mode';
+const WorkspaceStudio = lazy(() => import('./components/WorkspaceStudio').then((module) => ({ default: module.WorkspaceStudio })));
+const ProtocolAnalyzer = lazy(() => import('./components/ProtocolAnalyzer').then((module) => ({ default: module.ProtocolAnalyzer })));
+const AnalyzerStudio = lazy(() => import('./components/AnalyzerStudio').then((module) => ({ default: module.AnalyzerStudio })));
+const MobileRemoteModal = lazy(() => import('./components/MobileRemoteModal').then((module) => ({ default: module.MobileRemoteModal })));
 
 
 import {
@@ -320,9 +330,37 @@ export const App: React.FC = () => {
   // UI display toggles
   const [showTraffic, setShowTraffic] = useState<boolean>(true);
   const [isProtocolAnalyzerOpen, setIsProtocolAnalyzerOpen] = useState<boolean>(false);
+  const [isAnalyzerStudioOpen, setIsAnalyzerStudioOpen] = useState<boolean>(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
+  const [actionNotice, setActionNotice] = useState<ActionNoticeState | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notify = useCallback((tone: ActionNoticeState['tone'], message: string) => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    setActionNotice({ id: Date.now(), tone, message });
+    noticeTimerRef.current = setTimeout(() => setActionNotice(null), tone === 'error' ? 7000 : 4000);
+  }, []);
+
+  useEffect(() => () => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+  }, []);
+  const [frontendMode, setFrontendMode] = useState<'classic' | 'studio'>(() => {
+    try {
+      return localStorage.getItem(FRONTEND_MODE_KEY) === 'studio' ? 'studio' : 'classic';
+    } catch {
+      return 'classic';
+    }
+  });
   const [isSplitView, setIsSplitView] = useState<boolean>(false);
   const [splitTabId, setSplitTabId] = useState<string>('');
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FRONTEND_MODE_KEY, frontendMode);
+    } catch {
+      // storage unavailable: the mode just is not remembered
+    }
+  }, [frontendMode]);
 
   // Multi-trace Realtime Trend Chart State
   const [chartTraces, setChartTraces] = useState<ChartTrace[]>([]);
@@ -336,13 +374,18 @@ export const App: React.FC = () => {
 
   // Handlers for hotkeys that are defined further down; assigned on every render.
   const hotkeyActionsRef = useRef<{ connectToggle: () => void; readOnce: () => void; definition: () => void } | null>(null);
+  // Device actions (F3 connect/disconnect, F7 read, F8 definition) are ignored while a
+  // full-screen analyzer or diagnostics view hides the workspace they act on.
+  const overlayOpenRef = useRef(false);
 
   // Global Hotkeys: F1 (Help), F3 (Connect/Disconnect), F4 (Scanner), F7 (Read Once),
   // F8 (Definition), F9 (Mobile Remote)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const actions = hotkeyActionsRef.current;
-      if (e.key === 'F3' && actions) {
+      const actions = overlayOpenRef.current ? null : hotkeyActionsRef.current;
+      if (['F3', 'F7', 'F8'].includes(e.key) && !actions) {
+        e.preventDefault();
+      } else if (e.key === 'F3' && actions) {
         e.preventDefault();
         actions.connectToggle();
       } else if (e.key === 'F7' && actions) {
@@ -361,8 +404,14 @@ export const App: React.FC = () => {
         e.preventDefault();
         setIsMobileModalOpen((prev) => !prev);
       } else if (e.key === 'F10') {
+        // Only one analyzer at a time: each polls thousands of frames.
         e.preventDefault();
+        setIsAnalyzerStudioOpen(false);
         setIsProtocolAnalyzerOpen((prev) => !prev);
+      } else if (e.key === 'F11') {
+        e.preventDefault();
+        setIsProtocolAnalyzerOpen(false);
+        setIsAnalyzerStudioOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -687,7 +736,7 @@ export const App: React.FC = () => {
 
   // --- Master Connection Handlers ---
 
-  const handleConnect = async (cfg: ConnectionConfig) => {
+  const handleConnect = async (cfg: ConnectionConfig): Promise<boolean> => {
     try {
       await sessionConnect(activeTab.id, cfg);
       updateTabState(activeTab.id, (prev) => ({
@@ -702,11 +751,14 @@ export const App: React.FC = () => {
         errCount: 0,
         latencyMs: 0,
       }));
+      notify('success', cfg.type === 'serial' && cfg.port === 'simulator' ? 'Đã kết nối simulator nội bộ.' : 'Kết nối Modbus thành công.');
+      return true;
     } catch (err) {
       // The backend closes the previous link before opening the new one, and its poll loop
       // stops once disconnected, so the tab is no longer connected nor polling.
       updateTabState(activeTab.id, (prev) => ({ ...prev, isConnected: false, isPolling: false }));
-      alert(`Kết nối thất bại: ${err}`);
+      notify('error', `Kết nối thất bại: ${err}`);
+      return false;
     }
   };
 
@@ -722,6 +774,7 @@ export const App: React.FC = () => {
         coils: [],
         lastValues: [],
       }));
+      notify('info', 'Đã ngắt kết nối.');
     } catch (err) {
       console.error(err);
     }
@@ -733,12 +786,14 @@ export const App: React.FC = () => {
       if (activeState.isPolling) {
         await sessionStopPolling(activeTab.id);
         updateTabState(activeTab.id, (prev) => ({ ...prev, isPolling: false }));
+        notify('info', 'Đã tạm dừng polling.');
       } else {
         await sessionStartPolling(activeTab.id, activeTab.definition);
         updateTabState(activeTab.id, (prev) => ({ ...prev, isPolling: true }));
+        notify('success', 'Polling đã bắt đầu.');
       }
     } catch (err) {
-      alert(`Lỗi Polling: ${err}`);
+      notify('error', `Lỗi Polling: ${err}`);
     }
   };
 
@@ -748,10 +803,12 @@ export const App: React.FC = () => {
       const res = await sessionReadOnce(activeTab.id, activeTab.definition);
       applyPollResult(activeTab.id, res);
       if (res.error) {
-        alert(`Đọc thất bại: ${res.error}`);
+        notify('error', `Đọc thất bại: ${res.error}`);
+      } else {
+        notify('success', `Đã đọc ${res.values.length || res.bool_values.length} điểm dữ liệu.`);
       }
     } catch (err) {
-      alert(`Lỗi đọc: ${err}`);
+      notify('error', `Lỗi đọc: ${err}`);
     }
   };
 
@@ -768,9 +825,10 @@ export const App: React.FC = () => {
         isListening: true,
       }));
       await refreshSlaveSlice(activeTab.id, activeTab.slaveTable, activeTab.slaveStartAddr, activeTab.slaveQuantity);
+      notify('success', 'Slave server đã bắt đầu lắng nghe.');
       return true;
     } catch (err) {
-      alert(`Khởi động Slave Server thất bại: ${err}`);
+      notify('error', `Khởi động Slave Server thất bại: ${err}`);
       return false;
     }
   };
@@ -786,6 +844,7 @@ export const App: React.FC = () => {
         isListening: false,
         isSimulating: false,
       }));
+      notify('info', 'Slave server đã dừng.');
     } catch (err) {
       console.error(err);
     }
@@ -804,8 +863,9 @@ export const App: React.FC = () => {
       simCfg.session_id = activeTab.id;
       await slaveStartSim(activeTab.id, simCfg);
       updateTabState(activeTab.id, (prev) => ({ ...prev, isSimulating: true }));
+      notify('success', 'Mô phỏng dữ liệu Slave đã bắt đầu.');
     } catch (err) {
-      alert(`Lỗi kích hoạt mô phỏng: ${err}`);
+      notify('error', `Lỗi kích hoạt mô phỏng: ${err}`);
     }
   };
 
@@ -813,6 +873,7 @@ export const App: React.FC = () => {
     try {
       await slaveStopSim(activeTab.id);
       updateTabState(activeTab.id, (prev) => ({ ...prev, isSimulating: false }));
+      notify('info', 'Mô phỏng dữ liệu Slave đã dừng.');
     } catch (err) {
       console.error(err);
     }
@@ -908,7 +969,7 @@ export const App: React.FC = () => {
         console.error('Lỗi khởi động lại polling khi đổi cấu hình:', err);
         // Polling was stopped and did not restart: never keep showing "Polling".
         updateTabState(tabId, (prev) => ({ ...prev, isPolling: false }));
-        alert(`Không khởi động lại được Polling với cấu hình mới: ${err}`);
+        notify('error', `Không khởi động lại được Polling với cấu hình mới: ${err}`);
       }
     }
   };
@@ -997,7 +1058,7 @@ export const App: React.FC = () => {
 
   const handleInlineWriteForTab = async (tabId: string, address: number, valueStr: string) => {
     const error = await performWrite(tabId, address, valueStr);
-    if (error) alert(error);
+    if (error) notify('error', error);
   };
 
   // Phone writes go through the same performWrite as desktop edits.
@@ -1016,7 +1077,7 @@ export const App: React.FC = () => {
     const targetTab = tabs.find((t) => t.id === tabId) || activeTab;
     try {
       if (targetTab.role !== 'slave' && isReadOnlyFunction(targetTab.definition.function_code)) {
-        alert('FC02 (Discrete Inputs) là bảng chỉ đọc, không thể bật/tắt.');
+        notify('error', 'FC02 (Discrete Inputs) là bảng chỉ đọc, không thể bật/tắt.');
         return;
       }
       if (targetTab.role === 'slave') {
@@ -1030,7 +1091,7 @@ export const App: React.FC = () => {
         });
       }
     } catch (err) {
-      alert(`Lỗi chuyển trạng thái Coil: ${err}`);
+      notify('error', `Lỗi chuyển trạng thái Coil: ${err}`);
     }
   };
 
@@ -1145,9 +1206,9 @@ export const App: React.FC = () => {
       setSplitTabId('');
       setTabs(imported.tabs);
       setActiveTabId(imported.activeTabId);
-      alert(`Đã nạp thành công dự án "${imported.projectName}" gồm ${imported.tabs.length} Sheet!`);
+      notify('success', `Đã nạp dự án "${imported.projectName}" gồm ${imported.tabs.length} sheet.`);
     } catch (err) {
-      alert(`Lỗi nạp file dự án: ${err}`);
+      notify('error', `Lỗi nạp file dự án: ${err}`);
     } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -1351,6 +1412,7 @@ export const App: React.FC = () => {
     [isSplitView, splitTab, splitState]
   );
 
+  overlayOpenRef.current = isProtocolAnalyzerOpen || isAnalyzerStudioOpen || isDiagnosticsOpen;
   hotkeyActionsRef.current = {
     connectToggle: () => {
       if (activeTab.role !== 'master') return;
@@ -1436,11 +1498,107 @@ export const App: React.FC = () => {
     exportSheetToCSV(activeTab, activeRowsObj.rows);
   };
 
+  const runStudioDiagnostics = async (): Promise<DiagnosticCheck[]> => {
+    const results: DiagnosticCheck[] = [];
+    const check = async (name: string, action: () => Promise<string>) => {
+      const started = performance.now();
+      try {
+        const detail = await action();
+        results.push({ name, status: 'pass', detail, durationMs: Math.round(performance.now() - started) });
+        return true;
+      } catch (error) {
+        results.push({ name, status: 'fail', detail: String(error), durationMs: Math.round(performance.now() - started) });
+        return false;
+      }
+    };
+
+    const bridgeReady = await check('Wails desktop bridge', async () => {
+      if (!(window as any).go?.main?.App) throw new Error('Không thấy Wails bridge. Hãy chạy file EXE thay vì mở frontend bằng trình duyệt.');
+      return 'Frontend đã kết nối được với Go backend.';
+    });
+    if (!bridgeReady) return results;
+
+    await check('Nhận diện cổng truyền thông', async () => {
+      const ports = await listSerialPorts();
+      return `Backend phản hồi ${ports.length} cổng COM.`;
+    });
+
+    const masterID = `__studio_diagnostic_master_${Date.now()}`;
+    let masterConnected = false;
+    try {
+      masterConnected = await check('Master simulator: kết nối', async () => {
+        await sessionConnect(masterID, { type: 'serial', port: 'simulator', baud_rate: 9600, data_bits: 8, parity: 'none', stop_bits: 1, timeout_ms: 1000 });
+        return 'Session simulator đã kết nối.';
+      });
+      if (masterConnected) {
+        await check('Master simulator: đọc và ghi', async () => {
+          const definition: PollDefinition = { slave_id: 1, function_code: 3, start_address: 20, quantity: 2, scan_rate_ms: 50 };
+          const before = await sessionReadOnce(masterID, definition);
+          if (before.error || before.values.length !== 2) throw new Error(before.error || 'Read Once không trả đủ dữ liệu.');
+          await sessionWriteRegister(masterID, { slave_id: 1, address: 20, value: 4321 });
+          const after = await sessionReadOnce(masterID, definition);
+          if (after.error || after.values[0] !== 4321) throw new Error(after.error || `Giá trị đọc lại là ${after.values[0]}, mong đợi 4321.`);
+          return 'Read Once và FC06 round-trip thành công.';
+        });
+        await check('Scanner: Unit, baudrate và register', async () => {
+          const [devices, baud, registers] = await Promise.all([
+            scanSlaveIDs(masterID, 1, 3, 50),
+            autoDetectBaudrate('simulator', 1, [9600], ['none']),
+            scanRegisters(masterID, 3, 0, 4),
+          ]);
+          if (devices[0]?.status !== 'online' || !baud[0]?.success || !registers[0]?.valid) throw new Error('Scanner không nhận diện đúng simulator.');
+          return 'Unit 1, 9600-none và vùng Holding Register đều được nhận diện.';
+        });
+        await check('Polling và Analyzer pipeline', async () => {
+          const definition: PollDefinition = { slave_id: 1, function_code: 3, start_address: 0, quantity: 4, scan_rate_ms: 50 };
+          await sessionStartPolling(masterID, definition);
+          await new Promise((resolve) => window.setTimeout(resolve, 130));
+          await sessionStopPolling(masterID);
+          // Self-test traffic goes to a separate analyzer so it never pollutes the real baseline,
+          // health score, reports or saved captures.
+          const snapshot = await getDiagnosticSnifferSnapshot(50);
+          const diagnosticFrames = snapshot.frames.filter((frame) => frame.source_id === masterID);
+          if (!diagnosticFrames.length) throw new Error('Polling chạy nhưng Analyzer chưa nhận được frame của phiên tự kiểm tra.');
+          return `Analyzer nhận ${diagnosticFrames.length} frame từ phiên tự kiểm tra.`;
+        });
+      }
+    } finally {
+      if (masterConnected) await sessionDisconnect(masterID).catch(() => undefined);
+      await closeSession(masterID).catch(() => undefined);
+    }
+
+    const slaveID = `__studio_diagnostic_slave_${Date.now()}`;
+    try {
+      await check('Slave memory: register và coil', async () => {
+        await slaveSetRegister(slaveID, 'holding', 7, 2468);
+        await slaveSetCoil(slaveID, 'coils', 3, true);
+        const [registers, coils] = await Promise.all([
+          slaveGetSlice(slaveID, 'holding', 7, 1),
+          slaveGetSlice(slaveID, 'coils', 3, 1),
+        ]);
+        if (registers.values?.[0] !== 2468 || coils.bool_values?.[0] !== true) throw new Error('Bộ nhớ Slave không giữ đúng dữ liệu đã ghi.');
+        return 'Holding register và coil round-trip thành công.';
+      });
+      await check('Slave simulation', async () => {
+        await slaveSetRegister(slaveID, 'holding', 50, 100);
+        await slaveStartSim(slaveID, { session_id: slaveID, table: 'holding', address: 50, mode: 'increment', min: 0, max: 1000, step: 2, interval_ms: 100 });
+        await new Promise((resolve) => window.setTimeout(resolve, 130));
+        await slaveStopSim(slaveID);
+        const values = await slaveGetSlice(slaveID, 'holding', 50, 1);
+        if (values.values?.[0] === 100) throw new Error('Simulation chạy nhưng giá trị không thay đổi.');
+        return `Thanh ghi mô phỏng đã thay đổi thành ${values.values?.[0]}.`;
+      });
+    } finally {
+      await closeSession(slaveID).catch(() => undefined);
+    }
+    return results;
+  };
+
   // Determine which tab is targeted by the Write Modal
   const modalTab = selectedTabForWrite || activeTab;
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
+    <div className={`flex h-screen w-screen flex-col overflow-hidden bg-slate-950 font-sans text-slate-100 ${frontendMode === 'studio' ? 'nx-studio-mode' : ''}`}>
       {/* Hidden File Input for Project Import */}
       <input
         ref={fileInputRef}
@@ -1450,7 +1608,10 @@ export const App: React.FC = () => {
         onChange={handleFileChange}
       />
 
-      {/* 1. Menu Bar */}
+      {/* 1. Menu Bar. The classic shell is only mounted in classic mode; hidden with display:none
+          it kept re-rendering its grids and a second trend chart on every poll under Studio. */}
+      {frontendMode === 'classic' && (
+      <div className="contents">
       <MenuBar
         role={activeTab.role}
         onRoleChange={handleRoleChange}
@@ -1519,7 +1680,9 @@ export const App: React.FC = () => {
         onOpenHelp={() => setIsHelpModalOpen(true)}
         onOpenScanner={() => setIsScannerModalOpen(true)}
         onOpenMobileRemote={() => setIsMobileModalOpen(true)}
-        onOpenProtocolAnalyzer={() => setIsProtocolAnalyzerOpen(true)}
+        onOpenProtocolAnalyzer={() => { setIsAnalyzerStudioOpen(false); setIsProtocolAnalyzerOpen(true); }}
+        onOpenAnalyzerStudio={() => { setIsProtocolAnalyzerOpen(false); setIsAnalyzerStudioOpen(true); }}
+        onOpenWorkspaceStudio={() => setFrontendMode('studio')}
       />
 
 
@@ -1619,11 +1782,9 @@ export const App: React.FC = () => {
         <TrafficBox
           entries={activeState.traffic}
           onClear={() => updateTabState(activeTab.id, (prev) => ({ ...prev, traffic: [] }))}
-          onOpenAnalyzer={() => setIsProtocolAnalyzerOpen(true)}
+          onOpenAnalyzer={() => { setIsAnalyzerStudioOpen(false); setIsProtocolAnalyzerOpen(true); }}
         />
       )}
-
-      <ProtocolAnalyzer isOpen={isProtocolAnalyzerOpen} onClose={() => setIsProtocolAnalyzerOpen(false)} />
 
       {/* 6. Status Bar */}
       <StatusBar
@@ -1640,6 +1801,101 @@ export const App: React.FC = () => {
         slaveTable={activeTab.slaveTable}
         slaveActivityCount={activeState.slaveActivityCount}
       />
+      </div>
+      )}
+
+      {/* A Studio crash (or chunk load failure) falls back to the classic UI instead of a white
+          screen that would come back on every launch, since the mode is remembered. */}
+      <ErrorBoundary
+        key={frontendMode}
+        name="Workspace Studio"
+        onError={() => {
+          setFrontendMode('classic');
+          notify('error', 'Giao diện Studio gặp lỗi và đã chuyển về giao diện cổ điển.');
+        }}
+      >
+      <Suspense fallback={<div className="flex flex-1 items-center justify-center bg-[#07100e] text-xs text-emerald-200">Đang mở Workspace Studio…</div>}>
+      {frontendMode === 'studio' && (
+        <WorkspaceStudio
+          tabs={tabs}
+          activeTab={activeTab}
+          activeTabId={activeTabId}
+          runtime={activeState}
+          primary={{ tab: activeTab, rows: activeRowsObj.rows, isCoil: activeRowsObj.isCoil, handlers: activeGridHandlers, chartColors: activeChartColorMap }}
+          secondary={{ tab: splitTab, rows: splitRowsObj.rows, isCoil: splitRowsObj.isCoil, handlers: splitGridHandlers, chartColors: splitChartColorMap }}
+          splitView={isSplitView}
+          showTraffic={showTraffic}
+          chart={chartTraces.length > 0 && isChartVisible ? (
+            <TrendChart
+              traces={chartTraces}
+              traceData={traceData}
+              onToggleTraceVisibility={handleToggleTraceVisibility}
+              onRemoveTrace={handleRemoveTrace}
+              onClear={handleClearAllChart}
+              onClose={() => setIsChartVisible(false)}
+            />
+          ) : undefined}
+          onUseClassic={() => setFrontendMode('classic')}
+          onSelectTab={setActiveTabId}
+          onCloseTab={handleCloseTab}
+          onAddTab={handleAddTab}
+          onRenameTab={handleRenameTab}
+          onRoleChange={handleRoleChange}
+          onFormatChange={(fmt) => setTabs((prev) => prev.map((tab) => tab.id === activeTabId ? { ...tab, format: fmt } : tab))}
+          onTableChange={handleSlaveTableChange}
+          onSecondaryTabChange={setSplitTabId}
+          onConnect={() => setIsConnectionModalOpen(true)}
+          onDisconnect={handleDisconnect}
+          onDefinition={() => setIsDefinitionModalOpen(true)}
+          onTogglePoll={handleTogglePoll}
+          onReadOnce={handleReadOnce}
+          onClearCounters={() => {
+            sessionResetCounters(activeTab.id).catch((err) => console.error('Reset counters failed:', err));
+            updateTabState(activeTab.id, (prev) => ({ ...prev, txCount: 0, errCount: 0 }));
+          }}
+          onSlaveSetup={() => setIsSlaveModalOpen(true)}
+          onToggleSlave={handleToggleSlaveServer}
+          onOpenProject={handleOpenProjectClick}
+          onSaveProject={handleSaveProject}
+          onExportCSV={handleExportCSV}
+          onOpenScanner={() => setIsScannerModalOpen(true)}
+          onOpenMobile={() => setIsMobileModalOpen(true)}
+          onOpenAnalyzerStudio={() => { setIsProtocolAnalyzerOpen(false); setIsAnalyzerStudioOpen(true); }}
+          onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
+          onOpenHelp={() => setIsHelpModalOpen(true)}
+          onToggleTraffic={() => setShowTraffic(!showTraffic)}
+          onClearTraffic={() => updateTabState(activeTab.id, (prev) => ({ ...prev, traffic: [] }))}
+          onToggleSplit={handleToggleSplitView}
+          onToggleChart={() => setIsChartVisible(!isChartVisible)}
+        />
+      )}
+      </Suspense>
+      </ErrorBoundary>
+
+      <ErrorBoundary
+        key={`${isProtocolAnalyzerOpen}-${isAnalyzerStudioOpen}`}
+        name="Analyzer"
+        onError={() => {
+          setIsProtocolAnalyzerOpen(false);
+          setIsAnalyzerStudioOpen(false);
+          notify('error', 'Analyzer gặp lỗi và đã được đóng.');
+        }}
+      >
+      <Suspense fallback={<div className="fixed inset-0 z-[90] grid place-items-center bg-[#07100e] text-xs text-emerald-200">Đang mở Analyzer…</div>}>
+        {isProtocolAnalyzerOpen && <ProtocolAnalyzer isOpen onClose={() => setIsProtocolAnalyzerOpen(false)} />}
+        {isAnalyzerStudioOpen && <AnalyzerStudio
+          isOpen
+          onClose={() => setIsAnalyzerStudioOpen(false)}
+          onOpenClassic={() => {
+            setIsAnalyzerStudioOpen(false);
+            setIsProtocolAnalyzerOpen(true);
+          }}
+        />}
+      </Suspense>
+      </ErrorBoundary>
+
+      <StudioDiagnostics isOpen={isDiagnosticsOpen} onClose={() => setIsDiagnosticsOpen(false)} onRun={runStudioDiagnostics} />
+      <ActionNotice notice={actionNotice} onClose={() => setActionNotice(null)} />
 
       {/* --- Modals --- */}
       <ConnectionModal
@@ -1714,13 +1970,24 @@ export const App: React.FC = () => {
       />
 
       {/* 9. Mobile Phone Live Remote Monitor & QR Code Modal */}
-      <MobileRemoteModal
-        isOpen={isMobileModalOpen}
-        onClose={() => setIsMobileModalOpen(false)}
-        sessions={tabs}
-        activeSessionId={activeTabId}
-        activeRows={activeRowsObj.rows}
-      />
+      <ErrorBoundary
+        key={String(isMobileModalOpen)}
+        name="Mobile Remote"
+        onError={() => {
+          setIsMobileModalOpen(false);
+          notify('error', 'Cửa sổ Mobile Remote gặp lỗi và đã được đóng.');
+        }}
+      >
+      <Suspense fallback={null}>
+        {isMobileModalOpen && <MobileRemoteModal
+          isOpen
+          onClose={() => setIsMobileModalOpen(false)}
+          sessions={tabs}
+          activeSessionId={activeTabId}
+          activeRows={activeRowsObj.rows}
+        />}
+      </Suspense>
+      </ErrorBoundary>
     </div>
 
   );

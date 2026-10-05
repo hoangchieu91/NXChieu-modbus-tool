@@ -914,7 +914,9 @@ func (s *ModbusSlaveServer) StartSimulation(config SimulationConfig) {
 
 	interval := time.Duration(config.IntervalMs) * time.Millisecond
 	if interval < 100*time.Millisecond {
-		interval = 1000 * time.Millisecond
+		// Clamp overly fast updates to the documented minimum. The previous fallback used one
+		// second, making a requested 50 ms simulation appear completely inactive in the UI.
+		interval = 100 * time.Millisecond
 	}
 
 	if s.store == nil {

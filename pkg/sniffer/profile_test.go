@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+func TestLoadProfileCatalogRejectsNullDevice(t *testing.T) {
+	if _, err := LoadProfileCatalog([]byte(`{"devices":{"1":null}}`)); err == nil {
+		t.Fatal("expected null device profile to be rejected")
+	}
+}
+
 func TestProfileDecoding(t *testing.T) {
 	jsonCatalog := `{
 		"name": "Power Meter & Temp Catalog",
@@ -129,5 +135,25 @@ func TestEngineProfileIntegration(t *testing.T) {
 	}
 	if f2.Parsed.EngineeringValues[1].Name != "Pressure" || f2.Parsed.EngineeringValues[1].Value != "101.30" || f2.Parsed.EngineeringValues[1].Unit != "hPa" {
 		t.Errorf("Wrong pressure: %+v", f2.Parsed.EngineeringValues[1])
+	}
+}
+
+func TestSetProfileCatalogMapsFramesAlreadyCaptured(t *testing.T) {
+	e := NewEngine(10)
+	now := time.Now()
+	e.AddRaw("test", DirectionMasterToSlave, rtu(2, 3, 1, 44, 0, 1), QualityWire, now)
+	e.AddRaw("test", DirectionSlaveToMaster, rtu(2, 3, 2, 2, 38), QualityWire, now.Add(time.Millisecond))
+
+	cat := NewProfileCatalog()
+	cat.Devices[2] = &DeviceProfile{UnitID: 2, Registers: []ProfileRegister{{Address: 300, Name: "Humidity", DataType: "uint16", Scale: 0.1, Unit: "%RH"}}}
+	cat.Devices[2].BuildIndex()
+	e.SetProfileCatalog(cat)
+
+	frames := e.Snapshot(0).Frames
+	if len(frames) != 2 || len(frames[1].Parsed.EngineeringValues) != 1 {
+		t.Fatalf("profile was not applied to existing response: %+v", frames)
+	}
+	if got := frames[1].Parsed.EngineeringValues[0].NumericValue; math.Abs(got-55) > 0.001 {
+		t.Fatalf("unexpected mapped value: %v", got)
 	}
 }

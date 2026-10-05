@@ -46,24 +46,24 @@ type DiagnosticItem struct {
 }
 
 type DecodedModbus struct {
-	UnitID        uint8    `json:"unit_id"`
-	TransactionID *uint16  `json:"transaction_id,omitempty"`
-	FunctionCode  uint8    `json:"function_code"`
-	FunctionName  string   `json:"function_name"`
-	Kind          string   `json:"kind"` // request, response, exception, unknown
-	Address       *uint16  `json:"address,omitempty"`
-	Quantity      *uint16  `json:"quantity,omitempty"`
-	Values        []uint16 `json:"values,omitempty"`
-	Bits          []bool   `json:"bits,omitempty"`
-	ExceptionCode *uint8   `json:"exception_code,omitempty"`
-	ExceptionName string   `json:"exception_name,omitempty"`
-	CRCValid      *bool    `json:"crc_valid,omitempty"`
-	MBAPValid     *bool    `json:"mbap_valid,omitempty"`
-	Summary       string   `json:"summary"`
-	SubFunction   *uint16  `json:"sub_function,omitempty"`
-	WriteAddress  *uint16  `json:"write_address,omitempty"`
-	WriteQuantity *uint16  `json:"write_quantity,omitempty"`
-	WriteValues   []uint16 `json:"write_values,omitempty"`
+	UnitID            uint8              `json:"unit_id"`
+	TransactionID     *uint16            `json:"transaction_id,omitempty"`
+	FunctionCode      uint8              `json:"function_code"`
+	FunctionName      string             `json:"function_name"`
+	Kind              string             `json:"kind"` // request, response, exception, unknown
+	Address           *uint16            `json:"address,omitempty"`
+	Quantity          *uint16            `json:"quantity,omitempty"`
+	Values            []uint16           `json:"values,omitempty"`
+	Bits              []bool             `json:"bits,omitempty"`
+	ExceptionCode     *uint8             `json:"exception_code,omitempty"`
+	ExceptionName     string             `json:"exception_name,omitempty"`
+	CRCValid          *bool              `json:"crc_valid,omitempty"`
+	MBAPValid         *bool              `json:"mbap_valid,omitempty"`
+	Summary           string             `json:"summary"`
+	SubFunction       *uint16            `json:"sub_function,omitempty"`
+	WriteAddress      *uint16            `json:"write_address,omitempty"`
+	WriteQuantity     *uint16            `json:"write_quantity,omitempty"`
+	WriteValues       []uint16           `json:"write_values,omitempty"`
 	AndMask           *uint16            `json:"and_mask,omitempty"`
 	OrMask            *uint16            `json:"or_mask,omitempty"`
 	TextData          string             `json:"text_data,omitempty"`
@@ -153,14 +153,14 @@ type Snapshot struct {
 }
 
 type CaptureConfig struct {
-	Mode       CaptureMode `json:"mode"`
-	ListenHost string      `json:"listen_host,omitempty"`
-	ListenPort uint16      `json:"listen_port,omitempty"`
-	TargetHost string      `json:"target_host,omitempty"`
-	TargetPort uint16      `json:"target_port,omitempty"`
-	SerialPort string      `json:"serial_port,omitempty"`
-	BaudRate   int         `json:"baud_rate,omitempty"`
-	DataBits   int         `json:"data_bits,omitempty"`
+	Mode          CaptureMode `json:"mode"`
+	ListenHost    string      `json:"listen_host,omitempty"`
+	ListenPort    uint16      `json:"listen_port,omitempty"`
+	TargetHost    string      `json:"target_host,omitempty"`
+	TargetPort    uint16      `json:"target_port,omitempty"`
+	SerialPort    string      `json:"serial_port,omitempty"`
+	BaudRate      int         `json:"baud_rate,omitempty"`
+	DataBits      int         `json:"data_bits,omitempty"`
 	Parity        string      `json:"parity,omitempty"`
 	StopBits      int         `json:"stop_bits,omitempty"`
 	InterfaceName string      `json:"interface_name,omitempty"`
@@ -176,14 +176,21 @@ type CaptureStatus struct {
 	ActiveConnections int         `json:"active_connections"`
 	BytesCaptured     uint64      `json:"bytes_captured"`
 	DroppedChunks     uint64      `json:"dropped_chunks"`
-	LastError         string      `json:"last_error,omitempty"`
+	// DroppedFrames counts frames forwarded on the wire but skipped by the analyzer because its
+	// queue was full; the proxy itself never drops or delays data.
+	DroppedFrames uint64 `json:"dropped_frames"`
+	// TCP holds stream statistics of a passive network capture.
+	TCP       *TCPStreamStats `json:"tcp,omitempty"`
+	LastError string          `json:"last_error,omitempty"`
 }
 
 type CaptureFile struct {
-	SchemaVersion int             `json:"schema_version"`
-	CreatedAt     string          `json:"created_at"`
-	App           string          `json:"app"`
-	Frames        []CapturedFrame `json:"frames"`
+	SchemaVersion int              `json:"schema_version"`
+	CreatedAt     string           `json:"created_at"`
+	App           string           `json:"app"`
+	Frames        []CapturedFrame  `json:"frames"`
+	Baseline      *BaselineProfile `json:"baseline,omitempty"`
+	Profile       *ProfileCatalog  `json:"profile,omitempty"`
 }
 
 type pendingRequest struct {
@@ -194,4 +201,5 @@ type pendingRequest struct {
 	unitID  uint8
 	fc      uint8
 	address *uint16
+	pdu     []byte // request PDU, to recognise byte-for-byte echo responses (FC05/06/08/22)
 }

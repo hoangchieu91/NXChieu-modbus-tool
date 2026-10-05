@@ -42,7 +42,7 @@ func GenerateShiftReportHTML(snap Snapshot, opts ShiftReportOptions) string {
 
 	successRate := 100.0
 	if h.Requests > 0 {
-		errCount := h.Exceptions + h.Timeouts + h.CRCErrorFrames
+		errCount := h.Exceptions + h.Timeouts
 		if h.Requests >= errCount {
 			successRate = float64(h.Requests-errCount) / float64(h.Requests) * 100.0
 		} else {
@@ -178,10 +178,15 @@ func GenerateShiftReportHTML(snap Snapshot, opts ShiftReportOptions) string {
 		sb.WriteString(`<tr><td colspan="8" style="text-align: center; color: #94a3b8;">Chưa ghi nhận thiết bị Modbus Slave nào trên đường truyền</td></tr>`)
 	} else {
 		for _, dev := range h.Devices {
+			// States produced by the engine: healthy, degraded, suspected_offline, offline,
+			// not_polled, unknown. The success rate only means something when requests were seen.
 			statusPill := `<span class="pill pill-good">Hoạt động tốt</span>`
-			if dev.State == "critical" || dev.SuccessRate < 80 {
+			switch {
+			case dev.Requests == 0 || dev.State == "not_polled" || dev.State == "unknown":
+				statusPill = `<span class="pill pill-warn">Chưa được poll</span>`
+			case dev.State == "offline" || dev.State == "suspected_offline" || dev.SuccessRate < 80:
 				statusPill = `<span class="pill pill-bad">Nguy cấp</span>`
-			} else if dev.State == "warning" || dev.SuccessRate < 95 {
+			case dev.State == "degraded" || dev.SuccessRate < 95:
 				statusPill = `<span class="pill pill-warn">Cảnh báo</span>`
 			}
 
@@ -219,17 +224,23 @@ func GenerateShiftReportHTML(snap Snapshot, opts ShiftReportOptions) string {
 
 	writeCount := 0
 	for _, frame := range snap.Frames {
-		if frame.Parsed != nil && (frame.Parsed.FunctionCode == 5 || frame.Parsed.FunctionCode == 6 || frame.Parsed.FunctionCode == 15 || frame.Parsed.FunctionCode == 16 || frame.Parsed.FunctionCode == 22 || frame.Parsed.FunctionCode == 23) {
+		if frame.Parsed != nil && (frame.Direction == DirectionMasterToSlave || frame.Parsed.Kind == "request") && (frame.Parsed.FunctionCode == 5 || frame.Parsed.FunctionCode == 6 || frame.Parsed.FunctionCode == 15 || frame.Parsed.FunctionCode == 16 || frame.Parsed.FunctionCode == 22 || frame.Parsed.FunctionCode == 23) {
 			writeCount++
 			if writeCount > 50 {
 				continue // Cap to 50 write records to keep report manageable
 			}
 			addrStr := "—"
-			if frame.Parsed.Address != nil {
-				addrStr = fmt.Sprintf("%d (0x%04X)", *frame.Parsed.Address, *frame.Parsed.Address)
+			address := frame.Parsed.Address
+			if frame.Parsed.WriteAddress != nil {
+				address = frame.Parsed.WriteAddress
+			}
+			if address != nil {
+				addrStr = fmt.Sprintf("%d (0x%04X)", *address, *address)
 			}
 			valStr := "—"
-			if len(frame.Parsed.Values) > 0 {
+			if len(frame.Parsed.WriteValues) > 0 {
+				valStr = fmt.Sprintf("%v", frame.Parsed.WriteValues)
+			} else if len(frame.Parsed.Values) > 0 {
 				valStr = fmt.Sprintf("%v", frame.Parsed.Values)
 			} else if len(frame.Parsed.Bits) > 0 {
 				valStr = fmt.Sprintf("%v", frame.Parsed.Bits)
@@ -339,8 +350,7 @@ func ExportShiftReport(path string, snap Snapshot, opts ShiftReportOptions) erro
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close report: %w", err)
 	}
-	_ = os.Remove(path)
-	if err := os.Rename(tempName, path); err != nil {
+	if err := replaceFile(tempName, path); err != nil {
 		return fmt.Errorf("rename report file: %w", err)
 	}
 	return nil

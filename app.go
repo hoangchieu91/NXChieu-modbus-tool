@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,19 +17,22 @@ import (
 
 // App struct manages application state and bridges Wails frontend calls.
 type App struct {
-	ctx          context.Context
-	mu           sync.Mutex
-	sessMgr      *modbus.SessionManager
-	sniffer      *sniffer.Engine
-	capture      *sniffer.SessionManager
-	remoteServer *web.RemoteServer
+	ctx     context.Context
+	mu      sync.Mutex
+	sessMgr *modbus.SessionManager
+	sniffer *sniffer.Engine
+	capture *sniffer.SessionManager
+	// diagnosticSniffer receives traffic of the built-in self-test sessions, so simulator
+	// traffic never enters the user's baseline, health score, reports or saved captures.
+	diagnosticSniffer *sniffer.Engine
+	remoteServer      *web.RemoteServer
 
 	pendingWrites map[string]chan string // remote writes awaiting the desktop UI, by request id
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	app := &App{sniffer: sniffer.NewEngine(50000)}
+	app := &App{sniffer: sniffer.NewEngine(50000), diagnosticSniffer: sniffer.NewEngine(2000)}
 	app.capture = sniffer.NewSessionManager(app.sniffer)
 
 	app.remoteServer = web.NewRemoteServer(
@@ -42,18 +46,7 @@ func NewApp() *App {
 
 	app.sessMgr = modbus.NewSessionManager(
 		func(sessionID string, res modbus.PollResult) {
-			// Feed the shared analyzer before notifying either UI. The current master library does
-			// not expose its transport, so these frames are explicitly marked reconstructed.
-			if res.RawTx != "" && res.RawRx != "" {
-				_ = app.sniffer.AddHexPair(sessionID, res.RawTx, res.RawRx, sniffer.QualityReconstructed, time.Duration(res.LatencyMs)*time.Millisecond)
-			} else if res.RawTx != "" {
-				frame, err := app.sniffer.AddHex(sessionID, sniffer.DirectionMasterToSlave, res.RawTx, sniffer.QualityReconstructed)
-				if err == nil && res.Error != "" {
-					app.sniffer.MarkTimedOut(frame.Sequence)
-				}
-			} else if res.RawRx != "" {
-				_, _ = app.sniffer.AddHex(sessionID, sniffer.DirectionSlaveToMaster, res.RawRx, sniffer.QualityReconstructed)
-			}
+			app.ingestPollResult(sessionID, res)
 			if app.ctx != nil {
 				runtime.EventsEmit(app.ctx, "poll-data", res)
 			}
@@ -65,7 +58,7 @@ func NewApp() *App {
 			// Some slave transports can provide the observed request bytes. Keep them in the same
 			// analyzer pipeline; empty HexRaw events still update the existing activity UI only.
 			if act.HexRaw != "" {
-				_, _ = app.sniffer.AddHex(act.SessionID, sniffer.DirectionMasterToSlave, act.HexRaw, sniffer.QualityWire)
+				_, _ = app.snifferFor(act.SessionID).AddHex(act.SessionID, sniffer.DirectionMasterToSlave, act.HexRaw, sniffer.QualityWire)
 			}
 			if app.ctx != nil {
 				runtime.EventsEmit(app.ctx, "slave-activity", act)
@@ -74,6 +67,39 @@ func NewApp() *App {
 	)
 
 	return app
+}
+
+// diagnosticSessionPrefix marks sessions created by the Studio self-test.
+const diagnosticSessionPrefix = "__studio_diagnostic_"
+
+// snifferFor returns the analyzer that records a session's traffic.
+func (a *App) snifferFor(sessionID string) *sniffer.Engine {
+	if strings.HasPrefix(sessionID, diagnosticSessionPrefix) {
+		return a.diagnosticSniffer
+	}
+	return a.sniffer
+}
+
+// GetDiagnosticSnifferSnapshot returns frames recorded for the self-test sessions only.
+func (a *App) GetDiagnosticSnifferSnapshot(limit int) sniffer.Snapshot {
+	return a.diagnosticSniffer.Snapshot(limit)
+}
+
+// ingestPollResult keeps polling and Read Once on the same analyzer path.
+func (a *App) ingestPollResult(sessionID string, res modbus.PollResult) {
+	engine := a.snifferFor(sessionID)
+	// The current master library does not expose its transport, so these frames are explicitly
+	// marked reconstructed rather than claiming a passive wire capture.
+	if res.RawTx != "" && res.RawRx != "" {
+		_ = engine.AddHexPair(sessionID, res.RawTx, res.RawRx, sniffer.QualityReconstructed, time.Duration(res.LatencyMs)*time.Millisecond)
+	} else if res.RawTx != "" {
+		frame, err := engine.AddHex(sessionID, sniffer.DirectionMasterToSlave, res.RawTx, sniffer.QualityReconstructed)
+		if err == nil && res.Error != "" {
+			engine.MarkTimedOut(frame.Sequence)
+		}
+	} else if res.RawRx != "" {
+		_, _ = engine.AddHex(sessionID, sniffer.DirectionSlaveToMaster, res.RawRx, sniffer.QualityReconstructed)
+	}
 }
 
 var remoteWriteSeq atomic.Uint64
@@ -193,7 +219,9 @@ func (a *App) SessionStopPolling(sessionID string) {
 
 // SessionReadOnce executes a single read on a session.
 func (a *App) SessionReadOnce(sessionID string, def modbus.PollDefinition) modbus.PollResult {
-	return a.sessMgr.MasterReadOnce(sessionID, def)
+	result := a.sessMgr.MasterReadOnce(sessionID, def)
+	a.ingestPollResult(sessionID, result)
+	return result
 }
 
 // SessionWriteRegister writes a 16-bit register on a session.
@@ -325,7 +353,7 @@ func (a *App) SaveSnifferCapture() (string, error) {
 	if err != nil || path == "" {
 		return path, err
 	}
-	return path, sniffer.SaveCapture(path, a.sniffer.Snapshot(0))
+	return path, sniffer.SaveCaptureWithMetadata(path, a.sniffer.Snapshot(0), a.sniffer.GetProfileCatalog())
 }
 
 func (a *App) OpenSnifferCapture() (string, error) {
@@ -336,11 +364,11 @@ func (a *App) OpenSnifferCapture() (string, error) {
 	if err != nil || path == "" {
 		return path, err
 	}
-	frames, err := sniffer.LoadCapture(path)
-	if err != nil {
+	// Validated first, then streamed into the analyzer: a broken file leaves the current
+	// capture untouched and a large one is never held in memory as a whole.
+	if _, err := sniffer.LoadCaptureInto(path, a.sniffer); err != nil {
 		return path, err
 	}
-	a.sniffer.Replace(frames)
 	return path, nil
 }
 

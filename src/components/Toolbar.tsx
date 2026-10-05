@@ -20,6 +20,8 @@ import {
   HelpCircle,
   Search,
   Smartphone,
+  Zap,
+  PanelsTopLeft,
 } from 'lucide-react';
 import { DataFormat, SessionRole, SlaveTable } from '../types/modbus';
 
@@ -55,6 +57,8 @@ interface ToolbarProps {
   onOpenScanner?: () => void;
   onOpenMobileRemote?: () => void;
   onOpenProtocolAnalyzer?: () => void;
+  onOpenAnalyzerStudio?: () => void;
+  onOpenWorkspaceStudio?: () => void;
 }
 
 
@@ -87,6 +91,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onOpenScanner,
   onOpenMobileRemote,
   onOpenProtocolAnalyzer,
+  onOpenAnalyzerStudio,
+  onOpenWorkspaceStudio,
 }) => {
   return (
     <div className="flex flex-wrap items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs gap-2">
@@ -366,6 +372,28 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
             <span>Analyzer</span>
+          </button>
+        )}
+
+        {onOpenAnalyzerStudio && (
+          <button
+            onClick={onOpenAnalyzerStudio}
+            className="flex items-center space-x-1.5 rounded border border-emerald-400/40 bg-emerald-300/10 px-2.5 py-1 font-semibold text-emerald-200 transition-all hover:bg-emerald-300/20"
+            title="Mở giao diện Analyzer Studio mới (F11)"
+          >
+            <Zap className="h-3.5 w-3.5 text-emerald-300" />
+            <span>Studio</span>
+          </button>
+        )}
+
+        {onOpenWorkspaceStudio && (
+          <button
+            onClick={onOpenWorkspaceStudio}
+            className="flex items-center space-x-1.5 rounded border border-violet-400/40 bg-violet-300/10 px-2.5 py-1 font-semibold text-violet-200 transition-all hover:bg-violet-300/20"
+            title="Chuyển toàn bộ ứng dụng sang giao diện Studio"
+          >
+            <PanelsTopLeft className="h-3.5 w-3.5 text-violet-300" />
+            <span>UI mới</span>
           </button>
         )}
 

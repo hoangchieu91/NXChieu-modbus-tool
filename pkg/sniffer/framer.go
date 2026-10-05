@@ -58,8 +58,13 @@ func (f *StreamFramer) takeTCP() (frames [][]byte) {
 }
 
 func (f *StreamFramer) takeRTU(flush bool) (frames [][]byte) {
+	// A brute-force CRC search over every length is only done at a silent gap and only for the
+	// frame starting at the first byte; repeating it for each byte of continuous noise made a
+	// noisy bus take longer to frame than real time.
+	bruteForce := flush
 	for len(f.buffer) >= 4 {
-		lengths := rtuCandidateLengths(f.buffer)
+		lengths := rtuCandidateLengths(f.buffer, bruteForce)
+		bruteForce = false
 		matched := 0
 		for _, length := range lengths {
 			if length <= len(f.buffer) && length >= 4 && crc16(f.buffer[:length-2]) == binary.LittleEndian.Uint16(f.buffer[length-2:length]) {
@@ -81,7 +86,7 @@ func (f *StreamFramer) takeRTU(flush bool) (frames [][]byte) {
 	return frames
 }
 
-func rtuCandidateLengths(buffer []byte) []int {
+func rtuCandidateLengths(buffer []byte, bruteForce bool) []int {
 	if len(buffer) < 2 {
 		return nil
 	}
@@ -104,14 +109,45 @@ func rtuCandidateLengths(buffer []byte) []int {
 			lengths = append(lengths, 9+int(buffer[6]))
 		}
 		return uniqueLengths(lengths)
-	default:
-		// Unknown functions are still recoverable at an RTU silent gap by CRC search.
-		lengths := make([]int, 0, minInt(len(buffer)-3, 253))
-		for n := 4; n <= len(buffer) && n <= 256; n++ {
-			lengths = append(lengths, n)
+	case 7, 17: // request: unit+fc+crc; FC07 response 5 bytes; FC17 response with byte count
+		lengths := []int{4, 5}
+		if fc == 17 && len(buffer) >= 3 {
+			lengths = append(lengths, 5+int(buffer[2]))
 		}
-		return lengths
+		return uniqueLengths(lengths)
+	case 8:
+		// Most sub-functions carry one data word; others are found by CRC search at a gap.
+		if bruteForce {
+			return append([]int{8}, bruteForceLengths(buffer)...)
+		}
+		return []int{8}
+	case 22:
+		return []int{10}
+	case 23:
+		lengths := []int{}
+		if len(buffer) >= 11 {
+			lengths = append(lengths, 13+int(buffer[10])) // request with write byte count
+		}
+		if len(buffer) >= 3 {
+			lengths = append(lengths, 5+int(buffer[2])) // response with read byte count
+		}
+		return uniqueLengths(lengths)
+	default:
+		if !bruteForce {
+			return nil
+		}
+		// Unknown functions (e.g. FC43) are still recoverable at an RTU silent gap by CRC search.
+		return bruteForceLengths(buffer)
 	}
+}
+
+// bruteForceLengths lists every possible RTU frame length (4..256) for a CRC search.
+func bruteForceLengths(buffer []byte) []int {
+	lengths := make([]int, 0, minInt(len(buffer)-3, 253))
+	for n := 4; n <= len(buffer) && n <= 256; n++ {
+		lengths = append(lengths, n)
+	}
+	return lengths
 }
 
 func uniqueLengths(values []int) []int {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 )
 
 // DeviceDiff compares metrics for a single Modbus unit between two captures.
@@ -69,11 +68,11 @@ func DiffSnapshots(snapA, snapB Snapshot) CaptureDiffResult {
 	}
 
 	if snapA.Health.Requests > 0 {
-		errA := snapA.Health.Exceptions + snapA.Health.Timeouts + snapA.Health.CRCErrorFrames
+		errA := snapA.Health.Exceptions + snapA.Health.Timeouts
 		res.ErrorRateA = float64(errA) / float64(snapA.Health.Requests) * 100.0
 	}
 	if snapB.Health.Requests > 0 {
-		errB := snapB.Health.Exceptions + snapB.Health.Timeouts + snapB.Health.CRCErrorFrames
+		errB := snapB.Health.Exceptions + snapB.Health.Timeouts
 		res.ErrorRateB = float64(errB) / float64(snapB.Health.Requests) * 100.0
 	}
 	res.ErrorRateDelta = res.ErrorRateB - res.ErrorRateA
@@ -112,7 +111,7 @@ func DiffSnapshots(snapA, snapB Snapshot) CaptureDiffResult {
 			diff.RequestsA = dA.Requests
 			diff.SuccessRateA = dA.SuccessRate
 			diff.P95LatencyUSA = dA.P95LatencyUS
-			diff.Remarks = fmt.Sprintf("Thiết bị Unit %d có trong Capture A nhưng vắng mặt hoàn toàn trong Capture B", uid)
+			diff.Remarks = fmt.Sprintf("Không quan sát thấy Unit %d trong Capture B; cần xác nhận Master có poll thiết bị và thời lượng hai capture tương đương", uid)
 			res.MissingDevices = append(res.MissingDevices, uid)
 		} else if !inA && inB {
 			diff.Status = "new"
@@ -161,7 +160,7 @@ func DiffSnapshots(snapA, snapB Snapshot) CaptureDiffResult {
 	// Determine overall verdict
 	switch {
 	case len(res.MissingDevices) > 0 && res.HealthScoreDelta < 0:
-		res.Verdict = "Suy giảm (Warning - Mất thiết bị & Giảm điểm)"
+		res.Verdict = "Cần kiểm tra (không quan sát thấy thiết bị & giảm điểm)"
 	case res.HealthScoreDelta <= -10 || res.ErrorRateDelta >= 5.0:
 		res.Verdict = "Suy giảm (Regressed)"
 	case res.HealthScoreDelta >= 10 || res.ErrorRateDelta <= -5.0:
@@ -174,7 +173,7 @@ func DiffSnapshots(snapA, snapB Snapshot) CaptureDiffResult {
 	summaryParts = append(summaryParts, fmt.Sprintf("Điểm sức khỏe: %d -> %d (Δ %+d)", res.HealthScoreA, res.HealthScoreB, res.HealthScoreDelta))
 	summaryParts = append(summaryParts, fmt.Sprintf("Tỷ lệ lỗi bus: %.2f%% -> %.2f%% (Δ %+.2f%%)", res.ErrorRateA, res.ErrorRateB, res.ErrorRateDelta))
 	if len(res.MissingDevices) > 0 {
-		summaryParts = append(summaryParts, fmt.Sprintf("Thiết bị rớt mạng (%d): Unit %v", len(res.MissingDevices), res.MissingDevices))
+		summaryParts = append(summaryParts, fmt.Sprintf("Không quan sát thấy trong Capture B (%d): Unit %v", len(res.MissingDevices), res.MissingDevices))
 	}
 	if len(res.NewDevices) > 0 {
 		summaryParts = append(summaryParts, fmt.Sprintf("Thiết bị mới phát hiện (%d): Unit %v", len(res.NewDevices), res.NewDevices))
@@ -189,29 +188,29 @@ func DiffSnapshots(snapA, snapB Snapshot) CaptureDiffResult {
 
 // DiffCaptureFiles loads two capture files from disk, reconstructs snapshots and computes their diff.
 func DiffCaptureFiles(pathA, pathB string) (*CaptureDiffResult, error) {
-	framesA, err := LoadCapture(pathA)
+	// Each capture streams into a bounded analyzer; neither file is held in memory as a whole.
+	snapA, err := snapshotFromFile(pathA)
 	if err != nil {
-		return nil, fmt.Errorf("load capture A (%s): %w", pathA, err)
+		return nil, fmt.Errorf("capture A: %w", err)
 	}
-	framesB, err := LoadCapture(pathB)
+	snapB, err := snapshotFromFile(pathB)
 	if err != nil {
-		return nil, fmt.Errorf("load capture B (%s): %w", pathB, err)
+		return nil, fmt.Errorf("capture B: %w", err)
 	}
-
-	snapA := snapshotFromFrames(framesA)
-	snapB := snapshotFromFrames(framesB)
 
 	diff := DiffSnapshots(snapA, snapB)
 	return &diff, nil
 }
 
-func snapshotFromFrames(frames []CapturedFrame) Snapshot {
-	engine := NewEngine(len(frames) + 10)
-	for _, f := range frames {
-		t := time.Unix(0, f.CapturedAtUnixNS)
-		engine.AddObserved(f.SourceID, f.CaptureSource, f.Transport, f.Direction, f.Raw, f.CaptureQuality, t)
+// maxDiffFrames bounds the analyzer used per capture in a diff (the live analyzer keeps 50k).
+const maxDiffFrames = 50000
+
+func snapshotFromFile(path string) (Snapshot, error) {
+	engine := NewEngine(maxDiffFrames)
+	if _, err := LoadCaptureInto(path, engine); err != nil {
+		return Snapshot{}, err
 	}
-	return engine.Snapshot(0)
+	return engine.Snapshot(0), nil
 }
 
 func calculateDeviceScore(dev DeviceHealth) int {

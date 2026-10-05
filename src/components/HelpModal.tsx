@@ -38,9 +38,9 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
             </div>
             <div>
               <h2 className="text-base font-bold text-slate-100 flex items-center space-x-2">
-                <span>Hướng Dẫn Sử Dụng NXChieu Modbus Tool</span>
+                <span>Hướng dẫn sử dụng</span>
                 <span className="text-xs bg-cyan-950 text-cyan-400 border border-cyan-800/60 px-2 py-0.5 rounded-full font-mono font-normal">
-                  v2.0 2-in-1 Suite
+                  NXChieu Studio
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
