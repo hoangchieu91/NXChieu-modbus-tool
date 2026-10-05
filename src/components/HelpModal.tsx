@@ -651,7 +651,11 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                     <kbd className="px-2 py-1 bg-purple-950 border border-purple-700 rounded text-purple-300 font-mono font-bold">F9</kbd>
                   </div>
                   <div className="py-2.5 flex items-center justify-between">
-                    <span className="text-slate-300">Ghi giá trị thanh ghi (khi đang nhập ô Value)</span>
+                    <span className="text-slate-300 font-semibold text-cyan-400">Mở Protocol Analyzer & Bus Health Monitor</span>
+                    <kbd className="px-2 py-1 bg-cyan-950 border border-cyan-700 rounded text-cyan-300 font-mono font-bold">F10</kbd>
+                  </div>
+                  <div className="py-2.5 flex items-center justify-between">
+                    <span className="text-slate-300">Ghi giá trị thanh ghi (khi đang nhập ô Value hoặc Inspector)</span>
                     <kbd className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-amber-400 font-mono font-bold">Enter ↵</kbd>
                   </div>
                   <div className="py-2.5 flex items-center justify-between">

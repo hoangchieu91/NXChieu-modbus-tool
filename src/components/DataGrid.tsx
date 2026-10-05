@@ -14,6 +14,8 @@ interface DataGridProps {
   rows: RegisterRow[];
   isCoil: boolean;
   sheetFormat?: DataFormat;
+  selectedAddress?: number | null;
+  onSelectRow?: (row: RegisterRow) => void;
   onRowDoubleClick: (row: RegisterRow) => void;
   onUpdateAlias: (address: number, alias: string) => void;
   onUpdateUnit: (address: number, unit: string) => void;
@@ -29,6 +31,8 @@ const DataGridView: React.FC<DataGridProps> = ({
   rows,
   isCoil,
   sheetFormat = 'unsigned16',
+  selectedAddress,
+  onSelectRow,
   onRowDoubleClick,
   onUpdateAlias,
   onUpdateUnit,
@@ -326,12 +330,19 @@ const DataGridView: React.FC<DataGridProps> = ({
                   }
                 }
 
+                const isSelected = selectedAddress === row.address;
+
                 return (
                   <tr
                     key={row.address}
+                    onClick={() => onSelectRow && onSelectRow(row)}
                     onDoubleClick={() => onRowDoubleClick(row)}
-                    className={`hover:bg-slate-900/60 transition-colors group cursor-pointer ${
-                      idx % 2 === 0 ? 'bg-slate-950' : 'bg-slate-900/25'
+                    className={`hover:bg-cyan-950/20 transition-colors group cursor-pointer ${
+                      isSelected
+                        ? 'bg-cyan-950/40 ring-1 ring-inset ring-cyan-500/50'
+                        : idx % 2 === 0
+                        ? 'bg-slate-950'
+                        : 'bg-slate-900/25'
                     }`}
                   >
                     {/* Index & Trend Indicator */}

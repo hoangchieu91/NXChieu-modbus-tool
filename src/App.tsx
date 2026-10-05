@@ -43,6 +43,7 @@ import { TrendChart } from './components/TrendChart';
 import { HelpModal } from './components/HelpModal';
 import { ScannerModal } from './components/ScannerModal';
 import { ActionNotice, ActionNoticeState } from './components/ActionNotice';
+import { QuickInspector } from './components/QuickInspector';
 import { DiagnosticCheck, StudioDiagnostics } from './components/StudioDiagnostics';
 import { ErrorBoundary } from './components/ErrorBoundary';
 const FRONTEND_MODE_KEY = 'nxchieu-frontend-mode';
@@ -366,6 +367,10 @@ export const App: React.FC = () => {
   const [chartTraces, setChartTraces] = useState<ChartTrace[]>([]);
   const [traceData, setTraceData] = useState<Record<string, ChartDataPoint[]>>({});
   const [isChartVisible, setIsChartVisible] = useState<boolean>(false);
+
+  // Quick Inspector Panel State
+  const [showInspector, setShowInspector] = useState<boolean>(true);
+  const [selectedRowAddress, setSelectedRowAddress] = useState<number | null>(null);
 
   const TRACE_PALETTE = useMemo(
     () => ['#22d3ee', '#10b981', '#f59e0b', '#f43f5e', '#a855f7', '#38bdf8', '#eab308', '#ec4899'],
@@ -1498,6 +1503,18 @@ export const App: React.FC = () => {
     exportSheetToCSV(activeTab, activeRowsObj.rows);
   };
 
+  // Selected row for QuickInspector
+  const inspectorSelectedRow = useMemo(() => {
+    if (selectedRowAddress === null) return activeRowsObj.rows[0] || null;
+    return activeRowsObj.rows.find((r) => r.address === selectedRowAddress) || activeRowsObj.rows[0] || null;
+  }, [activeRowsObj.rows, selectedRowAddress]);
+
+  const isCurrentTabReadOnly = activeTab.role === 'master' && (activeTab.definition.function_code === 2 || activeTab.definition.function_code === 4);
+  const isInspectorRowTracing = useMemo(() => {
+    if (!inspectorSelectedRow) return false;
+    return chartTraces.some((t) => t.tabId === activeTab.id && t.address === inspectorSelectedRow.address);
+  }, [chartTraces, activeTab.id, inspectorSelectedRow]);
+
   const runStudioDiagnostics = async (): Promise<DiagnosticCheck[]> => {
     const results: DiagnosticCheck[] = [];
     const check = async (name: string, action: () => Promise<string>) => {
@@ -1681,10 +1698,9 @@ export const App: React.FC = () => {
         onOpenScanner={() => setIsScannerModalOpen(true)}
         onOpenMobileRemote={() => setIsMobileModalOpen(true)}
         onOpenProtocolAnalyzer={() => { setIsAnalyzerStudioOpen(false); setIsProtocolAnalyzerOpen(true); }}
-        onOpenAnalyzerStudio={() => { setIsProtocolAnalyzerOpen(false); setIsAnalyzerStudioOpen(true); }}
-        onOpenWorkspaceStudio={() => setFrontendMode('studio')}
+        showInspector={showInspector}
+        onToggleInspector={() => setShowInspector(!showInspector)}
       />
-
 
       {/* 3. Tab Bar */}
       <TabBar
@@ -1696,73 +1712,98 @@ export const App: React.FC = () => {
         onRenameTab={handleRenameTab}
       />
 
-      {/* 4. Main Data Grid Viewport (Single View or Split Dual View) */}
+      {/* 4. Main Data Grid Viewport (Single View or Split Dual View) with QuickInspector */}
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        {!isSplitView ? (
-          <DataGrid
-            rows={activeRowsObj.rows}
-            isCoil={activeRowsObj.isCoil}
-            sheetFormat={activeTab.format}
-            {...activeGridHandlers}
-            activeChartColorMap={activeChartColorMap}
-          />
-        ) : (
-          <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-800 overflow-hidden bg-slate-950">
-            {/* Left Panel: Active Tab */}
-            <div className="flex flex-col h-full overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
-                <span className="flex items-center space-x-1.5 text-cyan-400 font-bold">
-                  <span>◫ Cửa sổ 1: {activeTab.title}</span>
-                  <span className="text-[10px] text-slate-400 font-normal">
-                    ({activeTab.role === 'master' ? 'Master Poll' : 'Slave Server'})
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+          {!isSplitView ? (
+            <DataGrid
+              rows={activeRowsObj.rows}
+              isCoil={activeRowsObj.isCoil}
+              sheetFormat={activeTab.format}
+              selectedAddress={inspectorSelectedRow?.address}
+              onSelectRow={(row) => setSelectedRowAddress(row.address)}
+              {...activeGridHandlers}
+              activeChartColorMap={activeChartColorMap}
+            />
+          ) : (
+            <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-800 overflow-hidden bg-slate-950">
+              {/* Left Panel: Active Tab */}
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
+                  <span className="flex items-center space-x-1.5 text-cyan-400 font-bold">
+                    <span>◫ Cửa sổ 1: {activeTab.title}</span>
+                    <span className="text-[10px] text-slate-400 font-normal">
+                      ({activeTab.role === 'master' ? 'Master Poll' : 'Slave Server'})
+                    </span>
                   </span>
-                </span>
-                <span className="text-[11px] text-slate-500 font-mono">Sheet chính</span>
-              </div>
-              <DataGrid
-                rows={activeRowsObj.rows}
-                isCoil={activeRowsObj.isCoil}
-                sheetFormat={activeTab.format}
-                {...activeGridHandlers}
-                activeChartColorMap={activeChartColorMap}
-              />
-            </div>
-
-            {/* Right Panel: Split Tab */}
-            <div className="flex flex-col h-full overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
-                <div className="flex items-center space-x-2">
-                  <span className="text-indigo-400 font-bold">◫ Cửa sổ 2:</span>
-                  <select
-                    value={splitTab.id}
-                    onChange={(e) => setSplitTabId(e.target.value)}
-                    className="bg-slate-950 text-indigo-300 text-xs border border-slate-700 rounded px-2 py-0.5 focus:outline-none focus:border-cyan-400 cursor-pointer font-semibold"
-                  >
-                    {tabs.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.title} ({t.role === 'master' ? 'Master' : 'Slave'})
-                      </option>
-                    ))}
-                  </select>
+                  <span className="text-[11px] text-slate-500 font-mono">Sheet chính</span>
                 </div>
-                <button
-                  onClick={() => setIsSplitView(false)}
-                  className="text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded text-xs transition-colors"
-                  title="Đóng chế độ xem song song"
-                >
-                  ✕ Đóng Split
-                </button>
+                <DataGrid
+                  rows={activeRowsObj.rows}
+                  isCoil={activeRowsObj.isCoil}
+                  sheetFormat={activeTab.format}
+                  selectedAddress={inspectorSelectedRow?.address}
+                  onSelectRow={(row) => setSelectedRowAddress(row.address)}
+                  {...activeGridHandlers}
+                  activeChartColorMap={activeChartColorMap}
+                />
               </div>
-              <DataGrid
-                rows={splitRowsObj.rows}
-                isCoil={splitRowsObj.isCoil}
-                sheetFormat={splitTab.format}
-                {...splitGridHandlers}
-                activeChartColorMap={splitChartColorMap}
-              />
+
+              {/* Right Panel: Split Tab */}
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-indigo-400 font-bold">◫ Cửa sổ 2:</span>
+                    <select
+                      value={splitTab.id}
+                      onChange={(e) => setSplitTabId(e.target.value)}
+                      className="bg-slate-950 text-indigo-300 text-xs border border-slate-700 rounded px-2 py-0.5 focus:outline-none focus:border-cyan-400 cursor-pointer font-semibold"
+                    >
+                      {tabs.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.title} ({t.role === 'master' ? 'Master' : 'Slave'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    onClick={() => setIsSplitView(false)}
+                    className="text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded text-xs transition-colors"
+                    title="Đóng chế độ xem song song"
+                  >
+                    ✕ Đóng Split
+                  </button>
+                </div>
+                <DataGrid
+                  rows={splitRowsObj.rows}
+                  isCoil={splitRowsObj.isCoil}
+                  sheetFormat={splitTab.format}
+                  {...splitGridHandlers}
+                  activeChartColorMap={splitChartColorMap}
+                />
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Quick Inspector Side Panel */}
+          {showInspector && !isSplitView && (
+            <QuickInspector
+              selectedRow={inspectorSelectedRow}
+              isCoil={activeRowsObj.isCoil}
+              isReadOnly={isCurrentTabReadOnly}
+              sheetFormat={activeTab.format}
+              onClose={() => setShowInspector(false)}
+              onUpdateAlias={(addr, alias) => handleUpdateAlias(activeTab.id, addr, alias)}
+              onUpdateUnit={(addr, unit) => handleUpdateUnit(activeTab.id, addr, unit)}
+              onUpdateScaling={(addr, scaling) => handleUpdateScaling(activeTab.id, addr, scaling)}
+              onUpdateFormat={(addr, fmt) => handleUpdateFormat(activeTab.id, addr, fmt)}
+              onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
+              onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
+              onOpenChart={(row) => handleToggleTrace(activeTab, row)}
+              isTracing={isInspectorRowTracing}
+            />
+          )}
+        </div>
 
         {/* Realtime Multi-Trace Trend Chart Drawer (MQTT Explorer style) */}
         {chartTraces.length > 0 && isChartVisible && (
