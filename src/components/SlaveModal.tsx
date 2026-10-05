@@ -119,17 +119,19 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs select-none">
-      <div className="w-[520px] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl overflow-hidden font-sans text-xs">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 select-none">
+      <div className="w-[520px] bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl overflow-hidden font-sans text-xs animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800/90 border-b border-slate-700 text-slate-100">
-          <div className="flex items-center space-x-2 font-semibold">
-            <Server className="w-4 h-4 text-amber-400" />
-            <span>Thiết lập Modbus Slave</span>
+        <div className="flex items-center justify-between px-5 py-3.5 bg-slate-950/70 border-b border-slate-800 text-slate-100">
+          <div className="flex items-center space-x-2.5 font-semibold text-sm">
+            <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30">
+              <Server className="w-4 h-4" />
+            </div>
+            <span>Thiết lập Modbus Slave (Server)</span>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>

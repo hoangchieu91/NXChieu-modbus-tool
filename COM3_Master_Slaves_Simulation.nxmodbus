@@ -1,0 +1,85 @@
+{
+  "app": "NXChieu-Modbus-Tool",
+  "version": "1.0",
+  "projectName": "COM3_Master_Slaves_Simulation",
+  "exportedAt": "2026-10-05T15:05:00.000Z",
+  "activeTabId": "tab-com3-slaves-all",
+  "tabs": [
+    {
+      "id": "tab-com3-slaves-all",
+      "title": "COM3 Multi-Slave (1..20)",
+      "role": "slave",
+      "definition": {
+        "slave_id": 1,
+        "function_code": 3,
+        "start_address": 512,
+        "quantity": 30,
+        "scan_rate_ms": 1000
+      },
+      "format": "unsigned16",
+      "formats": {},
+      "aliases": {
+        "514": "Slave Status / Data 514 (0x0202)",
+        "515": "Telemetry Value 515 (0x0203)",
+        "531": "Measured Param 531 (0x0213)",
+        "532": "Measured Param 532 (0x0214)",
+        "1002": "Meter Counter High (0x03EA)",
+        "1003": "Meter Counter Low (0x03EB)",
+        "1042": "Device Config High (0x0412)",
+        "1043": "Device Config Low (0x0413)"
+      },
+      "units": {
+        "514": "RAW",
+        "515": "mA",
+        "531": "V",
+        "532": "Hz",
+        "1002": "m3",
+        "1042": "kW"
+      },
+      "scalings": {},
+      "slaveConfig": {
+        "type": "serial",
+        "port": "COM3",
+        "baud_rate": 9600,
+        "data_bits": 8,
+        "parity": "none",
+        "stop_bits": 1,
+        "slave_id": 1,
+        "slave_id_end": 20
+      },
+      "slaveTable": "holding",
+      "slaveStartAddr": 500,
+      "slaveQuantity": 50,
+      "isListening": false,
+      "isSimulating": false
+    },
+    {
+      "id": "tab-com3-master-monitor",
+      "title": "Master Monitor (Slave 2)",
+      "role": "master",
+      "definition": {
+        "slave_id": 2,
+        "function_code": 3,
+        "start_address": 514,
+        "quantity": 20,
+        "scan_rate_ms": 1000
+      },
+      "format": "unsigned16",
+      "formats": {},
+      "aliases": {
+        "514": "Status Reg (0x0202)",
+        "531": "Measured Param (0x0213)"
+      },
+      "units": {
+        "514": "HEX",
+        "531": "V"
+      },
+      "scalings": {},
+      "slaveTable": "holding",
+      "slaveStartAddr": 0,
+      "slaveQuantity": 20,
+      "isListening": false,
+      "isSimulating": false
+    }
+  ]
+}

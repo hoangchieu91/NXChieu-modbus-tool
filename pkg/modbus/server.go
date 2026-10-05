@@ -3,6 +3,7 @@ package modbus
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -732,8 +733,38 @@ func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemo
 
 			frame := pending[:want]
 			if len(frame) >= 4 && binary.LittleEndian.Uint16(frame[want-2:]) == CRC16Modbus(frame[:want-2]) {
+				reqHex := strings.ToUpper(hex.EncodeToString(frame))
+				unitID := frame[0]
+				fc := frame[1]
+				nowStr := time.Now().Format("15:04:05.000")
+
+				// Emit RX event so all frames on the bus show up in Traffic log
+				if store.onActivity != nil {
+					store.onActivity(SlaveActivityEvent{
+						SessionID: store.sessionID,
+						Timestamp: nowStr,
+						Client:    clientAddr,
+						Function:  fmt.Sprintf("FC%02X", fc),
+						IsWrite:   false,
+						HexRaw:    reqHex,
+						Summary:   fmt.Sprintf("RX [Unit %d, FC%02X, %d bytes]", unitID, fc, len(frame)),
+					})
+				}
+
 				if resp := s.processRTUFrame(store, slaveID, frame, clientAddr); len(resp) > 0 {
 					_, _ = rw.Write(resp)
+					// Emit TX event so slave response shows up in Traffic log
+					if store.onActivity != nil {
+						store.onActivity(SlaveActivityEvent{
+							SessionID: store.sessionID,
+							Timestamp: time.Now().Format("15:04:05.000"),
+							Client:    clientAddr,
+							Function:  fmt.Sprintf("FC%02X Resp", fc),
+							IsWrite:   true,
+							HexRaw:    strings.ToUpper(hex.EncodeToString(resp)),
+							Summary:   fmt.Sprintf("TX [Unit %d, %d bytes]", unitID, len(resp)),
+						})
+					}
 				}
 				pending = pending[want:]
 			} else {

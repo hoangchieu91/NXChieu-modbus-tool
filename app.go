@@ -58,7 +58,11 @@ func NewApp() *App {
 			// Some slave transports can provide the observed request bytes. Keep them in the same
 			// analyzer pipeline; empty HexRaw events still update the existing activity UI only.
 			if act.HexRaw != "" {
-				_, _ = app.snifferFor(act.SessionID).AddHex(act.SessionID, sniffer.DirectionMasterToSlave, act.HexRaw, sniffer.QualityWire)
+				dir := sniffer.DirectionMasterToSlave
+				if act.IsWrite {
+					dir = sniffer.DirectionSlaveToMaster
+				}
+				_, _ = app.snifferFor(act.SessionID).AddHex(act.SessionID, dir, act.HexRaw, sniffer.QualityWire)
 			}
 			if app.ctx != nil {
 				runtime.EventsEmit(app.ctx, "slave-activity", act)

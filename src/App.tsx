@@ -678,12 +678,21 @@ export const App: React.FC = () => {
       const targetId = act.session_id || activeTabRef.current.id;
 
       updateTabState(targetId, (prev) => {
+        // If it's an internal memory notification without HexRaw, we don't duplicate it in traffic log
+        if (!act.hex_raw) {
+          return {
+            ...prev,
+            slaveActivityCount: prev.slaveActivityCount + 1,
+          };
+        }
+
+        const isResponse = act.is_write;
         const newEntry: TrafficEntry = {
           id: `slv-${Date.now()}-${Math.random()}`,
           timestamp: act.timestamp,
-          direction: act.is_write ? 'rx' : 'tx',
+          direction: isResponse ? 'tx' : 'rx',
           description: `${act.client} -> ${act.summary}`,
-          hex: act.hex_raw || act.summary,
+          hex: act.hex_raw,
         };
 
         return {
