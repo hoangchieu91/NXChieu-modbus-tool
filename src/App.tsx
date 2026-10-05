@@ -1641,8 +1641,11 @@ export const App: React.FC = () => {
         onOpenSlaveSetup={() => setIsSlaveModalOpen(true)}
         onTogglePoll={handleTogglePoll}
         onToggleSlaveServer={handleToggleSlaveServer}
-        onToggleTraffic={() => setShowTraffic(!showTraffic)}
-        showTraffic={showTraffic}
+        onReadOnce={handleReadOnce}
+        onClearCounters={() => {
+          sessionResetCounters(activeTab.id).catch((err) => console.error('Reset counters failed:', err));
+          updateTabState(activeTab.id, (prev) => ({ ...prev, txCount: 0, errCount: 0 }));
+        }}
         onQuickSimulate={() =>
           handleConnect({
             type: 'serial',
@@ -1657,9 +1660,16 @@ export const App: React.FC = () => {
         onOpenProject={handleOpenProjectClick}
         onSaveProject={handleSaveProject}
         onExportCSV={handleExportCSV}
-        onOpenHelp={() => setIsHelpModalOpen(true)}
+        onToggleTraffic={() => setShowTraffic(!showTraffic)}
+        showTraffic={showTraffic}
+        isSplitView={isSplitView}
+        onToggleSplitView={handleToggleSplitView}
+        showInspector={showInspector}
+        onToggleInspector={() => setShowInspector(!showInspector)}
         onOpenScanner={() => setIsScannerModalOpen(true)}
         onOpenMobileRemote={() => setIsMobileModalOpen(true)}
+        onOpenProtocolAnalyzer={() => { setIsAnalyzerStudioOpen(false); setIsProtocolAnalyzerOpen(true); }}
+        onOpenHelp={() => setIsHelpModalOpen(true)}
       />
 
       {/* 2. Toolbar */}

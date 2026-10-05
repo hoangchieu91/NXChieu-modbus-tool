@@ -1,24 +1,28 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
-  Plug,
-  Settings,
-  Play,
-  Square,
-  Terminal,
-  RefreshCw,
-  Shield,
-  Radio,
-  Server,
   FolderOpen,
   Save,
   FileSpreadsheet,
-  HelpCircle,
+  Zap,
+  Play,
+  Square,
+  Activity,
+  Sliders,
   Search,
   Smartphone,
+  HelpCircle,
+  RotateCcw,
+  Unplug,
+  Plug,
+  Settings,
+  ChevronDown,
+  Terminal,
+  Columns2,
+  RefreshCw,
 } from 'lucide-react';
 import { SessionRole } from '../types/modbus';
 
-interface MenuBarProps {
+interface ModernMenuBarProps {
   role: SessionRole;
   onRoleChange: (role: SessionRole) => void;
   isConnected: boolean;
@@ -30,19 +34,25 @@ interface MenuBarProps {
   onOpenSlaveSetup: () => void;
   onTogglePoll: () => void;
   onToggleSlaveServer: () => void;
-  onToggleTraffic: () => void;
-  showTraffic: boolean;
+  onReadOnce: () => void;
+  onClearCounters: () => void;
   onQuickSimulate: () => void;
   onOpenProject: () => void;
   onSaveProject: () => void;
   onExportCSV: () => void;
-  onOpenHelp?: () => void;
+  onToggleTraffic: () => void;
+  showTraffic: boolean;
+  isSplitView?: boolean;
+  onToggleSplitView?: () => void;
+  showInspector?: boolean;
+  onToggleInspector?: () => void;
   onOpenScanner?: () => void;
   onOpenMobileRemote?: () => void;
+  onOpenProtocolAnalyzer?: () => void;
+  onOpenHelp?: () => void;
 }
 
-
-export const MenuBar: React.FC<MenuBarProps> = ({
+export const MenuBar: React.FC<ModernMenuBarProps> = ({
   role,
   onRoleChange,
   isConnected,
@@ -54,210 +64,332 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onOpenSlaveSetup,
   onTogglePoll,
   onToggleSlaveServer,
-  onToggleTraffic,
-  showTraffic,
+  onReadOnce,
+  onClearCounters,
   onQuickSimulate,
   onOpenProject,
   onSaveProject,
   onExportCSV,
-  onOpenHelp,
+  onToggleTraffic,
+  showTraffic,
+  isSplitView,
+  onToggleSplitView,
+  showInspector,
+  onToggleInspector,
   onOpenScanner,
   onOpenMobileRemote,
+  onOpenProtocolAnalyzer,
+  onOpenHelp,
 }) => {
+  const [openMenu, setOpenMenu] = useState<'file' | 'connection' | 'tools' | 'view' | 'help' | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenu(null);
+      }
+    };
+    window.addEventListener('mousedown', handleOutsideClick);
+    return () => window.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  const handleItemClick = (action: () => void) => {
+    setOpenMenu(null);
+    action();
+  };
+
   return (
-    <div className="flex items-center justify-between px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 select-none">
+    <div
+      ref={menuRef}
+      className="flex items-center justify-between px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 select-none relative z-30"
+    >
+      {/* Left: App Brand & Dropdown Menus */}
       <div className="flex items-center space-x-1">
-        {/* App Logo / Title */}
-        <div className="flex items-center space-x-1.5 pr-3 font-semibold text-slate-100 border-r border-slate-700/60 mr-1">
-          <div className={`w-2.5 h-2.5 rounded-full ${role === 'slave' ? 'bg-amber-500' : 'bg-cyan-500'} animate-pulse`} />
-          <span className={`tracking-wide font-mono ${role === 'slave' ? 'text-amber-400' : 'text-cyan-400'}`}>
-            NXChieu Modbus 2-in-1 Suite
+        {/* App Logo & Title */}
+        <div className="flex items-center space-x-2 pr-3 mr-1 border-r border-slate-700/60 font-semibold text-slate-100">
+          <div className={`w-2.5 h-2.5 rounded-full ${role === 'slave' ? 'bg-amber-400' : 'bg-cyan-400'} shadow-sm`} />
+          <span className="font-mono tracking-wide text-xs">
+            NXChieu <span className={role === 'slave' ? 'text-amber-400' : 'text-cyan-400'}>Modbus Suite</span>
           </span>
         </div>
 
-        {/* Project File Operations: Open, Save, Export CSV */}
-        <div className="flex items-center space-x-0.5 border-r border-slate-700/60 pr-2 mr-1">
+        {/* 1. TỆP (FILE) */}
+        <div className="relative">
           <button
-            onClick={onOpenProject}
-            className="px-2 py-0.5 rounded hover:bg-slate-800 hover:text-white flex items-center space-x-1 transition-colors text-slate-300"
-            title="Mở tệp dự án Modbus (.nxmodbus / .json)"
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
-            <span>Mở Dự Án</span>
-          </button>
-
-          <button
-            onClick={onSaveProject}
-            className="px-2 py-0.5 rounded hover:bg-slate-800 hover:text-white flex items-center space-x-1 transition-colors text-slate-300"
-            title="Lưu toàn bộ các Sheet và cấu hình dự án ra file .nxmodbus"
-          >
-            <Save className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Lưu Dự Án</span>
-          </button>
-
-          <button
-            onClick={onExportCSV}
-            className="px-2 py-0.5 rounded hover:bg-slate-800 hover:text-white flex items-center space-x-1 transition-colors text-slate-300"
-            title="Xuất bảng thanh ghi của sheet hiện tại ra file CSV để mở bằng Excel"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Xuất CSV</span>
-          </button>
-        </div>
-
-        {/* Connection & Operation Buttons */}
-        <div className="flex items-center space-x-0.5">
-          {role === 'master' ? (
-            <>
-              {/* Connection */}
-              <button
-                onClick={isConnected ? onDisconnect : onOpenConnection}
-                className="px-2 py-0.5 rounded hover:bg-slate-800 hover:text-white flex items-center space-x-1 transition-colors"
-              >
-                <Plug className="w-3.5 h-3.5" />
-                <span>{isConnected ? 'Disconnect' : 'Connect (F3)'}</span>
-              </button>
-
-              {/* Setup Definition */}
-              <button
-                onClick={onOpenDefinition}
-                className="px-2 py-0.5 rounded hover:bg-slate-800 hover:text-white flex items-center space-x-1 transition-colors"
-              >
-                <Settings className="w-3.5 h-3.5" />
-                <span>Read/Write Definition (F8)</span>
-              </button>
-
-              {/* Poll / Pause */}
-              <button
-                onClick={onTogglePoll}
-                disabled={!isConnected}
-                className={`px-2 py-0.5 rounded flex items-center space-x-1 transition-colors ${
-                  !isConnected
-                    ? 'opacity-40 cursor-not-allowed'
-                    : isPolling
-                    ? 'hover:bg-amber-900/40 text-amber-300'
-                    : 'hover:bg-emerald-900/40 text-emerald-300'
-                }`}
-              >
-                {isPolling ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                <span>{isPolling ? 'Pause Polling' : 'Start Polling'}</span>
-              </button>
-
-              {/* Modbus Scanner Trigger */}
-              {onOpenScanner && (
-                <button
-                  onClick={onOpenScanner}
-                  className="px-2 py-0.5 rounded hover:bg-slate-800 text-cyan-300 flex items-center space-x-1 transition-colors font-medium border border-cyan-800/40 bg-cyan-950/40 ml-1"
-                  title="Mở Bộ Quét & Thám Tử Modbus (Slave ID, Baudrate, Register Explorer)"
-                >
-                  <Search className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Bộ Quét (Scanner)</span>
-                </button>
-              )}
-            </>
-
-          ) : (
-            <>
-              {/* Slave Setup */}
-              <button
-                onClick={onOpenSlaveSetup}
-                className="px-2 py-0.5 rounded hover:bg-slate-800 hover:text-white flex items-center space-x-1 transition-colors"
-              >
-                <Server className="w-3.5 h-3.5 text-amber-400" />
-                <span>Slave Server Setup</span>
-              </button>
-
-              {/* Listen / Stop */}
-              <button
-                onClick={onToggleSlaveServer}
-                className={`px-2 py-0.5 rounded flex items-center space-x-1 transition-colors ${
-                  isListening
-                    ? 'hover:bg-rose-900/40 text-rose-300'
-                    : 'hover:bg-emerald-900/40 text-emerald-300'
-                }`}
-              >
-                {isListening ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                <span>{isListening ? 'Stop Listening' : 'Start Listening'}</span>
-              </button>
-            </>
-          )}
-
-          {/* View Traffic */}
-          <button
-            onClick={onToggleTraffic}
-            className={`px-2 py-0.5 rounded flex items-center space-x-1 transition-colors ${
-              showTraffic ? 'bg-slate-800 text-cyan-400 font-medium' : 'hover:bg-slate-800 hover:text-white'
+            onClick={() => setOpenMenu(openMenu === 'file' ? null : 'file')}
+            className={`px-2.5 py-1 rounded hover:bg-slate-800 hover:text-white transition flex items-center space-x-1 ${
+              openMenu === 'file' ? 'bg-slate-800 text-white' : ''
             }`}
           >
-            <Terminal className="w-3.5 h-3.5" />
-            <span>Traffic Log</span>
+            <span>Tệp (File)</span>
+            <ChevronDown className="w-3 h-3 text-slate-500" />
           </button>
-
-          {/* Role Switch Shortcut in Menu */}
-          <button
-            onClick={() => onRoleChange(role === 'master' ? 'slave' : 'master')}
-            className="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 flex items-center space-x-1 transition-colors ml-2"
-            title="Chuyển đổi nhanh vai trò Master / Slave"
-          >
-            {role === 'master' ? (
-              <>
-                <Shield className="w-3 h-3 text-amber-400" />
-                <span>Switch to Slave</span>
-              </>
-            ) : (
-              <>
-                <Radio className="w-3 h-3 text-cyan-400" />
-                <span>Switch to Master</span>
-              </>
-            )}
-          </button>
-
-          {/* Virtual Simulator Mode */}
-          {role === 'master' && (
-            <button
-              onClick={onQuickSimulate}
-              title="Quick connect to built-in virtual simulated meter"
-              className="px-2 py-0.5 rounded bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-700/50 flex items-center space-x-1 transition-colors ml-1"
-            >
-              <RefreshCw className="w-3 h-3" />
-              <span>Virtual Sim</span>
-            </button>
+          {openMenu === 'file' && (
+            <div className="absolute left-0 mt-1 w-52 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 text-xs text-slate-200">
+              <button
+                onClick={() => handleItemClick(onOpenProject)}
+                className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+              >
+                <FolderOpen className="w-4 h-4 text-amber-400" />
+                <span className="flex-1">Mở dự án...</span>
+                <span className="text-[10px] text-slate-500 font-mono">Ctrl+O</span>
+              </button>
+              <button
+                onClick={() => handleItemClick(onSaveProject)}
+                className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+              >
+                <Save className="w-4 h-4 text-emerald-400" />
+                <span className="flex-1">Lưu dự án (.nxmodbus)</span>
+                <span className="text-[10px] text-slate-500 font-mono">Ctrl+S</span>
+              </button>
+              <div className="h-px bg-slate-800 my-1" />
+              <button
+                onClick={() => handleItemClick(onExportCSV)}
+                className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-cyan-400" />
+                <span>Xuất bảng ra Excel (CSV)</span>
+              </button>
+            </div>
           )}
         </div>
+
+        {/* 2. KẾT NỐI (CONNECTION) */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenMenu(openMenu === 'connection' ? null : 'connection')}
+            className={`px-2.5 py-1 rounded hover:bg-slate-800 hover:text-white transition flex items-center space-x-1 ${
+              openMenu === 'connection' ? 'bg-slate-800 text-white' : ''
+            }`}
+          >
+            <span>Kết Nối (Connection)</span>
+            <ChevronDown className="w-3 h-3 text-slate-500" />
+          </button>
+          {openMenu === 'connection' && (
+            <div className="absolute left-0 mt-1 w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 text-xs text-slate-200">
+              {role === 'master' ? (
+                <>
+                  <button
+                    onClick={() => handleItemClick(isConnected ? onDisconnect : onOpenConnection)}
+                    className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                  >
+                    {isConnected ? <Unplug className="w-4 h-4 text-rose-400" /> : <Plug className="w-4 h-4 text-cyan-400" />}
+                    <span className="flex-1">{isConnected ? 'Ngắt kết nối' : 'Kết nối Modbus...'}</span>
+                    <span className="text-[10px] text-slate-500 font-mono">F3</span>
+                  </button>
+                  <button
+                    onClick={() => handleItemClick(onOpenDefinition)}
+                    className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                  >
+                    <Settings className="w-4 h-4 text-cyan-400" />
+                    <span className="flex-1">Cài đặt quét (Definition)...</span>
+                    <span className="text-[10px] text-slate-500 font-mono">F8</span>
+                  </button>
+                  <div className="h-px bg-slate-800 my-1" />
+                  <button
+                    onClick={() => handleItemClick(onQuickSimulate)}
+                    className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                  >
+                    <Zap className="w-4 h-4 text-indigo-400" />
+                    <span>Kết nối Đồng hồ điện ảo (Virtual Sim)</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => handleItemClick(onToggleSlaveServer)}
+                    className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                  >
+                    {isListening ? <Square className="w-4 h-4 text-rose-400" /> : <Play className="w-4 h-4 text-emerald-400" />}
+                    <span className="flex-1">{isListening ? 'Dừng Slave Server' : 'Khởi chạy Slave Server'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleItemClick(onOpenSlaveSetup)}
+                    className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                  >
+                    <Settings className="w-4 h-4 text-amber-400" />
+                    <span>Cấu hình cổng & Slave ID...</span>
+                  </button>
+                </>
+              )}
+              <div className="h-px bg-slate-800 my-1" />
+              <button
+                onClick={() => handleItemClick(() => onRoleChange(role === 'master' ? 'slave' : 'master'))}
+                className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left text-cyan-300 font-medium"
+              >
+                <RefreshCw className="w-4 h-4 text-cyan-400" />
+                <span>Chuyển sang chế độ {role === 'master' ? 'Slave (Server)' : 'Master (Poll)'}</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 3. VẬN HÀNH (OPERATION) */}
+        {role === 'master' && (
+          <div className="relative">
+            <button
+              onClick={() => setOpenMenu(openMenu === 'tools' ? null : 'tools')}
+              className={`px-2.5 py-1 rounded hover:bg-slate-800 hover:text-white transition flex items-center space-x-1 ${
+                openMenu === 'tools' ? 'bg-slate-800 text-white' : ''
+              }`}
+            >
+              <span>Vận Hành</span>
+              <ChevronDown className="w-3 h-3 text-slate-500" />
+            </button>
+            {openMenu === 'tools' && (
+              <div className="absolute left-0 mt-1 w-52 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 text-xs text-slate-200">
+                <button
+                  disabled={!isConnected}
+                  onClick={() => handleItemClick(onTogglePoll)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left disabled:opacity-40"
+                >
+                  {isPolling ? <Square className="w-4 h-4 text-amber-400" /> : <Play className="w-4 h-4 text-emerald-400" />}
+                  <span>{isPolling ? 'Tạm dừng Polling' : 'Bắt đầu Polling liên tục'}</span>
+                </button>
+                <button
+                  disabled={!isConnected || isPolling}
+                  onClick={() => handleItemClick(onReadOnce)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left disabled:opacity-40"
+                >
+                  <Activity className="w-4 h-4 text-sky-400" />
+                  <span className="flex-1">Đọc 1 lần (Read Once)</span>
+                  <span className="text-[10px] text-slate-500 font-mono">F7</span>
+                </button>
+                <div className="h-px bg-slate-800 my-1" />
+                <button
+                  onClick={() => handleItemClick(onClearCounters)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                >
+                  <RotateCcw className="w-4 h-4 text-slate-400" />
+                  <span>Xóa bộ đếm (Reset Counters)</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 4. HIỂN THỊ (VIEW) */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenMenu(openMenu === 'view' ? null : 'view')}
+            className={`px-2.5 py-1 rounded hover:bg-slate-800 hover:text-white transition flex items-center space-x-1 ${
+              openMenu === 'view' ? 'bg-slate-800 text-white' : ''
+            }`}
+          >
+            <span>Hiển Thị (View)</span>
+            <ChevronDown className="w-3 h-3 text-slate-500" />
+          </button>
+          {openMenu === 'view' && (
+            <div className="absolute left-0 mt-1 w-52 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 text-xs text-slate-200">
+              <button
+                onClick={() => handleItemClick(onToggleTraffic)}
+                className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center justify-between text-left"
+              >
+                <div className="flex items-center space-x-2">
+                  <Terminal className="w-4 h-4 text-cyan-400" />
+                  <span>Khung Traffic Log (Hex)</span>
+                </div>
+                {showTraffic && <span className="text-emerald-400 font-bold">✓</span>}
+              </button>
+              {onToggleInspector && (
+                <button
+                  onClick={() => handleItemClick(onToggleInspector)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center justify-between text-left"
+                >
+                  <div className="flex items-center space-x-2">
+                    <Sliders className="w-4 h-4 text-amber-400" />
+                    <span>Point Inspector</span>
+                  </div>
+                  {showInspector && <span className="text-emerald-400 font-bold">✓</span>}
+                </button>
+              )}
+              {onToggleSplitView && (
+                <button
+                  onClick={() => handleItemClick(onToggleSplitView)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center justify-between text-left"
+                >
+                  <div className="flex items-center space-x-2">
+                    <Columns2 className="w-4 h-4 text-indigo-400" />
+                    <span>Split View (Xem song song)</span>
+                  </div>
+                  {isSplitView && <span className="text-emerald-400 font-bold">✓</span>}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 5. CÔNG CỤ (TOOLS) */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenMenu(openMenu === 'tools' ? null : 'tools')}
+            className={`px-2.5 py-1 rounded hover:bg-slate-800 hover:text-white transition flex items-center space-x-1 ${
+              openMenu === 'tools' ? 'bg-slate-800 text-white' : ''
+            }`}
+          >
+            <span>Công Cụ</span>
+            <ChevronDown className="w-3 h-3 text-slate-500" />
+          </button>
+          {openMenu === 'tools' && (
+            <div className="absolute left-0 mt-1 w-64 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 text-xs text-slate-200">
+              {onOpenScanner && (
+                <button
+                  onClick={() => handleItemClick(onOpenScanner)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                >
+                  <Search className="w-4 h-4 text-cyan-400" />
+                  <span className="flex-1">Bộ Quét Modbus Scanner</span>
+                  <span className="text-[10px] text-slate-500 font-mono">F4</span>
+                </button>
+              )}
+              {onOpenMobileRemote && (
+                <button
+                  onClick={() => handleItemClick(onOpenMobileRemote)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                >
+                  <Smartphone className="w-4 h-4 text-purple-400" />
+                  <span className="flex-1">Giám sát trên điện thoại (Mobile)</span>
+                  <span className="text-[10px] text-slate-500 font-mono">F9</span>
+                </button>
+              )}
+              {onOpenProtocolAnalyzer && (
+                <button
+                  onClick={() => handleItemClick(onOpenProtocolAnalyzer)}
+                  className="w-full px-3 py-1.5 hover:bg-slate-800 flex items-center space-x-2 text-left"
+                >
+                  <Activity className="w-4 h-4 text-emerald-400" />
+                  <span className="flex-1">Protocol Analyzer & Bus Health</span>
+                  <span className="text-[10px] text-slate-500 font-mono">F10</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 6. TRỢ GIÚP (HELP) */}
+        {onOpenHelp && (
+          <button
+            onClick={onOpenHelp}
+            className="px-2.5 py-1 rounded hover:bg-slate-800 hover:text-white transition flex items-center space-x-1"
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Trợ Giúp (F1)</span>
+          </button>
+        )}
       </div>
 
-      <div className="flex items-center space-x-2 text-slate-400 text-[11px]">
-        <span className="text-slate-300 font-medium">Modbus RTU / TCP / RTU over TCP</span>
-        <span className="text-slate-600">|</span>
-        <span className="text-slate-400 font-mono">Master + Slave 2-in-1</span>
-
-        {onOpenMobileRemote && (
-          <>
-            <span className="text-slate-600">|</span>
-            <button
-              onClick={onOpenMobileRemote}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-950/70 hover:bg-purple-900 text-purple-300 border border-purple-700/60 font-semibold transition-all shadow-sm"
-              title="Mở Giám sát từ xa trên Điện thoại & Mã QR (F9)"
-            >
-              <Smartphone className="w-3.5 h-3.5 text-purple-400" />
-              <span>Xem Trên ĐT (F9)</span>
-            </button>
-          </>
-        )}
-
-        {onOpenHelp && (
-          <>
-            <span className="text-slate-600">|</span>
-            <button
-              onClick={onOpenHelp}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-cyan-950/70 hover:bg-cyan-900 text-cyan-300 border border-cyan-800/60 font-semibold transition-all shadow-sm"
-              title="Mở tài liệu hướng dẫn sử dụng và phím tắt (F1)"
-            >
-              <HelpCircle className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Hướng Dẫn (F1)</span>
-            </button>
-          </>
-        )}
+      {/* Right: Mode Badge & Quick Info */}
+      <div className="flex items-center space-x-2 text-[11px] text-slate-400">
+        <span className="text-slate-500 font-mono">Giao thức:</span>
+        <span className="text-slate-300 font-medium">RTU / TCP / RTU over TCP</span>
+        <span className="text-slate-700">|</span>
+        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+          role === 'master' ? 'bg-cyan-950 text-cyan-300 border border-cyan-800/60' : 'bg-amber-950 text-amber-300 border border-amber-800/60'
+        }`}>
+          {role === 'master' ? 'MASTER MODE' : 'SLAVE MODE'}
+        </span>
       </div>
     </div>
   );
