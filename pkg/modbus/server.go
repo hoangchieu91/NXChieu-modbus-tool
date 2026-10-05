@@ -25,9 +25,10 @@ type SlaveMemoryStore struct {
 	InputRegisters   [65536]uint16
 	HoldingRegisters [65536]uint16
 
-	sessionID  string
-	slaveID    uint8
-	onActivity func(SlaveActivityEvent)
+	sessionID   string
+	slaveID     uint8
+	slaveIDEnd  uint8
+	onActivity  func(SlaveActivityEvent)
 }
 
 // NewSlaveMemoryStore initializes a memory store with practical default simulation values.
@@ -35,6 +36,7 @@ func NewSlaveMemoryStore(sessionID string, slaveID uint8, onActivity func(SlaveA
 	store := &SlaveMemoryStore{
 		sessionID:  sessionID,
 		slaveID:    slaveID,
+		slaveIDEnd: slaveID,
 		onActivity: onActivity,
 	}
 
@@ -68,7 +70,14 @@ func NewSlaveMemoryStore(sessionID string, slaveID uint8, onActivity func(SlaveA
 // device" IDs on TCP. Any other ID is answered like a gateway with no such target (0x0B);
 // "illegal data address" would make scanners report every ID as an existing device.
 func (s *SlaveMemoryStore) checkUnitLocked(unitID uint8) error {
-	if unitID == 0 || unitID == 255 || s.slaveID == 0 || unitID == s.slaveID {
+	if unitID == 0 || unitID == 255 || s.slaveID == 0 {
+		return nil
+	}
+	endID := s.slaveIDEnd
+	if endID < s.slaveID {
+		endID = s.slaveID
+	}
+	if unitID >= s.slaveID && unitID <= endID {
 		return nil
 	}
 	return simonmodbus.ErrGWTargetFailedToRespond
@@ -338,6 +347,18 @@ func (s *SlaveMemoryStore) setSlaveID(id uint8) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.slaveID = id
+	s.slaveIDEnd = id
+}
+
+func (s *SlaveMemoryStore) setSlaveRange(startID uint8, endID uint8) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slaveID = startID
+	if endID >= startID {
+		s.slaveIDEnd = endID
+	} else {
+		s.slaveIDEnd = startID
+	}
 }
 
 func (s *SlaveMemoryStore) SetCoil(table string, addr uint16, value bool) {
@@ -406,14 +427,18 @@ func (s *ModbusSlaveServer) Start(config SlaveConfig) error {
 	if slaveID == 0 {
 		slaveID = 1
 	}
+	slaveIDEnd := config.SlaveIDEnd
+	if slaveIDEnd < slaveID {
+		slaveIDEnd = slaveID
+	}
 
 	// Keep memory edited by the user before starting; only the unit ID changes.
 	if s.store == nil {
 		s.store = NewSlaveMemoryStore(s.sessionID, slaveID, s.onActivity)
-	} else {
-		s.store.setSlaveID(slaveID)
 	}
+	s.store.setSlaveRange(slaveID, slaveIDEnd)
 	s.config.SlaveID = slaveID
+	s.config.SlaveIDEnd = slaveIDEnd
 
 	switch strings.ToLower(config.Type) {
 	case "tcp":
@@ -733,7 +758,11 @@ func (s *ModbusSlaveServer) handleRTUConnection(rw frameReader, store *SlaveMemo
 // bytes, or nil when no response must be sent (other unit IDs, broadcast).
 func (s *ModbusSlaveServer) processRTUFrame(store *SlaveMemoryStore, slaveID uint8, frame []byte, clientAddr string) []byte {
 	unitID := frame[0]
-	if unitID != 0 && unitID != slaveID {
+	endID := store.slaveIDEnd
+	if endID < slaveID {
+		endID = slaveID
+	}
+	if unitID != 0 && (unitID < slaveID || unitID > endID) {
 		return nil // addressed to another device on the bus: stay silent
 	}
 	broadcast := unitID == 0

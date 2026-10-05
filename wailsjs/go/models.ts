@@ -180,6 +180,7 @@ export namespace modbus {
 	    parity?: string;
 	    stop_bits?: number;
 	    slave_id: number;
+	    slave_id_end?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new SlaveConfig(source);
@@ -196,6 +197,7 @@ export namespace modbus {
 	        this.parity = source["parity"];
 	        this.stop_bits = source["stop_bits"];
 	        this.slave_id = source["slave_id"];
+	        this.slave_id_end = source["slave_id_end"];
 	    }
 	}
 	export class SlaveMemorySlice {

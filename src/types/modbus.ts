@@ -343,6 +343,7 @@ export interface SlaveConfig {
   parity?: string;
   stop_bits?: number;
   slave_id: number;
+  slave_id_end?: number;
 }
 
 export interface SlaveMemorySlice {

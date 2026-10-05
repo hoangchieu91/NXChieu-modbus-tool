@@ -81,8 +81,9 @@ type SlaveConfig struct {
 	BaudRate uint   `json:"baud_rate,omitempty"`
 	DataBits uint   `json:"data_bits,omitempty"`
 	Parity   string `json:"parity,omitempty"`
-	StopBits uint   `json:"stop_bits,omitempty"`
-	SlaveID  uint8  `json:"slave_id"` // 1-247
+	StopBits    uint   `json:"stop_bits,omitempty"`
+	SlaveID     uint8  `json:"slave_id"` // 1-247 (Start ID if range is configured)
+	SlaveIDEnd  uint8  `json:"slave_id_end,omitempty"` // If > slave_id, simulates multi-slave range [slave_id..slave_id_end]
 }
 
 // SlaveActivityEvent represents a request/write event handled by the Slave server.

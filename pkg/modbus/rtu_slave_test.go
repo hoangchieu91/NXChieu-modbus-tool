@@ -197,3 +197,43 @@ func TestRTUSlaveMergedRequests(t *testing.T) {
 		t.Fatalf("got2 % X, want2 % X", got2, want2)
 	}
 }
+
+func TestRTUSlaveMultiSlaveRange(t *testing.T) {
+	srv := NewModbusSlaveServer("test-range", nil)
+	srv.config.SlaveID = 1
+	srv.config.SlaveIDEnd = 20
+	store := srv.GetMemoryStore()
+	store.setSlaveRange(1, 20)
+
+	server, client := net.Pipe()
+	go srv.handleRTUConnection(&tcpFrameReader{conn: server, silence: 50 * time.Millisecond}, store, 1, "pipe")
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+
+	// Test Unit 1
+	req1 := BuildRTUReadRequest(1, 3, 0, 1)
+	if _, err := client.Write(req1); err != nil {
+		t.Fatal(err)
+	}
+	want1 := BuildRTURegisterResponse(1, 3, []uint16{2205})
+	if got := readResp(t, client, len(want1)); !bytes.Equal(got, want1) {
+		t.Fatalf("unit 1 response: got % X, want % X", got, want1)
+	}
+
+	// Test Unit 20 (within range)
+	req20 := BuildRTUReadRequest(20, 3, 0, 1)
+	if _, err := client.Write(req20); err != nil {
+		t.Fatal(err)
+	}
+	want20 := BuildRTURegisterResponse(20, 3, []uint16{2205})
+	if got := readResp(t, client, len(want20)); !bytes.Equal(got, want20) {
+		t.Fatalf("unit 20 response: got % X, want % X", got, want20)
+	}
+
+	// Test Unit 21 (out of range -> must stay silent)
+	req21 := BuildRTUReadRequest(21, 3, 0, 1)
+	if _, err := client.Write(req21); err != nil {
+		t.Fatal(err)
+	}
+	expectSilence(t, client)
+}
+

@@ -53,6 +53,8 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
 
   // Slave ID
   const [slaveId, setSlaveId] = useState<number>(currentConfig?.slave_id || 1);
+  const [slaveIdEnd, setSlaveIdEnd] = useState<number>(currentConfig?.slave_id_end || currentConfig?.slave_id || 1);
+  const [enableRange, setEnableRange] = useState<boolean>(Boolean(currentConfig?.slave_id_end && currentConfig.slave_id_end > currentConfig.slave_id));
 
   // Auto Simulation
   const [simMode, setSimMode] = useState<'none' | 'random' | 'increment' | 'sine'>('none');
@@ -69,6 +71,9 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
     setBaudRate(currentConfig?.baud_rate || 9600);
     setParity(currentConfig?.parity || 'none');
     setSlaveId(currentConfig?.slave_id || 1);
+    const end = currentConfig?.slave_id_end || currentConfig?.slave_id || 1;
+    setSlaveIdEnd(end);
+    setEnableRange(Boolean(currentConfig?.slave_id_end && currentConfig.slave_id_end > (currentConfig?.slave_id || 1)));
   }, [isOpen, currentConfig]);
 
   if (!isOpen) return null;
@@ -77,6 +82,7 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
     const cfg: SlaveConfig = {
       type: tab,
       slave_id: slaveId,
+      slave_id_end: enableRange && slaveIdEnd >= slaveId ? slaveIdEnd : slaveId,
     };
     if (tab === 'serial') {
       cfg.port = selectedPort;
@@ -198,20 +204,65 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
 
         {/* Tab Body */}
         <div className="p-4 space-y-4">
-          {/* Unit ID (Slave ID) */}
-          <div className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded">
-            <div className="flex items-center">
-              <label className="text-slate-300 font-medium">Slave ID (Unit ID):</label>
-              <FieldTooltip text="Địa chỉ định danh của thiết bị Slave (1 - 247). Các gói tin Master gửi tới địa chỉ này sẽ được xử lý và phản hồi." />
+          {/* Unit ID (Slave ID) & Multi-Slave Range */}
+          <div className="p-2.5 bg-slate-950/50 border border-slate-800 rounded space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <label className="text-slate-300 font-medium">Slave ID (Unit ID):</label>
+                <FieldTooltip text="Địa chỉ định danh của thiết bị Slave (1 - 247). Các gói tin Master gửi tới địa chỉ này sẽ được xử lý và phản hồi." />
+              </div>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={247}
+                  value={slaveId}
+                  onChange={(e) => setSlaveId(Number(e.target.value))}
+                  className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-amber-500 font-mono text-right"
+                />
+                {enableRange && (
+                  <>
+                    <span className="text-slate-500 font-bold">→</span>
+                    <input
+                      type="number"
+                      min={slaveId}
+                      max={247}
+                      value={slaveIdEnd}
+                      onChange={(e) => setSlaveIdEnd(Number(e.target.value))}
+                      className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-amber-300 font-mono text-right font-bold"
+                      title="Slave ID kết thúc"
+                    />
+                  </>
+                )}
+              </div>
             </div>
-            <input
-              type="number"
-              min={1}
-              max={247}
-              value={slaveId}
-              onChange={(e) => setSlaveId(Number(e.target.value))}
-              className="w-24 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-slate-200 focus:outline-none focus:border-amber-500 font-mono text-right"
-            />
+
+            {/* Toggle Multi-Slave simulation range */}
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+              <label className="flex items-center space-x-2 cursor-pointer text-slate-400 hover:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={enableRange}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setEnableRange(checked);
+                    if (checked && slaveIdEnd <= slaveId) {
+                      setSlaveIdEnd(Math.min(247, slaveId + 19)); // default to 20 slaves!
+                    }
+                  }}
+                  className="rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                />
+                <span className="text-[11px] font-medium text-amber-400/90">
+                  ⚡ Giả lập dải nhiều Slave cùng lúc (Multi-Slave Range)
+                </span>
+              </label>
+
+              {enableRange && (
+                <span className="text-[10px] bg-amber-950/60 text-amber-300 border border-amber-800/60 px-2 py-0.5 rounded font-mono font-semibold">
+                  Tổng: {Math.max(1, slaveIdEnd - slaveId + 1)} Slaves ({slaveId}..{slaveIdEnd})
+                </span>
+              )}
+            </div>
           </div>
 
           {tab === 'tcp' && (
@@ -248,24 +299,41 @@ export const SlaveModal: React.FC<SlaveModalProps> = ({
           {tab === 'serial' && (
             <div className="space-y-3">
               <div>
-                <div className="flex items-center mb-1">
-                  <label className="text-slate-300 font-medium">Serial Port (Cổng COM Slave):</label>
-                  <FieldTooltip text="Chọn cổng COM vật lý hoặc cặp COM ảo (com0com, VSPE) để giả lập thiết bị RS-485." />
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center">
+                    <label className="text-slate-300 font-medium">Serial Port (Cổng COM Slave):</label>
+                    <FieldTooltip text="Chọn cổng COM vật lý hoặc gõ tên cổng COM tùy ý (ví dụ COM49) nếu dùng cặp COM ảo hoặc driver ảo." />
+                  </div>
                 </div>
-                <select
-                  value={selectedPort}
-                  onChange={(e) => setSelectedPort(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-amber-500 font-mono"
-                >
-                  {availablePorts.map((p) => (
-                    <option key={p.port_name} value={p.port_name}>
-                      {p.port_name} {p.description ? `(${p.description})` : ''}
-                    </option>
-                  ))}
-                  {!availablePorts.some((p) => p.port_name === 'COM2') && (
-                    <option value="COM2">COM2 (Virtual Pair)</option>
-                  )}
-                </select>
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={selectedPort}
+                    onChange={(e) => setSelectedPort(e.target.value.toUpperCase().trim())}
+                    placeholder="VD: COM49"
+                    className="flex-1 bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-amber-500 font-mono font-bold"
+                  />
+                  <select
+                    value={availablePorts.some((p) => p.port_name === selectedPort) ? selectedPort : ''}
+                    onChange={(e) => {
+                      if (e.target.value) setSelectedPort(e.target.value);
+                    }}
+                    className="w-48 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-400 focus:outline-none focus:border-amber-500 font-mono text-xs"
+                  >
+                    <option value="">-- Cổng phát hiện --</option>
+                    {availablePorts.map((p) => (
+                      <option key={p.port_name} value={p.port_name}>
+                        {p.port_name} {p.description ? `(${p.description})` : ''}
+                      </option>
+                    ))}
+                    {!availablePorts.some((p) => p.port_name === 'COM49') && (
+                      <option value="COM49">COM49</option>
+                    )}
+                    {!availablePorts.some((p) => p.port_name === 'COM2') && (
+                      <option value="COM2">COM2 (Virtual)</option>
+                    )}
+                  </select>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
