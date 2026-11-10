@@ -82,6 +82,13 @@ def to_hex_spaced(b: bytes) -> str:
 def format_port_short(port: str) -> str:
     if not port:
         return ""
+    p_low = port.lower()
+    if p_low.startswith("tcp://"):
+        return f"TCP {port[6:]}"
+    if p_low.startswith("rtuovertcp://"):
+        return f"RTU-TCP {port[13:]}"
+    if p_low.startswith("rtu_tcp://"):
+        return f"RTU-TCP {port[10:]}"
     if port.startswith("/dev/ttyCH"):
         try:
             idx = int(port.replace("/dev/ttyCH", ""))
@@ -89,6 +96,59 @@ def format_port_short(port: str) -> str:
         except Exception:
             pass
     return port.replace("/dev/", "")
+
+
+def is_tcp_endpoint(port: str) -> bool:
+    if not port or not isinstance(port, str):
+        return False
+    p_low = port.strip().lower()
+    return p_low.startswith(("tcp://", "rtuovertcp://", "rtu_tcp://"))
+
+
+def parse_tcp_endpoint(port: str):
+    """Phân giải chuỗi tcp://host:port hoặc rtuovertcp://host:port -> (proto, host, tcp_port)."""
+    raw = (port or "").strip()
+    p_low = raw.lower()
+    proto = "tcp"
+    if p_low.startswith("rtuovertcp://"):
+        proto = "rtuovertcp"
+        rest = raw[13:]
+    elif p_low.startswith("rtu_tcp://"):
+        proto = "rtuovertcp"
+        rest = raw[10:]
+    elif p_low.startswith("tcp://"):
+        proto = "tcp"
+        rest = raw[6:]
+    else:
+        rest = raw
+    rest = rest.strip().rstrip("/")
+    if ":" in rest:
+        host_part, port_part = rest.rsplit(":", 1)
+        try:
+            tcp_port = int(port_part)
+        except Exception:
+            tcp_port = 502
+    else:
+        host_part = rest
+        tcp_port = 502
+    return proto, host_part.strip() or "127.0.0.1", max(1, min(65535, tcp_port))
+
+
+def resolve_req_endpoint(req: dict, default_port: str) -> str:
+    """Chuẩn hóa cổng đích từ payload JSON (hỗ trợ cả port='tcp://...' hoặc conn_type='tcp', host='...', tcp_port=502)."""
+    if not isinstance(req, dict):
+        return default_port
+    port = str(req.get("port") or "").strip()
+    conn_type = str(req.get("conn_type") or req.get("protocol") or "").strip().lower()
+    host = str(req.get("tcp_host") or req.get("host") or "").strip()
+    tcp_port = req.get("tcp_port")
+    if is_tcp_endpoint(port):
+        return port
+    if conn_type in ("tcp", "modbus_tcp", "mbap") and host:
+        return f"tcp://{host}:{int(tcp_port or 502)}"
+    if conn_type in ("rtuovertcp", "rtu_over_tcp", "rtu_tcp") and host:
+        return f"rtuovertcp://{host}:{int(tcp_port or 502)}"
+    return port or default_port
 
 
 # ==================== SMART SERIAL PORT DISCOVERY & USB HOTPLUG ====================
@@ -667,10 +727,12 @@ class AppState:
 
     def get_port_busy_reason(self, port: str):
         """Kiểm tra cổng COM có đang bị chiếm độc quyền bởi Gateway hoặc COM-to-COM Converter không."""
+        if is_tcp_endpoint(port):
+            return None
         with self.meta_lock:
             g = self.gateways.get(port)
             if g and g.running:
-                return f"Cổng {format_port_short(port)} đang chạy Cầu nối TCP Gateway (:{g.tcp_port}). Hãy tắt Gateway trên cổng này hoặc chọn cổng COM khác."
+                return f"Cổng {format_port_short(port)} đang chạy Cầu nối TCP Gateway (:{g.tcp_port}). Hãy tắt Gateway trên cổng này, hoặc chọn 'tcp://127.0.0.1:{g.tcp_port}' để đọc xuyên qua Gateway!"
             for b in self.com_bridges.values():
                 if b.running and port in (b.master_port, b.slave_port):
                     return f"Cổng {format_port_short(port)} đang chạy Cầu nối Chuyển đổi tốc độ RS485 ({format_port_short(b.master_port)} ↔ {format_port_short(b.slave_port)})."
@@ -847,9 +909,137 @@ def read_rtu_master_request(ser):
         return first + fn_b + rem
 
 
-# ==================== CONCURRENT PER-PORT MODBUS RTU ENGINE ====================
+# ==================== CONCURRENT PER-PORT MODBUS RTU & TCP ENGINE ====================
+_tcp_txn_counter = 0
+_tcp_txn_lock = threading.Lock()
+
+
+def _next_mbap_txn_id() -> int:
+    global _tcp_txn_counter
+    with _tcp_txn_lock:
+        _tcp_txn_counter = (_tcp_txn_counter + 1) & 0xFFFF
+        if _tcp_txn_counter == 0:
+            _tcp_txn_counter = 1
+        return _tcp_txn_counter
+
+
+def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def modbus_tcp_transceive(endpoint_url: str, request_pdu: bytes, timeout=0.8):
+    """
+    Thực thi giao dịch Modbus TCP (MBAP 7-byte Header) hoặc Modbus RTU over TCP (kèm CRC16).
+    Hỗ trợ kết nối tới bất kỳ PLC / Biến tần / Đồng hồ IP:Port nào hoặc tự test vòng lặp Gateway nội bộ.
+    """
+    proto, host, tcp_port = parse_tcp_endpoint(endpoint_url)
+    norm_ep = f"{proto}://{host}:{tcp_port}"
+    ep_lock = state.get_port_lock(norm_ep)
+
+    with ep_lock:
+        t0 = time.time()
+        sock = None
+        try:
+            sock = socket.create_connection((host, tcp_port), timeout=max(0.15, float(timeout)))
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.settimeout(max(0.15, float(timeout)))
+
+            if proto == "rtuovertcp":
+                frame = request_pdu + calc_crc(request_pdu)
+                tx_hex = to_hex_spaced(frame)
+                state.log_traffic("TX", tx_hex, 0, f"RTU-TCP Slave {request_pdu[0]} Fn {request_pdu[1]}", port=norm_ep)
+                sock.sendall(frame)
+
+                hdr3 = _recv_exact(sock, 3)
+                if not hdr3:
+                    elapsed = int((time.time() - t0) * 1000)
+                    state.log_traffic("ERR", f"[{format_port_short(norm_ep)}] Timeout (Không có phản hồi RTU-TCP)", elapsed, port=norm_ep)
+                    raise TimeoutError(f"[{format_port_short(norm_ep)}] Thiết bị không phản hồi (Timeout)")
+                if len(hdr3) < 3:
+                    raise ValueError(f"Khung RTU-TCP quá ngắn ({len(hdr3)}B)")
+                resp_fn = hdr3[1]
+                if resp_fn >= 0x80:
+                    tail = _recv_exact(sock, 2)
+                elif resp_fn in (1, 2, 3, 4):
+                    tail = _recv_exact(sock, hdr3[2] + 2)
+                elif resp_fn in (5, 6, 15, 16):
+                    tail = _recv_exact(sock, 5)
+                else:
+                    tail = sock.recv(256)
+                resp = hdr3 + tail
+                elapsed = int((time.time() - t0) * 1000)
+                rx_hex = to_hex_spaced(resp)
+                if len(resp) < 4 or not check_crc(resp):
+                    state.log_traffic("ERR", f"[{format_port_short(norm_ep)}] Lỗi CRC16 RTU-TCP: {rx_hex}", elapsed, port=norm_ep)
+                    raise ValueError(f"Lỗi CRC16 RTU-over-TCP: nhận {rx_hex}")
+                pdu = resp[:-2]
+                state.log_traffic("RX", rx_hex, elapsed, f"RTU-TCP {len(resp)}B", port=norm_ep)
+                return pdu, elapsed, tx_hex, rx_hex
+
+            # Chuẩn Modbus TCP (MBAP Header: TxnID[2] + ProtoID=0[2] + Length[2] + PDU[UnitID + Fn + Data])
+            txn_id = _next_mbap_txn_id()
+            mbap_hdr = struct.pack('>HHH', txn_id, 0, len(request_pdu))
+            mbap_frame = mbap_hdr + request_pdu
+            tx_hex = to_hex_spaced(mbap_frame)
+            state.log_traffic("TX", tx_hex, 0, f"TCP Unit {request_pdu[0]} Fn {request_pdu[1]} (Txn #{txn_id})", port=norm_ep)
+
+            sock.sendall(mbap_frame)
+
+            rx_hdr = _recv_exact(sock, 6)
+            if not rx_hdr:
+                elapsed = int((time.time() - t0) * 1000)
+                state.log_traffic("ERR", f"[{format_port_short(norm_ep)}] Timeout (Không có phản hồi MBAP)", elapsed, port=norm_ep)
+                raise TimeoutError(f"[{format_port_short(norm_ep)}] Thiết bị không phản hồi (Timeout)")
+            if len(rx_hdr) < 6:
+                elapsed = int((time.time() - t0) * 1000)
+                raise ValueError(f"MBAP Header quá ngắn ({len(rx_hdr)} bytes): {to_hex_spaced(rx_hdr)}")
+
+            rx_txn, rx_proto, rx_len = struct.unpack('>HHH', rx_hdr)
+            if rx_proto != 0 or rx_len < 2 or rx_len > 260:
+                elapsed = int((time.time() - t0) * 1000)
+                raise ValueError(f"MBAP Header không hợp lệ (Proto={rx_proto}, Len={rx_len})")
+
+            pdu = _recv_exact(sock, rx_len)
+            elapsed = int((time.time() - t0) * 1000)
+            rx_full = rx_hdr + pdu
+            rx_hex = to_hex_spaced(rx_full)
+            if len(pdu) < 2:
+                state.log_traffic("ERR", f"[{format_port_short(norm_ep)}] PDU rỗng: {rx_hex}", elapsed, port=norm_ep)
+                raise ValueError("PDU phản hồi Modbus TCP quá ngắn")
+
+            state.log_traffic("RX", rx_hex, elapsed, f"MBAP {len(rx_full)}B", port=norm_ep)
+            return pdu, elapsed, tx_hex, rx_hex
+        except socket.timeout:
+            elapsed = int((time.time() - t0) * 1000)
+            state.log_traffic("ERR", f"[{format_port_short(norm_ep)}] TCP Timeout ({elapsed}ms)", elapsed, port=norm_ep)
+            raise TimeoutError(f"[{format_port_short(norm_ep)}] Hết thời gian chờ phản hồi TCP ({elapsed}ms)")
+        except ConnectionRefusedError:
+            elapsed = int((time.time() - t0) * 1000)
+            state.log_traffic("ERR", f"[{format_port_short(norm_ep)}] Connection Refused (Cổng đóng)", elapsed, port=norm_ep)
+            raise TimeoutError(f"[{format_port_short(norm_ep)}] Từ chối kết nối (Cổng TCP {tcp_port} đang đóng)")
+        except OSError as oe:
+            elapsed = int((time.time() - t0) * 1000)
+            state.log_traffic("ERR", f"[{format_port_short(norm_ep)}] Lỗi mạng TCP: {oe}", elapsed, port=norm_ep)
+            raise TimeoutError(f"[{format_port_short(norm_ep)}] Không thể kết nối TCP ({oe})")
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+
 def modbus_transceive(port, baud, request_pdu, timeout=0.8, parity=None, stopbits=None):
     port = port or state.serial_port
+    if is_tcp_endpoint(port):
+        return modbus_tcp_transceive(port, request_pdu, timeout=timeout)
+
     port_lock = state.get_port_lock(port)
 
     with port_lock:
@@ -892,10 +1082,17 @@ def probe_single_slave(port, baud, parity, stopbits, sid, fn_code, reg_addr, cou
     )
     resp_sid = pdu[0]
     resp_fn = pdu[1]
-    if resp_sid != sid:
+    is_tcp = is_tcp_endpoint(port)
+    if not is_tcp and resp_sid != sid:
+        return None
+    if is_tcp and resp_sid != sid and not (sid in (0, 1, 255) and resp_sid in (0, 1, 255)):
         return None
 
-    framing_label = f"{baud} 8{parity}{stopbits}"
+    if is_tcp:
+        proto, host, tcp_p = parse_tcp_endpoint(port)
+        framing_label = f"Modbus TCP ({host}:{tcp_p})" if proto == "tcp" else f"RTU-over-TCP ({host}:{tcp_p})"
+    else:
+        framing_label = f"{baud} 8{parity}{stopbits}"
     port_short = format_port_short(port)
 
     if resp_fn >= 0x80:
@@ -2820,9 +3017,9 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        # 1. API: Multi-Port Concurrent Modbus Poll (Smart Sub-Block Splitting for Disabled Registers)
+        # 1. API: Multi-Port Concurrent Modbus Poll (Smart Sub-Block Splitting for Disabled Registers, RTU + TCP)
         if path == "/api/poll":
-            port = req.get("port", state.serial_port)
+            port = resolve_req_endpoint(req, state.serial_port)
             busy = state.get_port_busy_reason(port)
             if busy:
                 self.send_json({"error": busy}, 409)
@@ -2871,7 +3068,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
 
         # 1b. API: Auto-Mask Forbidden Registers (Tự động dò & khóa các thanh ghi cấm đọc ở giữa gây lỗi Exception 0x02)
         if path == "/api/poll/auto_mask":
-            port = req.get("port", state.serial_port)
+            port = resolve_req_endpoint(req, state.serial_port)
             busy = state.get_port_busy_reason(port)
             if busy:
                 self.send_json({"error": busy}, 409)
@@ -2916,7 +3113,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                                 valid_values[cur_idx + j] = ((pdu[byte_idx] >> bit_idx) & 1) if byte_idx < len(pdu) else 0
                 except TimeoutError:
                     if not any_reply and cur_idx == 0:
-                        self.send_json({"error": f"[{format_port_short(port)}] Thiết bị Slave {slave_id} không phản hồi (Timeout). Hãy kiểm tra cáp RS485 hoặc tốc độ Baud."}, 504)
+                        self.send_json({"error": f"[{format_port_short(port)}] Thiết bị Slave {slave_id} không phản hồi (Timeout). Hãy kiểm tra kết nối RS485/TCP hoặc tốc độ Baud."}, 504)
                         return
                 except Exception:
                     pass
@@ -2960,9 +3157,9 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        # 2. API: Modbus Write (FC05, FC06)
+        # 2. API: Modbus Write (FC05, FC06 — Hỗ trợ cả RTU và TCP)
         if path == "/api/write":
-            port = req.get("port", state.serial_port)
+            port = resolve_req_endpoint(req, state.serial_port)
             busy = state.get_port_busy_reason(port)
             if busy:
                 self.send_json({"error": busy}, 409)
@@ -2989,9 +3186,9 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
             return
 
-        # 3a. API: Register Map Explorer
+        # 3a. API: Register Map Explorer (RTU & TCP)
         if path == "/api/scan/registers":
-            port = req.get("port", state.serial_port)
+            port = resolve_req_endpoint(req, state.serial_port)
             busy = state.get_port_busy_reason(port)
             if busy:
                 self.send_json({"error": busy}, 409)
@@ -3074,13 +3271,13 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        # 3b. API: Device Scanner (1 cổng hoặc song song cả 8 cổng COM)
+        # 3b. API: Device Scanner (1 cổng COM, cả 8 cổng COM, hoặc Modbus TCP)
         if path in ("/api/scan", "/api/scan/multi_port"):
-            port = req.get("port", state.serial_port)
+            port = resolve_req_endpoint(req, state.serial_port)
             scan_all = bool(req.get("scan_all_ports", False)) or (port == "ALL") or (path == "/api/scan/multi_port")
             baud = int(req.get("baud", state.baudrate))
-            auto_baud = bool(req.get("auto_baud", False))
-            auto_parity = bool(req.get("auto_parity", False))
+            auto_baud = bool(req.get("auto_baud", False)) and not is_tcp_endpoint(port)
+            auto_parity = bool(req.get("auto_parity", False)) and not is_tcp_endpoint(port)
             parity = (req.get("parity", getattr(state, "parity", "N")) or "N").upper()
             stopbits = int(req.get("stopbits", getattr(state, "stopbits", 1)))
 
@@ -3089,7 +3286,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
             fn_code = int(req.get("fn_code", 3))
             test_addr = int(req.get("test_addr", 0))
             quantity = int(req.get("quantity", 1))
-            timeout_sec = max(0.04, min(float(req.get("timeout_ms", 120)) / 1000.0, 1.0))
+            timeout_sec = max(0.04, min(float(req.get("timeout_ms", 120)) / 1000.0, 2.0))
 
             default_bauds = [9600, 19200, 38400, 115200, 57600, 4800, 2400, 1200]
             baud_list = [int(b) for b in req.get("baud_list")] if (auto_baud and req.get("baud_list")) else (default_bauds if auto_baud else [baud])
@@ -3119,7 +3316,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                 local_steps = 0
                 for b in baud_list:
                     for p_mode in parity_list:
-                        for sid in range(start_id, min(end_id + 1, 248)):
+                        for sid in range(max(0, start_id), min(end_id + 1, 256)):
                             local_steps += 1
                             try:
                                 dev = probe_single_slave(t_port, b, p_mode, stopbits, sid, fn_code, test_addr, quantity, timeout_sec)
@@ -3157,6 +3354,322 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                 "test_addr": test_addr
             })
             return
+
+        # 3b-TCP. API: Dedicated Modbus TCP / RTU-over-TCP Scanner & Tester
+        if path == "/api/scan/tcp":
+            mode = str(req.get("mode") or "quick_test").strip().lower()
+            proto = str(req.get("protocol") or req.get("conn_type") or "tcp").strip().lower()
+            proto = "rtuovertcp" if proto in ("rtuovertcp", "rtu_over_tcp", "rtu_tcp") else "tcp"
+            host = str(req.get("host") or req.get("tcp_host") or "127.0.0.1").strip()
+            tcp_port = int(req.get("tcp_port", 502))
+            fn_code = int(req.get("fn_code", 3))
+            test_addr = max(0, min(65535, int(req.get("test_addr", 0))))
+            quantity = max(1, min(120, int(req.get("quantity", 1))))
+            timeout_sec = max(0.08, min(float(req.get("timeout_ms", 350)) / 1000.0, 3.0))
+
+            # CHẾ ĐỘ 1: QUICK PING & TEST 1 LỆNH MODBUS TCP / RTU-OVER-TCP
+            if mode == "quick_test":
+                unit_id = max(0, min(255, int(req.get("unit_id", req.get("slave_id", 1)))))
+                ep_url = f"{proto}://{host}:{tcp_port}"
+                t_conn0 = time.time()
+                tcp_open = False
+                conn_err = ""
+                try:
+                    s_test = socket.create_connection((host, tcp_port), timeout=timeout_sec)
+                    s_test.close()
+                    tcp_open = True
+                except Exception as ce:
+                    conn_err = str(ce)
+                connect_ms = int((time.time() - t_conn0) * 1000)
+
+                if not tcp_open:
+                    self.send_json({
+                        "success": False,
+                        "mode": "quick_test",
+                        "tcp_reachable": False,
+                        "modbus_ok": False,
+                        "endpoint": ep_url,
+                        "host": host,
+                        "tcp_port": tcp_port,
+                        "protocol": proto,
+                        "unit_id": unit_id,
+                        "connect_ms": connect_ms,
+                        "status": "TCP_UNREACHABLE",
+                        "error": f"Không thể mở kết nối TCP tới {host}:{tcp_port} ({conn_err}). Hãy kiểm tra IP hoặc bật Gateway!",
+                    })
+                    return
+
+                try:
+                    req_pdu = struct.pack('>BBHH', unit_id, fn_code, test_addr, quantity)
+                    pdu, lat, tx_hex, rx_hex = modbus_tcp_transceive(ep_url, req_pdu, timeout=timeout_sec)
+                    resp_sid = pdu[0]
+                    resp_fn = pdu[1]
+                    if resp_fn >= 0x80:
+                        exc_code = pdu[2] if len(pdu) > 2 else 0
+                        self.send_json({
+                            "success": True,
+                            "mode": "quick_test",
+                            "tcp_reachable": True,
+                            "modbus_ok": True,
+                            "status": "ONLINE_EXCEPTION",
+                            "endpoint": ep_url,
+                            "host": host,
+                            "tcp_port": tcp_port,
+                            "protocol": proto,
+                            "unit_id": unit_id,
+                            "resp_unit_id": resp_sid,
+                            "fn_code": fn_code,
+                            "test_addr": test_addr,
+                            "quantity": quantity,
+                            "connect_ms": connect_ms,
+                            "latency_ms": lat,
+                            "tx_hex": tx_hex,
+                            "rx_hex": rx_hex,
+                            "exception_code": exc_code,
+                            "values": [],
+                            "message": f"Kết nối TCP {host}:{tcp_port} THÀNH CÔNG ({lat}ms)! Thiết bị Unit ID {unit_id} phản hồi Exception 0x{exc_code:02X} tại địa chỉ {test_addr}."
+                        })
+                        return
+
+                    vals = []
+                    if resp_fn in (3, 4) and len(pdu) >= 3:
+                        for i in range(quantity):
+                            idx = 3 + i * 2
+                            if idx + 2 <= len(pdu):
+                                vals.append(struct.unpack_from('>H', pdu, idx)[0])
+                    elif resp_fn in (1, 2) and len(pdu) >= 3:
+                        for i in range(quantity):
+                            b_idx = 3 + (i // 8)
+                            bit_i = i % 8
+                            vals.append(((pdu[b_idx] >> bit_i) & 1) if b_idx < len(pdu) else 0)
+
+                    self.send_json({
+                        "success": True,
+                        "mode": "quick_test",
+                        "tcp_reachable": True,
+                        "modbus_ok": True,
+                        "status": "ONLINE",
+                        "endpoint": ep_url,
+                        "host": host,
+                        "tcp_port": tcp_port,
+                        "protocol": proto,
+                        "unit_id": unit_id,
+                        "resp_unit_id": resp_sid,
+                        "fn_code": fn_code,
+                        "test_addr": test_addr,
+                        "quantity": quantity,
+                        "connect_ms": connect_ms,
+                        "latency_ms": lat,
+                        "tx_hex": tx_hex,
+                        "rx_hex": rx_hex,
+                        "values": vals,
+                        "message": f"Đọc Modbus {'TCP (MBAP)' if proto == 'tcp' else 'RTU-over-TCP'} {host}:{tcp_port} (Unit ID {unit_id}) THÀNH CÔNG ({lat}ms): {vals}"
+                    })
+                except Exception as me:
+                    self.send_json({
+                        "success": False,
+                        "mode": "quick_test",
+                        "tcp_reachable": True,
+                        "modbus_ok": False,
+                        "status": "TCP_OPEN_NO_MODBUS",
+                        "endpoint": ep_url,
+                        "host": host,
+                        "tcp_port": tcp_port,
+                        "protocol": proto,
+                        "unit_id": unit_id,
+                        "connect_ms": connect_ms,
+                        "error": f"Cổng TCP {host}:{tcp_port} ĐANG MỞ ({connect_ms}ms), nhưng thiết bị Unit ID {unit_id} không phản hồi gói Modbus ({me}). Hãy thử đổi Giao thức (MBAP <-> RTU-over-TCP) hoặc quét dải Unit ID!"
+                    })
+                return
+
+            # CHẾ ĐỘ 2: QUÉT DẢI UNIT ID TRÊN 1 ĐỊA CHỈ IP:PORT
+            if mode == "unit_scan":
+                ep_url = f"{proto}://{host}:{tcp_port}"
+                start_id = max(0, min(255, int(req.get("start_id", 1))))
+                end_id = max(0, min(255, int(req.get("end_id", 16))))
+                if end_id < start_id:
+                    end_id = start_id
+                include_0_255 = bool(req.get("include_0_255", req.get("include_special_ids", False)))
+
+                # Kiểm tra nhanh socket TCP trước khi quét hàng loạt Unit ID
+                t_conn0 = time.time()
+                try:
+                    s_chk = socket.create_connection((host, tcp_port), timeout=timeout_sec)
+                    s_chk.close()
+                except Exception as ce:
+                    self.send_json({
+                        "error": f"Cổng TCP {host}:{tcp_port} đang đóng hoặc không truy cập được ({ce}). Không thể quét Unit ID."
+                    }, 504)
+                    return
+                connect_ms = int((time.time() - t_conn0) * 1000)
+
+                id_list = list(range(start_id, end_id + 1))
+                if include_0_255:
+                    if 0 not in id_list:
+                        id_list.insert(0, 0)
+                    if 255 not in id_list:
+                        id_list.append(255)
+
+                found = []
+                for sid in id_list:
+                    try:
+                        dev = probe_single_slave(ep_url, 0, "N", 1, sid, fn_code, test_addr, quantity, timeout_sec)
+                        if dev:
+                            dev["host"] = host
+                            dev["tcp_port"] = tcp_port
+                            dev["protocol"] = proto
+                            found.append(dev)
+                    except Exception:
+                        pass
+
+                self.send_json({
+                    "success": True,
+                    "mode": "unit_scan",
+                    "endpoint": ep_url,
+                    "host": host,
+                    "tcp_port": tcp_port,
+                    "protocol": proto,
+                    "connect_ms": connect_ms,
+                    "scanned_steps": len(id_list),
+                    "found": found,
+                    "found_count": len(found),
+                    "unique_slaves": len(found),
+                    "test_fn": fn_code,
+                    "test_addr": test_addr
+                })
+                return
+
+            # CHẾ ĐỘ 3: QUÉT DẢI IP MẠNG LAN / SUBNET & CỔNG TCP (IP SWEEP)
+            if mode == "ip_sweep":
+                subnet_prefix = str(req.get("subnet_prefix") or "192.168.10.").strip()
+                if not subnet_prefix.endswith("."):
+                    parts = subnet_prefix.split(".")
+                    if len(parts) >= 3:
+                        subnet_prefix = ".".join(parts[:3]) + "."
+                ip_start = max(1, min(254, int(req.get("ip_start", 1))))
+                ip_end = max(1, min(254, int(req.get("ip_end", 254))))
+                if ip_end < ip_start:
+                    ip_end = ip_start
+
+                raw_ports = req.get("tcp_ports") or "502, 5000, 5001-5008"
+                port_set = set()
+                if isinstance(raw_ports, list):
+                    for p in raw_ports:
+                        try:
+                            port_set.add(int(p))
+                        except Exception:
+                            pass
+                else:
+                    for token in str(raw_ports).replace(";", ",").split(","):
+                        tok = token.strip()
+                        if not tok:
+                            continue
+                        if "-" in tok:
+                            a, b = tok.split("-", 1)
+                            try:
+                                for p_num in range(int(a), int(b) + 1):
+                                    if 1 <= p_num <= 65535:
+                                        port_set.add(p_num)
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                p_num = int(tok)
+                                if 1 <= p_num <= 65535:
+                                    port_set.add(p_num)
+                            except Exception:
+                                pass
+                if not port_set:
+                    port_set = {502, 5000}
+                ports_sorted = sorted(port_set)[:20]
+
+                probe_unit_id = max(0, min(255, int(req.get("unit_id", 1))))
+                connect_timeout = max(0.06, min(float(req.get("connect_timeout_ms", 160)) / 1000.0, 1.0))
+
+                targets = []
+                for last_oct in range(ip_start, ip_end + 1):
+                    ip_str = f"{subnet_prefix}{last_oct}"
+                    for tp in ports_sorted:
+                        targets.append((ip_str, tp))
+
+                found = []
+                found_lock = threading.Lock()
+                idx_lock = threading.Lock()
+                task_idx = [0]
+                total_targets = len(targets)
+
+                def _ip_sweep_worker():
+                    while True:
+                        with idx_lock:
+                            if task_idx[0] >= total_targets:
+                                return
+                            t_ip, t_port = targets[task_idx[0]]
+                            task_idx[0] += 1
+                        t0 = time.time()
+                        try:
+                            s = socket.create_connection((t_ip, t_port), timeout=connect_timeout)
+                            s.close()
+                        except Exception:
+                            continue
+                        tcp_lat = int((time.time() - t0) * 1000)
+                        ep = f"{proto}://{t_ip}:{t_port}"
+                        dev_entry = None
+                        try:
+                            dev_entry = probe_single_slave(ep, 0, "N", 1, probe_unit_id, fn_code, test_addr, quantity, timeout_sec)
+                        except Exception:
+                            dev_entry = None
+
+                        if dev_entry:
+                            dev_entry["host"] = t_ip
+                            dev_entry["tcp_port"] = t_port
+                            dev_entry["protocol"] = proto
+                            with found_lock:
+                                found.append(dev_entry)
+                        else:
+                            with found_lock:
+                                found.append({
+                                    "id": probe_unit_id,
+                                    "port": ep,
+                                    "port_label": f"TCP {t_ip}:{t_port}",
+                                    "host": t_ip,
+                                    "tcp_port": t_port,
+                                    "protocol": proto,
+                                    "baud": 0,
+                                    "parity": "N",
+                                    "stopbits": 1,
+                                    "framing": f"TCP Port Mở ({t_ip}:{t_port})",
+                                    "fn_code": fn_code,
+                                    "addr": test_addr,
+                                    "status": "TCP_OPEN_ONLY",
+                                    "is_online": True,
+                                    "latency": tcp_lat,
+                                    "detail": f"Cổng TCP {t_ip}:{t_port} ĐANG MỞ ({tcp_lat}ms) — Chưa phản hồi Unit ID {probe_unit_id}",
+                                    "value_display": "[TCP OPEN]",
+                                    "raw_rx": ""
+                                })
+
+                num_workers = min(28, max(1, total_targets))
+                workers = [threading.Thread(target=_ip_sweep_worker, daemon=True) for _ in range(num_workers)]
+                for w in workers:
+                    w.start()
+                for w in workers:
+                    w.join()
+
+                found.sort(key=lambda x: (x.get("host", ""), x.get("tcp_port", 0), x.get("id", 0)))
+                self.send_json({
+                    "success": True,
+                    "mode": "ip_sweep",
+                    "subnet_prefix": subnet_prefix,
+                    "ip_range": f"{subnet_prefix}{ip_start}..{ip_end}",
+                    "tcp_ports": ports_sorted,
+                    "scanned_steps": total_targets,
+                    "found": found,
+                    "found_count": len(found),
+                    "unique_slaves": len(found),
+                    "test_fn": fn_code,
+                    "test_addr": test_addr
+                })
+                return
 
         # 3c. API: Gateway (Single, 8-Port Batch, Auto-Start on Boot)
         if path == "/api/gateway/autostart":

@@ -9,8 +9,11 @@ function renderScannerGrid(customFrom, customTo) {
   const grid = document.getElementById('scannerGrid');
   if (!grid) return;
   grid.innerHTML = '';
-  const fromId = customFrom || parseInt(document.getElementById('inpScanFrom')?.value) || 1;
-  const toId = customTo || parseInt(document.getElementById('inpScanTo')?.value) || 16;
+  const isTcpTab = (typeof activeSubTabs !== 'undefined' && activeSubTabs.scanner === 'tcp');
+  const fromInputId = isTcpTab ? 'inpTcpScanFromId' : 'inpScanFrom';
+  const toInputId = isTcpTab ? 'inpTcpScanToId' : 'inpScanTo';
+  const fromId = (customFrom !== undefined && customFrom !== null) ? customFrom : (parseInt(document.getElementById(fromInputId)?.value) || 1);
+  const toId = (customTo !== undefined && customTo !== null) ? customTo : (parseInt(document.getElementById(toInputId)?.value) || 16);
   for (let i = fromId; i <= toId; i++) {
     const tile = document.createElement('div');
     tile.className = 'slave-tile';
@@ -260,7 +263,9 @@ async function applyDiscoveredDevice(dev) {
   const par = dev.parity || 'N';
   const sb = dev.stopbits || 1;
 
-  await pushSerialConfigToBackend(p, b, par, sb);
+  if (typeof isTcpPortString === 'function' && !isTcpPortString(p)) {
+    await pushSerialConfigToBackend(p, b, par, sb);
+  }
 
   addNewSessionTab();
   const newTab = sessionTabs[sessionTabs.length - 1];
@@ -273,8 +278,403 @@ async function applyDiscoveredDevice(dev) {
   newTab.fn_code = dev.fn_code || 3;
   newTab.start_addr = (dev.status === 'ONLINE_EXCEPTION') ? 0 : (dev.addr || 0);
 
+  if (typeof refreshPortDropdowns === 'function') refreshPortDropdowns();
   showView('poll');
   renderTabs();
+}
+
+// ==================== MODBUS TCP & RTU-OVER-TCP SCANNER / TESTER ====================
+let isTcpSweepDrawerOpen = false;
+
+function setTcpScannerPreset(host, tcpPort, proto) {
+  const hEl = document.getElementById('inpTcpScanHost');
+  const pEl = document.getElementById('inpTcpScanPort');
+  const prEl = document.getElementById('selTcpScanProto');
+  if (hEl) hEl.value = host || '192.168.10.1';
+  if (pEl) pEl.value = String(tcpPort || 502);
+  if (prEl) prEl.value = proto || 'tcp';
+  showToast(`Đã chọn đích ${proto === 'rtuovertcp' ? 'RTU-over-TCP' : 'Modbus TCP'}: ${host}:${tcpPort}`);
+}
+
+function toggleTcpSubnetSweepDrawer(forceState) {
+  const drawer = document.getElementById('tcpSubnetSweepDrawer');
+  const arr = document.getElementById('icoTcpSweepArrow');
+  isTcpSweepDrawerOpen = (typeof forceState === 'boolean') ? forceState : !isTcpSweepDrawerOpen;
+  if (drawer) drawer.classList.toggle('open', isTcpSweepDrawerOpen);
+  if (arr) arr.textContent = isTcpSweepDrawerOpen ? '▴' : '▾';
+}
+
+function openTcpTargetInPollFromScanner() {
+  let host = (document.getElementById('inpTcpScanHost')?.value || '192.168.10.1').trim();
+  host = host.replace(/^(tcp|rtuovertcp|rtu_tcp):\/\//i, '');
+  const tcpPort = parseInt(document.getElementById('inpTcpScanPort')?.value) || 502;
+  const proto = (document.getElementById('selTcpScanProto')?.value || 'tcp').trim();
+  const unitId = parseInt(document.getElementById('inpTcpScanFromId')?.value) || 1;
+  const fnCode = parseInt(document.getElementById('selTcpScanFn')?.value) || 3;
+  const addr = parseInt(document.getElementById('inpTcpScanAddr')?.value) || 0;
+  const qty = Math.max(1, Math.min(250, parseInt(document.getElementById('inpTcpScanQty')?.value) || 10));
+  const endpoint = `${proto}://${host}:${tcpPort}`;
+
+  addNewSessionTab();
+  const newTab = sessionTabs[sessionTabs.length - 1];
+  newTab.name = `TCP ${host}:${tcpPort} • ID ${unitId}`;
+  newTab.port = endpoint;
+  newTab.slave_id = unitId;
+  newTab.fn_code = fnCode;
+  newTab.start_addr = addr;
+  newTab.count = Math.max(qty, 10);
+
+  if (typeof refreshPortDropdowns === 'function') refreshPortDropdowns();
+  showView('poll');
+  renderTabs();
+  showToast(`Đã mở Tab Polling Modbus TCP kết nối tới ${endpoint} (Unit ID ${unitId})`);
+}
+
+async function runTcpQuickTest() {
+  const host = (document.getElementById('inpTcpScanHost')?.value || '192.168.10.1').trim();
+  const tcpPort = parseInt(document.getElementById('inpTcpScanPort')?.value) || 502;
+  const protocol = (document.getElementById('selTcpScanProto')?.value || 'tcp').trim();
+  const unitId = parseInt(document.getElementById('inpTcpScanFromId')?.value) || 1;
+  const fnCode = parseInt(document.getElementById('selTcpScanFn')?.value) || 3;
+  const testAddr = parseInt(document.getElementById('inpTcpScanAddr')?.value) || 0;
+  const quantity = Math.max(1, Math.min(125, parseInt(document.getElementById('inpTcpScanQty')?.value) || 1));
+  const timeoutMs = parseInt(document.getElementById('selTcpScanTimeout')?.value) || 400;
+
+  const btn = document.getElementById('btnTcpQuickTest');
+  const box = document.getElementById('tcpQuickTestResultBox');
+  const origHtml = btn ? btn.innerHTML : '⚡ Ping TCP &amp; Đọc Thử Ngay';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="pulse-dot"></span> Đang Ping &amp; Đọc Thử...`;
+  }
+  if (box) {
+    box.style.display = 'block';
+    box.innerHTML = `<div style="color: var(--cyan); font-size: 12px;"><span class="pulse-dot"></span> Đang kiểm tra kết nối TCP Socket tới <b>${host}:${tcpPort}</b> và gửi gói tin thăm dò Unit ID <b>${unitId}</b> (FC0${fnCode}, Addr ${testAddr}, Qty ${quantity})...</div>`;
+  }
+
+  try {
+    const res = await fetch('/api/scan/tcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'quick_test',
+        host,
+        tcp_port: tcpPort,
+        protocol,
+        unit_id: unitId,
+        fn_code: fnCode,
+        test_addr: testAddr,
+        quantity,
+        timeout_ms: timeoutMs
+      })
+    });
+    const data = await res.json();
+    if (!box) return;
+
+    if (!data.success) {
+      box.innerHTML = `<div style="color: var(--rose); font-weight: 700;">❌ Lỗi kiểm tra TCP: ${data.error || 'Thất bại'}</div>`;
+      return;
+    }
+
+    if (!data.tcp_reachable) {
+      box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <div>
+            <span class="badge badge-rose">❌ KHÔNG KẾT NỐI ĐƯỢC CỔNG TCP</span>
+            <b style="color:#fff; margin-left:6px; font-family:monospace;">${host}:${tcpPort}</b>
+            <span style="color:var(--text-muted); font-size:11px; margin-left:6px;">(${data.connect_ms} ms)</span>
+          </div>
+        </div>
+        <div style="margin-top:6px; font-size:12px; color:#fca5a5;">
+          Chi tiết: <b>${data.error || 'Connection refused / Timeout'}</b>. Hãy kiểm tra lại địa chỉ IP, Port TCP (502 / 5000 / 5001..5008) hoặc bật Cầu Nối Gateway nếu đang test loopback.
+        </div>
+      `;
+      return;
+    }
+
+    const isOk = (data.status === 'ONLINE');
+    const isExc = (data.status === 'ONLINE_EXCEPTION');
+    const badgeCls = isOk ? 'badge-emerald' : (isExc ? 'badge-purple' : 'badge-amber');
+    const statusTxt = isOk
+      ? '✅ MODBUS TCP ONLINE (Đọc Thành Công)'
+      : (isExc ? '🟣 MODBUS TCP ONLINE (Báo Ngoại Lệ Exception)' : '⚠️ CỔNG TCP MỞ NHƯNG THIẾT BỊ KHÔNG TRẢ LỜI MODBUS');
+
+    const valsHtml = (isOk && Array.isArray(data.values) && data.values.length > 0)
+      ? `<div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap;">
+          ${data.values.map((v, i) => `<span style="background:rgba(16,185,129,0.14); border:1px solid rgba(16,185,129,0.35); padding:3px 8px; border-radius:5px; font-family:monospace; font-size:12px; color:#a7f3d0;">[${testAddr + i}] = <b style="color:#fff;">${v}</b> <span style="color:#94a3b8;">(0x${(v & 0xFFFF).toString(16).toUpperCase().padStart(4,'0')})</span></span>`).join('')}
+         </div>`
+      : '';
+
+    box.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span class="badge ${badgeCls}">${statusTxt}</span>
+          <span class="badge badge-cyan" style="font-family:monospace;">${data.endpoint} • Unit ID ${unitId}</span>
+          <span style="font-size:11px; color:var(--text-muted);">TCP Ping: <b style="color:var(--emerald);">${data.connect_ms} ms</b> • Modbus Latency: <b style="color:var(--cyan);">${data.latency_ms} ms</b></span>
+        </div>
+        <button class="btn btn-emerald" style="padding:4px 10px; font-size:11px;" onclick="openTcpTargetInPollFromScanner()">
+          📊 Đưa Vào Bảng Polling
+        </button>
+      </div>
+      <div style="margin-top:6px; font-size:12px; color:var(--text);">
+        ${data.detail || data.error || ''}
+      </div>
+      ${valsHtml}
+      <div style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(148,163,184,0.16); font-family:monospace; font-size:11px; color:#94a3b8; display:flex; gap:14px; flex-wrap:wrap;">
+        <div><b style="color:var(--cyan);">TX HEX:</b> ${data.tx_hex || '--'}</div>
+        <div><b style="color:var(--emerald);">RX HEX:</b> ${data.rx_hex || '(Không có phản hồi)'}</div>
+      </div>
+    `;
+  } catch (e) {
+    if (box) {
+      box.innerHTML = `<div style="color: var(--rose);">Lỗi kết nối API: ${e}</div>`;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
+  }
+}
+
+async function runTcpUnitIdScan() {
+  const host = (document.getElementById('inpTcpScanHost')?.value || '192.168.10.1').trim();
+  const tcpPort = parseInt(document.getElementById('inpTcpScanPort')?.value) || 502;
+  const protocol = (document.getElementById('selTcpScanProto')?.value || 'tcp').trim();
+  const fromId = parseInt(document.getElementById('inpTcpScanFromId')?.value) || 1;
+  const toId = parseInt(document.getElementById('inpTcpScanToId')?.value) || 10;
+  const fnCode = parseInt(document.getElementById('selTcpScanFn')?.value) || 3;
+  const testAddr = parseInt(document.getElementById('inpTcpScanAddr')?.value) || 0;
+  const quantity = Math.max(1, Math.min(125, parseInt(document.getElementById('inpTcpScanQty')?.value) || 1));
+  const timeoutMs = parseInt(document.getElementById('selTcpScanTimeout')?.value) || 300;
+  const includeSpecial = Boolean(document.getElementById('chkTcpInclude0255')?.checked);
+
+  const btn = document.getElementById('btnTcpUnitScan');
+  const origHtml = btn ? btn.innerHTML : '🔍 Quét Dải Unit ID Qua TCP';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="pulse-dot"></span> Đang Quét TCP...`;
+  }
+
+  renderScannerGrid(fromId, toId);
+  if (includeSpecial) {
+    const grid = document.getElementById('scannerGrid');
+    [0, 255].forEach(spId => {
+      if (grid && !document.getElementById(`slave-tile-${spId}`)) {
+        const tile = document.createElement('div');
+        tile.className = 'slave-tile';
+        tile.id = `slave-tile-${spId}`;
+        tile.innerHTML = `ID ${spId}`;
+        grid.appendChild(tile);
+      }
+    });
+  }
+
+  const lblStatus = document.getElementById('lblScanStatus');
+  const lblCount = document.getElementById('lblScanCount');
+  const tbody = document.getElementById('tblDiscoveredDevices');
+  if (lblStatus) {
+    lblStatus.textContent = `Đang quét ${protocol === 'rtuovertcp' ? 'RTU-over-TCP' : 'Modbus TCP'} tại ${host}:${tcpPort} (Unit ID ${fromId} → ${toId}${includeSpecial ? ' + ID 0, 255' : ''}, FC0${fnCode}, Addr ${testAddr})...`;
+  }
+  if (tbody) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--cyan); padding: 14px;"><span class="pulse-dot"></span> Đang thăm dò dải Unit ID qua kết nối TCP <b>${host}:${tcpPort}</b>...</td></tr>`;
+  }
+
+  try {
+    const res = await fetch('/api/scan/tcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'unit_scan',
+        host,
+        tcp_port: tcpPort,
+        protocol,
+        start_id: fromId,
+        end_id: toId,
+        include_special_ids: includeSpecial,
+        fn_code: fnCode,
+        test_addr: testAddr,
+        quantity,
+        timeout_ms: timeoutMs
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      if (lblStatus) lblStatus.textContent = `Lỗi quét TCP ${host}:${tcpPort}: ${data.error || 'Không thể kết nối'}`;
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--rose); padding: 14px;">❌ ${data.error || 'Không kết nối được cổng TCP'}</td></tr>`;
+      }
+      return;
+    }
+
+    lastScanResults = data.found || [];
+    const okCount = lastScanResults.filter(d => d.status === 'ONLINE').length;
+    const excCount = lastScanResults.filter(d => d.status === 'ONLINE_EXCEPTION').length;
+
+    if (lblStatus) {
+      lblStatus.textContent = `Hoàn tất quét TCP ${host}:${tcpPort} (Ping ${data.connect_ms}ms) • Đã thử ${data.scanned_steps} Unit ID.`;
+    }
+    if (lblCount) {
+      lblCount.textContent = `Tìm thấy: ${lastScanResults.length} Unit ID phản hồi (${okCount} chuẩn OK, ${excCount} ngoại lệ)`;
+    }
+
+    lastScanResults.forEach(dev => {
+      const el = document.getElementById(`slave-tile-${dev.id}`);
+      if (el) {
+        const isException = dev.status === 'ONLINE_EXCEPTION';
+        el.className = isException ? 'slave-tile exception' : 'slave-tile online';
+        el.innerHTML = `ID ${dev.id}<br><span style="font-size: 9px;">${host}:${tcpPort}</span>`;
+        el.title = `${dev.detail} (${dev.latency}ms)`;
+        el.onclick = () => applyDiscoveredDevice(dev);
+      }
+    });
+
+    if (lastScanResults.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--amber); padding: 14px;">⚠️ Cổng TCP <b>${host}:${tcpPort}</b> đang MỞ (Ping ${data.connect_ms}ms), nhưng không có Unit ID nào phản hồi trong dải đã quét.</td></tr>`;
+    } else {
+      tbody.innerHTML = lastScanResults.map((dev, idx) => {
+        const isExc = dev.status === 'ONLINE_EXCEPTION';
+        const badgeClass = isExc ? 'badge-purple' : 'badge-emerald';
+        const statusLabel = isExc ? 'ONLINE (Ngoại Lệ)' : 'ONLINE (Chuẩn)';
+        const pLbl = dev.port_label || shortPortLabel(dev.port);
+        return `
+          <tr>
+            <td><span class="badge badge-cyan">${pLbl}</span></td>
+            <td style="font-weight: 800; font-size: 14px; color: ${isExc ? '#c084fc' : 'var(--emerald)'};">Unit ID ${dev.id}</td>
+            <td><span style="font-family: monospace; font-weight: 700; color: #fff;">${dev.framing}</span></td>
+            <td><span class="badge badge-cyan">FC0${dev.fn_code}</span> Addr: <b style="color: #fff;">${dev.addr}</b></td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span class="badge ${badgeClass}">${statusLabel}</span>
+                <span style="font-size: 12px; color: var(--text);">${dev.value_display || ''}</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${dev.detail}</div>
+            </td>
+            <td style="color: var(--cyan); font-family: monospace;">${dev.latency} ms</td>
+            <td>
+              <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="applyDiscoveredDeviceIndex(${idx})">
+                Áp Dụng Vào Tab
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  } catch (e) {
+    if (lblStatus) lblStatus.textContent = "Lỗi kết nối API: " + e;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
+  }
+}
+
+async function runTcpIpSubnetSweep() {
+  let subnetPrefix = (document.getElementById('inpTcpSweepSubnet')?.value || '192.168.10.').trim();
+  if (subnetPrefix && !subnetPrefix.endsWith('.')) subnetPrefix += '.';
+  const ipStart = parseInt(document.getElementById('inpTcpSweepStart')?.value) || 1;
+  const ipEnd = parseInt(document.getElementById('inpTcpSweepEnd')?.value) || 50;
+  const ipRange = `${subnetPrefix}${ipStart}-${ipEnd}`;
+  const portsSpec = (document.getElementById('inpTcpSweepPorts')?.value || '502, 5000, 5001-5008').trim();
+  const unitIds = String(document.getElementById('inpTcpSweepUnitId')?.value || '1').trim();
+  const protocol = (document.getElementById('selTcpScanProto')?.value || 'tcp').trim();
+  const fnCode = parseInt(document.getElementById('selTcpScanFn')?.value) || 3;
+  const testAddr = parseInt(document.getElementById('inpTcpScanAddr')?.value) || 0;
+  const quantity = Math.max(1, Math.min(20, parseInt(document.getElementById('inpTcpScanQty')?.value) || 1));
+  const timeoutMs = parseInt(document.getElementById('selTcpScanTimeout')?.value) || 220;
+
+  const btn = document.getElementById('btnStartTcpIpSweep');
+  const origHtml = btn ? btn.innerHTML : '📡 Quét Tìm Thiết Bị TCP Trong Mạng LAN';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="pulse-dot"></span> Đang Quét Mạng LAN...`;
+  }
+
+  const lblStatus = document.getElementById('lblScanStatus');
+  const lblCount = document.getElementById('lblScanCount');
+  const tbody = document.getElementById('tblDiscoveredDevices');
+  if (lblStatus) {
+    lblStatus.textContent = `Đang quét đa luồng dải IP ${ipRange} trên các cổng [${portsSpec}] (Unit ID: ${unitIds})...`;
+  }
+  if (tbody) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--cyan); padding: 14px;"><span class="pulse-dot"></span> Đang quét dải IP mạng LAN <b>${ipRange}</b> (Port: ${portsSpec})...</td></tr>`;
+  }
+
+  try {
+    const res = await fetch('/api/scan/tcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'ip_sweep',
+        subnet_prefix: subnetPrefix,
+        ip_start: ipStart,
+        ip_end: ipEnd,
+        tcp_ports: portsSpec,
+        unit_id: parseInt(unitIds) || 1,
+        protocol,
+        fn_code: fnCode,
+        test_addr: testAddr,
+        quantity,
+        timeout_ms: timeoutMs
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      if (lblStatus) lblStatus.textContent = "Lỗi quét dải IP: " + (data.error || "Thất bại");
+      if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--rose); padding: 14px;">${data.error}</td></tr>`;
+      return;
+    }
+
+    lastScanResults = data.found || [];
+    const openEndpoints = data.open_tcp_endpoints || [];
+    if (lblStatus) {
+      lblStatus.textContent = `Hoàn tất quét LAN! Đã kiểm tra ${data.scanned_targets} đích IP:Port → Phát hiện ${openEndpoints.length} cổng TCP mở.`;
+    }
+    if (lblCount) {
+      lblCount.textContent = `Tìm thấy: ${lastScanResults.length} thiết bị Modbus TCP (${openEndpoints.length} cổng TCP mở)`;
+    }
+
+    if (lastScanResults.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">Không tìm thấy cổng TCP nào mở trong dải IP <b>${ipRange}</b> (Port: ${portsSpec}).</td></tr>`;
+    } else {
+      tbody.innerHTML = lastScanResults.map((dev, idx) => {
+        const isExc = dev.status === 'ONLINE_EXCEPTION';
+        const isNoMb = dev.status === 'TCP_OPEN_NO_MODBUS';
+        const badgeClass = isNoMb ? 'badge-amber' : (isExc ? 'badge-purple' : 'badge-emerald');
+        const statusLabel = isNoMb ? 'TCP MỞ (Chưa rõ Unit ID)' : (isExc ? 'ONLINE (Ngoại Lệ)' : 'ONLINE (Chuẩn)');
+        const pLbl = dev.port_label || shortPortLabel(dev.port);
+        return `
+          <tr>
+            <td><span class="badge badge-cyan">${pLbl}</span></td>
+            <td style="font-weight: 800; font-size: 14px; color: ${isNoMb ? 'var(--amber)' : (isExc ? '#c084fc' : 'var(--emerald)')};">Unit ID ${dev.id}</td>
+            <td><span style="font-family: monospace; font-weight: 700; color: #fff;">${dev.framing}</span></td>
+            <td><span class="badge badge-cyan">FC0${dev.fn_code}</span> Addr: <b style="color: #fff;">${dev.addr}</b></td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span class="badge ${badgeClass}">${statusLabel}</span>
+                <span style="font-size: 12px; color: var(--text);">${dev.value_display || ''}</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${dev.detail}</div>
+            </td>
+            <td style="color: var(--cyan); font-family: monospace;">${dev.latency} ms</td>
+            <td>
+              <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="applyDiscoveredDeviceIndex(${idx})">
+                Áp Dụng Vào Tab
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  } catch (e) {
+    if (lblStatus) lblStatus.textContent = "Lỗi kết nối API: " + e;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
+  }
 }
 
 // ==================== REALTIME TREND CHART ====================
@@ -969,14 +1369,51 @@ function copyEndpoint(text) {
 }
 
 // ==================== SYSTEM STATUS & HARDWARE TELEMETRY ====================
+let lastServerActiveProfile = "";
+
 async function updateSystemStatus() {
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
     if (data.status === 'online') {
-      if (data.active_profile_name) {
-        currentProfileName = data.active_profile_name;
+      const serverProf = (data.active_profile_name || '').trim();
+      const serverTabs = Array.isArray(data.saved_polling_tabs) ? data.saved_polling_tabs : [];
+
+      if (!savedTabsHydrated) {
+        savedTabsHydrated = true;
+        if (serverTabs.length > 0 && (!window.restoredTabsFromLocalStorage || (serverProf && serverProf !== currentProfileName))) {
+          currentProfileName = serverProf || currentProfileName;
+          if (typeof hydrateTabsFromProfileArray === 'function') {
+            hydrateTabsFromProfileArray(serverTabs);
+          }
+        } else if (window.restoredTabsFromLocalStorage) {
+          // Start auto_poll on restored tabs if they were polling before reload
+          sessionTabs.forEach((tab, idx) => {
+            if (tab.auto_poll && !tab.isPolling) {
+              tab.isPolling = true;
+              setTimeout(() => {
+                if (tab.isPolling) {
+                  executePoll(tab);
+                  tab.timer = setInterval(() => executePoll(tab), tab.scan_ms);
+                }
+              }, idx * 50);
+            }
+          });
+          renderTabs();
+        }
+      } else if (serverProf && lastServerActiveProfile && serverProf !== lastServerActiveProfile && serverTabs.length > 0) {
+        // Server profile was switched externally (e.g. via API or another client)
+        currentProfileName = serverProf;
+        if (typeof hydrateTabsFromProfileArray === 'function') {
+          hydrateTabsFromProfileArray(serverTabs);
+        }
       }
+
+      if (serverProf) {
+        lastServerActiveProfile = serverProf;
+        currentProfileName = serverProf;
+      }
+
       const profs = data.saved_profiles || data.sd_profiles || data.profiles;
       if (Array.isArray(profs) && typeof syncSdProfilesDropdown === 'function') {
         syncSdProfilesDropdown(profs);
@@ -985,15 +1422,6 @@ async function updateSystemStatus() {
         const changed = JSON.stringify(portAliasesCache) !== JSON.stringify(data.port_aliases);
         portAliasesCache = data.port_aliases;
         if (changed) initMultiGatewayMatrix();
-      }
-
-      if (!savedTabsHydrated) {
-        savedTabsHydrated = true;
-        if (Array.isArray(data.saved_polling_tabs) && data.saved_polling_tabs.length > 0 && sessionTabs.length === 1 && sessionTabs[0].values.length === 0) {
-          if (typeof hydrateTabsFromProfileArray === 'function') {
-            hydrateTabsFromProfileArray(data.saved_polling_tabs);
-          }
-        }
       }
 
       // 1. Sync CH348 8-Port Hub & Serial Ports

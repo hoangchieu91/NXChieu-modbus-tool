@@ -295,6 +295,24 @@ function applyQuickBuilderPreset(presetKey) {
         tags_spec: "0=Từ điều khiển Run/Stop::1, 1=Tần số đặt:Hz:0.01, 2=Tần số chạy thực tế:Hz:0.01, 3=Dòng điện Motor:A:0.1, 4=Điện áp ngõ ra:V:0.1, 5=Điện áp DC Bus:V:0.1, 6=Mã lỗi biến tần::1"
       }
     ];
+  } else if (presetKey === 'modbus_tcp') {
+    if (nameInp) nameInp.value = "Modbus_TCP_PLC_Gateway_Test";
+    quickBuilderTabs = [
+      {
+        name: "TCP 192.168.10.1:502 • PLC / Gateway",
+        port: "tcp://192.168.10.1:502",
+        baud: 9600,
+        framing: "N-1",
+        slave_id: 1,
+        fn_code: 3,
+        start_addr: 0,
+        count: 10,
+        disabled_addrs: "",
+        format: "uint16",
+        scan_ms: 1000,
+        tags_spec: "0=Thanh ghi TCP #0, 1=Thanh ghi TCP #1, 2=Thanh ghi TCP #2"
+      }
+    ];
   }
 
   renderQuickBuilderTabsList();
@@ -392,7 +410,19 @@ function renderQuickBuilderTabsList() {
     const list = (availablePortsCache && availablePortsCache.length > 0)
       ? availablePortsCache
       : Array.from({ length: 8 }, (_, i) => ({ id: `/dev/ttyCH${i}`, label: `COM ${i + 1} (/dev/ttyCH${i})` }));
-    return list.map(p => `<option value="${p.id}" ${p.id === selPort ? 'selected' : ''}>${p.label}</option>`).join('');
+    const tcpPresets = [
+      { id: 'tcp://192.168.10.1:502', label: '🌐 [Modbus TCP] 192.168.10.1:502 (MBAP)' },
+      { id: 'tcp://127.0.0.1:5000', label: '🌐 [Modbus TCP] 127.0.0.1:5000 (Smart Hub)' },
+      { id: 'tcp://127.0.0.1:5001', label: '🌐 [Modbus TCP] 127.0.0.1:5001 (GW COM 1)' },
+      { id: 'rtuovertcp://192.168.10.1:502', label: '🌐 [RTU over TCP] 192.168.10.1:502 (CRC16)' }
+    ];
+    if (selPort && /^(tcp|rtuovertcp|rtu_tcp):\/\//i.test(selPort) && !tcpPresets.some(x => x.id === selPort)) {
+      tcpPresets.unshift({ id: selPort, label: `🌐 [TCP Tùy Chỉnh] ${selPort}` });
+    }
+    return list.map(p => `<option value="${p.id}" ${p.id === selPort ? 'selected' : ''}>${p.label}</option>`).join('') +
+      `<optgroup label="🌐 Kết Nối Modbus TCP / RTU-over-TCP">` +
+      tcpPresets.map(p => `<option value="${p.id}" ${p.id === selPort ? 'selected' : ''}>${p.label}</option>`).join('') +
+      `</optgroup>`;
   };
 
   const baudOpts = (selBaud) => STANDARD_BAUDS.map(b =>

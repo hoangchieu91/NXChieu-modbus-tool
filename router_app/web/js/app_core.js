@@ -69,6 +69,7 @@ function saveUiStateToStorage() {
       only_tagged: Boolean(t.only_tagged),
       format: t.format || "uint16",
       scan_ms: t.scan_ms || 1000,
+      auto_poll: Boolean(t.isPolling || t.auto_poll),
       tags: t.tags || {},
       units: t.units || {},
       scales: t.scales || {},
@@ -127,9 +128,10 @@ function restoreUiStateFromStorage() {
           tags: t.tags || {},
           units: t.units || {},
           scales: t.scales || {},
-          selectedIndex: parseInt(t.selectedIndex) || 0
+          selectedIndex: parseInt(t.selectedIndex) || 0,
+          auto_poll: Boolean(t.auto_poll)
         }));
-        savedTabsHydrated = true;
+        window.restoredTabsFromLocalStorage = true;
       }
       if (st.activeTabId && sessionTabs.some(x => x.id === st.activeTabId)) {
         activeTabId = st.activeTabId;
@@ -318,9 +320,37 @@ let multiGwConfigs = Array.from({ length: 8 }, (_, idx) => ({
   framing: "N-1"
 }));
 
+function isTcpPortString(port) {
+  return Boolean(port && /^(tcp|rtuovertcp|rtu_tcp):\/\//i.test(String(port).trim()));
+}
+
+function parseTcpPortString(port) {
+  const s = String(port || '').trim();
+  const m = s.match(/^(tcp|rtuovertcp|rtu_tcp):\/\/([^:/\s]+)(?::(\d+))?/i);
+  if (!m) {
+    return { isTcp: false, proto: 'tcp', host: '192.168.10.1', tcpPort: 502, hostPort: '192.168.10.1:502' };
+  }
+  const rawProto = m[1].toLowerCase();
+  const proto = (rawProto === 'rtuovertcp' || rawProto === 'rtu_tcp') ? 'rtuovertcp' : 'tcp';
+  const host = m[2];
+  const tcpPort = parseInt(m[3]) || 502;
+  return {
+    isTcp: true,
+    proto,
+    host,
+    tcpPort,
+    hostPort: `${host}:${tcpPort}`,
+    fullEndpoint: `${proto}://${host}:${tcpPort}`
+  };
+}
+
 function shortPortLabel(port) {
   if (!port) return "--";
   if (port === "ALL") return "8 CỔNG COM";
+  if (isTcpPortString(port)) {
+    const info = parseTcpPortString(port);
+    return `${info.proto === 'rtuovertcp' ? 'RTU-TCP' : 'TCP'} ${info.hostPort}`;
+  }
   if (port.startsWith("/dev/ttyCH")) {
     const idx = parseInt(port.replace("/dev/ttyCH", ""));
     if (!isNaN(idx)) return `COM ${idx + 1}`;
@@ -379,12 +409,34 @@ function initStandardSelectors() {
 function refreshPortDropdowns() {
   const allPortSelects = [document.getElementById('selPort'), ...document.querySelectorAll('.js-port-select')];
   const extCount = availablePortsCache.filter(p => p.is_external).length;
+
+  // Collect any active TCP endpoints from sessionTabs so they stay selectable in #selPort and #selMapPort
+  const customTcpSet = new Set([
+    'tcp://192.168.10.1:502',
+    'tcp://127.0.0.1:5000',
+    'tcp://127.0.0.1:5001',
+    'rtuovertcp://192.168.10.1:502'
+  ]);
+  (sessionTabs || []).forEach(t => {
+    if (t && isTcpPortString(t.port)) customTcpSet.add(t.port);
+  });
+
   allPortSelects.forEach(sel => {
     if (!sel) return;
+    const isMainPollPort = (sel.id === 'selPort');
+    const isMapPort = (sel.id === 'selMapPort');
+    const allowTcp = isMainPollPort || isMapPort;
     const allowAll = sel.classList.contains('js-allow-all-ports') && extCount > 1;
     const prev = sel.value;
     const validIds = new Set(availablePortsCache.map(p => p.id));
     if (allowAll) validIds.add('ALL');
+    if (allowTcp) {
+      customTcpSet.forEach(ep => validIds.add(ep));
+      if (isTcpPortString(prev)) {
+        validIds.add(prev);
+        customTcpSet.add(prev);
+      }
+    }
     const cur = validIds.has(prev) ? prev : globalSerial.port;
 
     let html = '';
@@ -394,6 +446,23 @@ function refreshPortDropdowns() {
     html += availablePortsCache.map(p =>
       `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${p.label}</option>`
     ).join('');
+
+    if (allowTcp) {
+      html += `<optgroup label="🌐 Kết Nối Mạng Modbus TCP / RTU-over-TCP">`;
+      Array.from(customTcpSet).forEach(ep => {
+        const info = parseTcpPortString(ep);
+        let desc = info.proto === 'rtuovertcp'
+          ? `🌐 [RTU over TCP] ${info.hostPort} (CRC16 qua TCP)`
+          : `🌐 [Modbus TCP] ${info.hostPort} (MBAP Chuẩn PLC)`;
+        if (info.host === '127.0.0.1' && info.tcpPort === 5000) {
+          desc = `🌐 [Modbus TCP] 127.0.0.1:5000 (Smart Hub Router)`;
+        } else if (info.host === '127.0.0.1' && info.tcpPort >= 5001 && info.tcpPort <= 5008) {
+          desc = `🌐 [Modbus TCP] 127.0.0.1:${info.tcpPort} (Gateway COM ${info.tcpPort - 5000})`;
+        }
+        html += `<option value="${ep}" ${ep === cur ? 'selected' : ''}>${desc}</option>`;
+      });
+      html += `</optgroup>`;
+    }
     sel.innerHTML = html;
   });
 }
@@ -402,9 +471,15 @@ function updateHeaderSerialBadge(port, baud, parity, stopbits) {
   const p = parity || 'N';
   const s = stopbits || 1;
   const shortP = shortPortLabel(port);
-  const text = (port && port.startsWith('/dev/ttyCH'))
-    ? `${shortP} (${port.replace('/dev/', '')}) • ${baud} 8${p}${s}`
-    : `${port} • ${baud} 8${p}${s}`;
+  let text = '';
+  if (isTcpPortString(port)) {
+    const info = parseTcpPortString(port);
+    text = `🌐 ${info.proto === 'rtuovertcp' ? 'RTU-TCP' : 'Modbus TCP'} • ${info.hostPort}`;
+  } else if (port && port.startsWith('/dev/ttyCH')) {
+    text = `${shortP} (${port.replace('/dev/', '')}) • ${baud} 8${p}${s}`;
+  } else {
+    text = `${port} • ${baud} 8${p}${s}`;
+  }
   const el = document.getElementById('txtBadgePort');
   if (el) el.textContent = text;
   const sysEl = document.getElementById('lblSysPortExt');
@@ -436,16 +511,80 @@ function onToolbarSerialChange() {
   t.parity = parity;
   t.stopbits = stopbits;
 
-  document.querySelectorAll('.js-port-select').forEach(s => { if (s.value !== 'ALL') s.value = port; });
-  document.querySelectorAll('.js-baud-select').forEach(s => { s.value = String(baud); });
-  const fVal = `${parity}-${stopbits}`;
-  ['selScanRangeFraming', 'selSpecFraming', 'selGwFraming'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = fVal;
-  });
+  if (isTcpPortString(port)) {
+    const info = parseTcpPortString(port);
+    const protoEl = document.getElementById('selPollTcpProto');
+    const hpEl = document.getElementById('inpPollTcpHostPort');
+    if (protoEl) protoEl.value = info.proto;
+    if (hpEl) hpEl.value = info.hostPort;
+    updateHeaderSerialBadge(port, baud, parity, stopbits);
+  } else {
+    document.querySelectorAll('.js-port-select').forEach(s => { if (s.value !== 'ALL') s.value = port; });
+    document.querySelectorAll('.js-baud-select').forEach(s => { s.value = String(baud); });
+    const fVal = `${parity}-${stopbits}`;
+    ['selScanRangeFraming', 'selSpecFraming', 'selGwFraming'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = fVal;
+    });
+    pushSerialConfigToBackend(port, baud, parity, stopbits);
+  }
 
-  pushSerialConfigToBackend(port, baud, parity, stopbits);
   renderTabs();
+  saveUiStateToStorage();
+}
+
+function onToolbarTcpTargetChange() {
+  const t = getActiveTab();
+  if (!t) return;
+  const proto = (document.getElementById('selPollTcpProto')?.value || 'tcp').trim();
+  let rawHp = (document.getElementById('inpPollTcpHostPort')?.value || '192.168.10.1:502').trim();
+  rawHp = rawHp.replace(/^(tcp|rtuovertcp|rtu_tcp):\/\//i, '');
+  if (!rawHp.includes(':')) rawHp = `${rawHp}:502`;
+  const newEndpoint = `${proto}://${rawHp}`;
+  t.port = newEndpoint;
+  refreshPortDropdowns();
+  const selP = document.getElementById('selPort');
+  if (selP) selP.value = newEndpoint;
+  updateHeaderSerialBadge(t.port, t.baud, t.parity, t.stopbits);
+  renderTabs();
+  saveUiStateToStorage();
+}
+
+async function quickTestActiveTabTcp() {
+  const t = getActiveTab();
+  if (!t || !isTcpPortString(t.port)) return;
+  const info = parseTcpPortString(t.port);
+  showToast(`Đang Ping & Test ${info.proto.toUpperCase()} ${info.hostPort} (Unit ID ${t.slave_id})...`);
+  try {
+    const res = await fetch('/api/scan/tcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'quick_test',
+        host: info.host,
+        tcp_port: info.tcpPort,
+        protocol: info.proto,
+        unit_id: t.slave_id || 1,
+        fn_code: t.fn_code || 3,
+        test_addr: t.start_addr || 0,
+        quantity: Math.min(10, t.count || 1),
+        timeout_ms: 800
+      })
+    });
+    const data = await res.json();
+    if (data.success && data.tcp_reachable) {
+      if (data.status === 'ONLINE' || data.status === 'ONLINE_EXCEPTION') {
+        showToast(`✅ Kết nối ${info.hostPort} OK (${data.connect_ms}ms) • ${data.detail}`);
+        if (typeof pollOnce === 'function') pollOnce();
+      } else {
+        showToast(`⚠️ Cổng TCP ${info.hostPort} MỞ (${data.connect_ms}ms) nhưng Unit ID ${t.slave_id} chưa trả lời: ${data.error || ''}`);
+      }
+    } else {
+      showToast(`❌ Không kết nối được TCP ${info.hostPort}: ${data.error || 'Timeout/Refused'}`);
+    }
+  } catch (e) {
+    showToast(`Lỗi kiểm tra TCP: ${e}`);
+  }
 }
 
 function openSerialConfigModal(targetPort) {
@@ -571,7 +710,7 @@ function switchSdInspectorTab(tabKey) {
 
 function switchScannerTab(tabKey) {
   activeSubTabs.scanner = tabKey;
-  ['range', 'autobaud', 'special', 'regmap'].forEach(k => {
+  ['range', 'tcp', 'autobaud', 'special', 'regmap'].forEach(k => {
     const b = document.getElementById(`btnScanTab_${k}`);
     const p = document.getElementById(`scanPane_${k}`);
     if (b) b.classList.toggle('active', k === tabKey);
@@ -579,6 +718,9 @@ function switchScannerTab(tabKey) {
   });
   const shared = document.getElementById('sharedDeviceScanResults');
   if (shared) shared.style.display = (tabKey === 'regmap') ? 'none' : 'block';
+  if (typeof renderScannerGrid === 'function' && (tabKey === 'range' || tabKey === 'tcp')) {
+    renderScannerGrid();
+  }
   saveUiStateToStorage();
 }
 
@@ -1115,8 +1257,25 @@ function renameSessionTab(tabId) {
 function syncToolbarWithActiveTab() {
   const t = getActiveTab();
   if (!t) return;
+  const isTcp = isTcpPortString(t.port);
+  if (isTcp) {
+    refreshPortDropdowns();
+  }
   const selP = document.getElementById('selPort');
   if (selP) selP.value = t.port;
+
+  const boxTcp = document.getElementById('boxPollTcpTarget');
+  const boxBaud = document.getElementById('boxPollBaudField');
+  if (boxTcp) boxTcp.style.display = isTcp ? 'flex' : 'none';
+  if (boxBaud) boxBaud.style.display = isTcp ? 'none' : 'flex';
+  if (isTcp) {
+    const info = parseTcpPortString(t.port);
+    const protoEl = document.getElementById('selPollTcpProto');
+    const hpEl = document.getElementById('inpPollTcpHostPort');
+    if (protoEl) protoEl.value = info.proto;
+    if (hpEl && document.activeElement !== hpEl) hpEl.value = info.hostPort;
+  }
+
   const selB = document.getElementById('selBaud');
   if (selB) selB.value = String(t.baud);
   const frEl = document.getElementById('selFraming');
@@ -1149,7 +1308,7 @@ function syncToolbarWithActiveTab() {
     badgeSub.textContent = subInfo.skippedTotal > 0
       ? `📦 ${subInfo.blocks.length} khối lệnh • Đọc ${subInfo.enabledTotal}/${t.count} ô (Né ${subInfo.skippedTotal} ô cấm)`
       : `📦 ${subInfo.blocks.length} khối lệnh (${t.count} thanh ghi liên tiếp)`;
-    badgeSub.title = `Các khối lệnh thực tế gửi xuống RS485: [${rangeDesc || 'Không có'}]`;
+    badgeSub.title = `Các khối lệnh thực tế gửi xuống ${isTcp ? 'Modbus TCP' : 'RS485'}: [${rangeDesc || 'Không có'}]`;
   }
 
   const advBadge = document.getElementById('badgePollAdvSummary');
@@ -1163,7 +1322,9 @@ function syncToolbarWithActiveTab() {
   // Mobile quick summary badge
   const mobSum = document.getElementById('lblMobileQuickTabSummary');
   if (mobSum) {
-    mobSum.textContent = `${shortPortLabel(t.port)} • ${t.baud} 8${t.parity || 'N'}${t.stopbits || 1} • ID:${t.slave_id} • Addr:${t.start_addr}..${t.start_addr + t.count - 1}`;
+    mobSum.textContent = isTcp
+      ? `🌐 ${shortPortLabel(t.port)} • Unit:${t.slave_id} • Addr:${t.start_addr}..${t.start_addr + t.count - 1}`
+      : `${shortPortLabel(t.port)} • ${t.baud} 8${t.parity || 'N'}${t.stopbits || 1} • ID:${t.slave_id} • Addr:${t.start_addr}..${t.start_addr + t.count - 1}`;
   }
 
   const mobPollBtn = document.getElementById('btnMobileQuickPoll');
@@ -1202,14 +1363,15 @@ function updateActiveTabCfg(key, val) {
 // ==================== DATA FORMATTERS ====================
 function formatValue(raw, format, scale) {
   if (raw === undefined || raw === null) return "--";
-  scale = (scale !== undefined && scale !== null) ? scale : 1.0;
+  const numScale = (scale !== undefined && scale !== null && scale !== "" && isFinite(Number(scale))) ? Number(scale) : 1.0;
   const s = (typeof raw === 'number') ? raw : parseInt(raw);
   if (isNaN(s)) return "--";
+  const hasDecimals = Math.abs(numScale - 1.0) > 1e-9;
 
   switch (format) {
     case "int16": {
       const v = s > 32767 ? s - 65536 : s;
-      return (v * scale).toFixed(scale !== 1.0 ? 2 : 0);
+      return (v * numScale).toFixed(hasDecimals ? 2 : 0);
     }
     case "hex":
       return "0x" + (s & 0xFFFF).toString(16).toUpperCase().padStart(4, "0");
@@ -1217,10 +1379,10 @@ function formatValue(raw, format, scale) {
       return (s & 0xFFFF).toString(2).padStart(16, "0").replace(/(\d{4})/g, "$1 ").trim();
     case "float_abcd":
     case "float_cdab":
-      return (s * scale).toFixed(2);
+      return (s * numScale).toFixed(2);
     case "uint16":
     default:
-      return (s * scale).toFixed(scale !== 1.0 ? 2 : 0);
+      return (s * numScale).toFixed(hasDecimals ? 2 : 0);
   }
 }
 
@@ -1235,9 +1397,18 @@ function renderTable() {
 
   const hideDisabled = document.getElementById('chkHideDisabled') && document.getElementById('chkHideDisabled').checked;
   const errAddrSet = new Set();
-  (t.blockErrors || []).forEach(be => {
-    for (let a = be.start_addr; a < be.start_addr + be.count; a++) errAddrSet.add(a);
-  });
+  if (Array.isArray(t.blockErrors)) {
+    t.blockErrors.forEach(be => {
+      if (be && typeof be === 'object') {
+        for (let a = be.start_addr; a < be.start_addr + be.count; a++) errAddrSet.add(a);
+      }
+    });
+  } else if (t.blockErrors && typeof t.blockErrors === 'object') {
+    Object.keys(t.blockErrors).forEach(k => {
+      const a = parseInt(k);
+      if (!isNaN(a)) errAddrSet.add(a);
+    });
+  }
 
   let renderedRows = 0;
   const cardItemsHtml = [];
@@ -1558,9 +1729,11 @@ async function executePoll(tab) {
       }
 
       if (tab.id === activeTabId) {
-        renderTable();
-        updateInspector();
-        if (typeof pushTrendRecord === 'function') pushTrendRecord(tab.values.map(v => v || 0));
+        try { renderTable(); } catch (uiErr) { console.error("renderTable error:", uiErr); }
+        try { updateInspector(); } catch (uiErr) { console.error("updateInspector error:", uiErr); }
+        try {
+          if (typeof pushTrendRecord === 'function') pushTrendRecord(tab.values.map(v => v || 0));
+        } catch (uiErr) {}
       }
     } else {
       tab.lastPollState = 'error';
@@ -1569,7 +1742,7 @@ async function executePoll(tab) {
       if (tab.id === activeTabId) {
         const latEl = document.getElementById('badgeLatency');
         if (latEl) latEl.textContent = `Lỗi (${pTag}): ${data.error || 'Timeout'}`;
-        renderTable();
+        try { renderTable(); } catch (uiErr) {}
       }
       appendTrafficLog('ERR', data.error || 'Lỗi Polling', 0, pTag);
     }

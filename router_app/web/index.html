@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="NXModbus Pro">
   <meta name="mobile-web-app-capable" content="yes">
   <title>NXChieu Modbus Studio Pro - GL.iNet Router Edition</title>
-  <link rel="stylesheet" href="/css/studio.css">
+  <link rel="stylesheet" href="/css/studio.css?v=3.3.3">
 </head>
 <body>
 
@@ -173,14 +173,33 @@
         <!-- PRIMARY ACTION TOOLBAR (CLEAN SINGLE ROW BY DEFAULT) -->
         <div class="toolbar" id="pollConfigToolbar">
           <div class="toolbar-group">
-            <div class="field-box" style="min-width: 190px; max-width: 280px;">
-              <label>Cổng Serial</label>
+            <div class="field-box" style="min-width: 185px; max-width: 270px;">
+              <label>Cổng RS485 / Modbus TCP</label>
               <select id="selPort" onchange="onToolbarSerialChange()" style="width: 100%; text-overflow: ellipsis;">
                 <option value="/dev/ttyUSB1">/dev/ttyUSB1 (USB to RS485 Ngoài)</option>
-                <option value="/dev/ttyUSB0">/dev/ttyUSB0 (MCU Router Onboard)</option>
+                <option value="tcp://192.168.10.1:5001">🌐 Modbus TCP (IP:Port)</option>
               </select>
             </div>
-            <div class="field-box">
+            <!-- INLINE MODBUS TCP TARGET BOX (SHOWN WHEN ACTIVE TAB IS TCP / RTU-OVER-TCP) -->
+            <div id="boxPollTcpTarget" style="display: none; align-items: flex-end; gap: 6px; flex-wrap: wrap;">
+              <div class="field-box">
+                <label style="color: var(--cyan);">Giao Thức TCP</label>
+                <select id="selPollTcpProto" onchange="onToolbarTcpTargetChange()" style="border-color: rgba(6,182,212,0.45); color: var(--cyan); font-weight: 700;">
+                  <option value="tcp">Modbus TCP (MBAP)</option>
+                  <option value="rtuovertcp">RTU over TCP (CRC16)</option>
+                </select>
+              </div>
+              <div class="field-box" style="min-width: 155px;">
+                <label style="color: var(--cyan);">Đích IP:Port</label>
+                <input type="text" id="inpPollTcpHostPort" value="192.168.10.1:502" placeholder="VD: 192.168.10.1:5001"
+                       style="font-family: monospace; border-color: rgba(6,182,212,0.45); color: #fff; font-weight: 700;"
+                       onchange="onToolbarTcpTargetChange()">
+              </div>
+              <button class="btn btn-outline" style="padding: 6px 9px; font-size: 11px; color: var(--emerald); border-color: rgba(16,185,129,0.45);" onclick="quickTestActiveTabTcp()" title="Kiểm tra nhanh kết nối Socket TCP và đọc thử 1 gói Modbus trên đích IP:Port này">
+                ⚡ Test TCP
+              </button>
+            </div>
+            <div class="field-box" id="boxPollBaudField">
               <label>Tốc Độ (Baud)</label>
               <select id="selBaud" onchange="onToolbarSerialChange()">
                 <option value="300">300 bps</option>
@@ -204,8 +223,8 @@
               </select>
             </div>
             <div class="field-box">
-              <label>Slave ID</label>
-              <input type="number" id="inpSlave" value="1" min="1" max="247" style="width: 58px;" onchange="updateActiveTabCfg('slave_id', parseInt(this.value))">
+              <label>Slave / Unit ID</label>
+              <input type="number" id="inpSlave" value="1" min="0" max="255" style="width: 58px;" onchange="updateActiveTabCfg('slave_id', parseInt(this.value))">
             </div>
             <div class="field-box">
               <label>Địa Chỉ Đầu</label>
@@ -435,21 +454,24 @@
         </div>
       </div>
 
-      <!-- VIEW 2: DEVICE SCANNER (SEPARATED INTO 4 DEDICATED TABS) -->
+      <!-- VIEW 2: DEVICE SCANNER (SEPARATED INTO 5 DEDICATED TABS: RS485 + MODBUS TCP) -->
       <div id="view-scanner" class="view-panel">
         <div class="panel-card">
           <div class="panel-card-title">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span>Dò Quét Thiết Bị RS485 Tự Động (Industrial Modbus Scanner)</span>
-              <span class="badge badge-cyan">4 Phân Hệ Độc Lập</span>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <span>Dò Quét &amp; Kiểm Thử Thiết Bị Modbus RS485 / TCP (Industrial Scanner)</span>
+              <span class="badge badge-cyan">5 Phân Hệ Độc Lập</span>
             </div>
-            <span class="badge badge-emerald">Nhận diện cả phản hồi Exception (0x81..0x84)</span>
+            <span class="badge badge-emerald">Hỗ trợ RS485 Đa Cổng + Modbus TCP (MBAP) + RTU-over-TCP</span>
           </div>
 
-          <!-- 4 DEDICATED TABS -->
+          <!-- 5 DEDICATED TABS -->
           <div class="subtab-bar">
             <button class="subtab-btn active" id="btnScanTab_range" onclick="switchScannerTab('range')">
-              🔍 Quét Dải Slave ID
+              🔍 Quét Dải Slave ID (RS485)
+            </button>
+            <button class="subtab-btn" id="btnScanTab_tcp" onclick="switchScannerTab('tcp')" style="border-color: rgba(6,182,212,0.4);">
+              🌐 Quét &amp; Test Modbus TCP
             </button>
             <button class="subtab-btn" id="btnScanTab_autobaud" onclick="switchScannerTab('autobaud')">
               ⚡ Tự Dò Tốc Độ &amp; Parity
@@ -460,6 +482,135 @@
             <button class="subtab-btn" id="btnScanTab_regmap" onclick="switchScannerTab('regmap')">
               🗺️ Khảo Sát Bản Đồ Thanh Ghi
             </button>
+          </div>
+
+          <!-- TAB TCP: MODBUS TCP & RTU-OVER-TCP SCANNER / TESTER -->
+          <div id="scanPane_tcp" class="subtab-pane">
+            <div style="background: rgba(15, 23, 42, 0.55); padding: 14px; border-radius: 10px; border: 1px solid rgba(6,182,212,0.3); display: flex; flex-direction: column; gap: 12px;">
+              <!-- PRIMARY TCP TEST & UNIT ID SCAN CONTROLS -->
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <span class="badge badge-cyan" style="font-size: 12px;">🌐 Kiểm Thử Nhanh &amp; Dò Unit ID Qua Mạng TCP/IP</span>
+                  <span style="font-size: 11px; color: var(--text-muted);">Hỗ trợ PLC, Biến tần, Đồng hồ IP, hoặc test trực tiếp Cầu nối TCP Gateway nội bộ (5000..5008)</span>
+                </div>
+                <div style="display: flex; gap: 5px; flex-wrap: wrap; align-items: center;">
+                  <span style="font-size: 11px; color: var(--text-muted);">Chọn nhanh:</span>
+                  <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px; color: var(--cyan);" onclick="setTcpScannerPreset('192.168.10.1', 502, 'tcp')">Port 502 (Chuẩn PLC)</button>
+                  <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px; color: var(--emerald);" onclick="setTcpScannerPreset('127.0.0.1', 5000, 'tcp')">Smart Hub :5000</button>
+                  <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px;" onclick="setTcpScannerPreset('127.0.0.1', 5001, 'tcp')">GW COM1 :5001</button>
+                  <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px;" onclick="setTcpScannerPreset('127.0.0.1', 5002, 'tcp')">GW COM2 :5002</button>
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;">
+                <div class="field-box" style="min-width: 155px;">
+                  <label style="color: var(--cyan);">Địa Chỉ Host / IP</label>
+                  <input type="text" id="inpTcpScanHost" value="127.0.0.1" placeholder="VD: 192.168.10.1" style="font-family: monospace; font-weight: 700; color: #fff;">
+                </div>
+                <div class="field-box">
+                  <label style="color: var(--cyan);">Cổng TCP (Port)</label>
+                  <input type="number" id="inpTcpScanPort" value="5001" min="1" max="65535" style="width: 82px; font-family: monospace; font-weight: 700; color: var(--emerald);">
+                </div>
+                <div class="field-box">
+                  <label>Giao Thức Đóng Gói</label>
+                  <select id="selTcpScanProto">
+                    <option value="tcp" selected>Modbus TCP (MBAP 7-Byte)</option>
+                    <option value="rtuovertcp">RTU over TCP (Kèm CRC16)</option>
+                  </select>
+                </div>
+                <div class="field-box">
+                  <label>Dải Unit / Slave ID</label>
+                  <div style="display: flex; gap: 4px; align-items: center;">
+                    <input type="number" id="inpTcpScanFromId" value="1" min="0" max="255" style="width: 56px;" onchange="renderScannerGrid()">
+                    <span style="color: var(--text-muted);">→</span>
+                    <input type="number" id="inpTcpScanToId" value="10" min="0" max="255" style="width: 56px;" onchange="renderScannerGrid()">
+                  </div>
+                </div>
+                <div class="field-box">
+                  <label>Hàm (FC)</label>
+                  <select id="selTcpScanFn">
+                    <option value="3" selected>FC03 Holding (4x)</option>
+                    <option value="4">FC04 Input (3x)</option>
+                    <option value="1">FC01 Coils (0x)</option>
+                    <option value="2">FC02 Discrete (1x)</option>
+                  </select>
+                </div>
+                <div class="field-box">
+                  <label>Địa Chỉ Thử</label>
+                  <input type="number" id="inpTcpScanAddr" value="0" min="0" max="65535" style="width: 72px;">
+                </div>
+                <div class="field-box">
+                  <label>Số Lượng</label>
+                  <input type="number" id="inpTcpScanQty" value="1" min="1" max="50" style="width: 58px;">
+                </div>
+                <div class="field-box">
+                  <label>Timeout</label>
+                  <select id="selTcpScanTimeout">
+                    <option value="150">150 ms (LAN Nhanh)</option>
+                    <option value="300" selected>300 ms (Chuẩn)</option>
+                    <option value="600">600 ms (Qua Gateway RS485)</option>
+                    <option value="1200">1200 ms (Qua 4G / VPN)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.08);">
+                <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #cbd5e1; cursor: pointer;">
+                  <input type="checkbox" id="chkTcpInclude0255">
+                  Quét kèm cả <code>Unit ID = 0</code> và <code>Unit ID = 255</code> (Dành cho PLC Siemens / Schneider / Moxa Gateway)
+                </label>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <button id="btnTcpQuickTest" class="btn btn-emerald" onclick="runTcpQuickTest()" title="Kiểm tra tức thì kết nối Socket TCP và đọc thử Unit ID đầu tiên kèm giải phẫu gói tin MBAP Hex">
+                    ⚡ Ping TCP &amp; Đọc Thử Ngay
+                  </button>
+                  <button id="btnTcpUnitScan" class="btn btn-primary" onclick="runTcpUnitIdScan()" title="Quét toàn bộ dải Unit ID từ Từ ID -> Đến ID trên địa chỉ IP:Port này">
+                    🔍 Quét Dải Unit ID Qua TCP
+                  </button>
+                  <button class="btn btn-outline" style="color: var(--cyan); border-color: rgba(6,182,212,0.45);" onclick="openTcpTargetInPollFromScanner()" title="Đưa thẳng đích IP:Port này sang Bảng Dữ Liệu (Poll) thành 1 Tab theo dõi thời gian thực">
+                    📊 Mở Tab Polling TCP Này
+                  </button>
+                </div>
+              </div>
+
+              <!-- INSTANT TCP PING & MODBUS PACKET DIAGNOSTIC RESULT BOX -->
+              <div id="tcpQuickTestResultBox" style="display: none; background: rgba(2,6,23,0.75); border: 1px solid rgba(16,185,129,0.4); border-radius: 8px; padding: 10px 12px; font-size: 12px; flex-direction: column; gap: 6px;"></div>
+
+              <!-- PROGRESSIVE DISCLOSURE: LAN IP SUBNET SWEEP -->
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; background: rgba(6,182,212,0.06); border: 1px dashed rgba(6,182,212,0.3); border-radius: 8px; padding: 7px 12px;">
+                <span style="font-size: 11px; color: #cbd5e1;">📡 <b>Quét Dải IP Mạng LAN (IP Subnet Sweep):</b> Dò tìm mọi thiết bị mở cổng Modbus TCP (502, 5000..5008) trong mạng nội bộ</span>
+                <button class="btn btn-outline" style="padding: 3px 10px; font-size: 11px; color: var(--cyan);" onclick="toggleTcpSubnetSweepDrawer()">
+                  🌐 Mở Rộng Quét Dải IP Mạng LAN <span id="icoTcpSweepArrow">▾</span>
+                </button>
+              </div>
+
+              <div id="tcpSubnetSweepDrawer" class="collapsible-section">
+                <div style="display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; background: rgba(2,6,23,0.5); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;">
+                  <div class="field-box">
+                    <label>Lớp Mạng (Subnet Prefix)</label>
+                    <input type="text" id="inpTcpSweepSubnet" value="192.168.10." placeholder="VD: 192.168.1." style="width: 125px; font-family: monospace;">
+                  </div>
+                  <div class="field-box">
+                    <label>Từ IP Cuối</label>
+                    <input type="number" id="inpTcpSweepStart" value="1" min="1" max="254" style="width: 62px;">
+                  </div>
+                  <div class="field-box">
+                    <label>Đến IP Cuối</label>
+                    <input type="number" id="inpTcpSweepEnd" value="50" min="1" max="254" style="width: 62px;">
+                  </div>
+                  <div class="field-box" style="flex: 1; min-width: 180px;">
+                    <label>Các Cổng TCP Cần Quét</label>
+                    <input type="text" id="inpTcpSweepPorts" value="502, 5000, 5001-5008" style="font-family: monospace;">
+                  </div>
+                  <div class="field-box">
+                    <label>Unit ID Thử</label>
+                    <input type="number" id="inpTcpSweepUnitId" value="1" min="0" max="255" style="width: 62px;">
+                  </div>
+                  <button id="btnStartTcpIpSweep" class="btn btn-primary" onclick="runTcpIpSubnetSweep()">
+                    📡 Quét Tìm Thiết Bị TCP Trong Mạng LAN
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- TAB 1: RANGE SLAVE ID SCAN -->
@@ -753,6 +904,9 @@
               <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Ánh xạ độc lập song song 8 cổng COM vật lý (<code>/dev/ttyCH0..7</code>) sang TCP <code>5001 → 5008</code> qua WAN, Wi-Fi LAN &amp; WireGuard</div>
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="btn btn-outline" style="padding: 8px 12px; font-size: 12px; color: var(--cyan); border-color: rgba(6,182,212,0.45);" onclick="showView('scanner'); switchScannerTab('tcp');">
+                🌐 Quét &amp; Test Modbus TCP
+              </button>
               <button id="btnGwStartAll8" class="btn btn-emerald" style="padding: 8px 14px; font-size: 12px;" onclick="startAll8Gateways()">
                 ⚡ Bật Cả 8 Cổng (TCP 5001..5008)
               </button>
@@ -1807,6 +1961,7 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
           </div>
           <div style="display: flex; gap: 6px; flex-wrap: wrap;">
             <button class="btn btn-emerald" style="padding: 5px 10px; font-size: 11px;" onclick="applyQuickBuilderPreset('custom1')">🎯 1 Thiết Bị Test Nhanh</button>
+            <button class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.45);" onclick="applyQuickBuilderPreset('modbus_tcp')">🌐 Thiết Bị Modbus TCP (IP:502 / Gateway)</button>
             <button class="btn btn-primary" style="padding: 5px 10px; font-size: 11px;" onclick="applyQuickBuilderPreset('all8com')">🐙 Đồng Loạt 8 Cổng COM (1→8)</button>
             <button class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: var(--amber); border-color: rgba(245,158,11,0.4);" onclick="applyQuickBuilderPreset('hitachi')">🏭 Máy Nén Khí Hitachi NEXT II (Né Ô Cấm)</button>
             <button class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: #c084fc; border-color: rgba(168,85,247,0.4);" onclick="applyQuickBuilderPreset('dse8610')">⚡ Máy Phát Deep Sea DSE8610 MKII</button>
@@ -1866,8 +2021,8 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
   </footer>
 
   <!-- MODULAR FRONTEND JAVASCRIPT (v3.3 Clean Architecture) -->
-  <script src="/js/app_core.js"></script>
-  <script src="/js/scanner_gateway_datalog.js"></script>
-  <script src="/js/profile_studio_and_builder.js"></script>
+  <script src="/js/app_core.js?v=3.3.3"></script>
+  <script src="/js/scanner_gateway_datalog.js?v=3.3.3"></script>
+  <script src="/js/profile_studio_and_builder.js?v=3.3.3"></script>
 </body>
 </html>
