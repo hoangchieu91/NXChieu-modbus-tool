@@ -95,12 +95,27 @@ func (m *ModbusClientWrapper) ProbeSlave(slaveID uint8, timeoutMs uint) SlaveSca
 		}
 	}
 
-	// Try reading Holding Register 0
+	// Try reading Holding Register 0; if no response, also try Holding Register 1 and Input Register 0
 	var val uint16
+	var regAddr uint16 = 0
+	var fc uint8 = 3
 	txnBefore := m.txnID
 	m.probing = true
 	err := m.hardwareCallLocked(slaveID, func() (err error) {
 		val, err = m.client.ReadRegister(0, simonmodbus.HOLDING_REGISTER)
+		if err != nil && !isModbusExceptionError(err) {
+			val, err = m.client.ReadRegister(1, simonmodbus.HOLDING_REGISTER)
+			if err == nil {
+				regAddr = 1
+			}
+		}
+		if err != nil && !isModbusExceptionError(err) {
+			val, err = m.client.ReadRegister(0, simonmodbus.INPUT_REGISTER)
+			if err == nil {
+				fc = 4
+				regAddr = 0
+			}
+		}
 		return err
 	})
 	m.probing = false
@@ -122,9 +137,9 @@ func (m *ModbusClientWrapper) ProbeSlave(slaveID uint8, timeoutMs uint) SlaveSca
 		return SlaveScanItem{
 			SlaveID:   slaveID,
 			Status:    "online",
-			Detail:    fmt.Sprintf("OK (Reg 0 = 0x%04X / %d)", val, val),
+			Detail:    fmt.Sprintf("OK (FC%02d Reg %d = 0x%04X / %d)", fc, regAddr, val, val),
 			LatencyMs: latency,
-			RawRx:     fmt.Sprintf("%02X 03 02 %04X ...", slaveID, val),
+			RawRx:     fmt.Sprintf("%02X %02X 02 %04X ...", slaveID, fc, val),
 		}
 	}
 
@@ -363,3 +378,160 @@ func AutoDetectBaudrate(port string, slaveID uint8, bauds []uint, parities []str
 
 	return results
 }
+
+// DiscoveredDevice holds details about an automatically discovered Modbus slave device.
+type DiscoveredDevice struct {
+	Port         string `json:"port"`
+	BaudRate     uint   `json:"baud_rate"`
+	Parity       string `json:"parity"`
+	StopBits     uint   `json:"stop_bits"`
+	SlaveID      uint8  `json:"slave_id"`
+	FunctionCode uint8  `json:"function_code"`
+	Address      uint16 `json:"address"`
+	Value        uint16 `json:"value"`
+	LatencyMs    uint64 `json:"latency_ms"`
+	Detail       string `json:"detail"`
+}
+
+// AutoDiscoverParams specifies the search parameters for full device auto-discovery.
+type AutoDiscoverParams struct {
+	Port        string   `json:"port"`
+	Bauds       []uint   `json:"bauds,omitempty"`
+	Parities    []string `json:"parities,omitempty"`
+	SlaveIDs    []uint8  `json:"slave_ids,omitempty"`
+	TimeoutMs   uint     `json:"timeout_ms,omitempty"`
+	StopOnFirst bool     `json:"stop_on_first"`
+}
+
+// AutoDiscoverDevices scans an unknown port across bauds, parities, and slave IDs to identify devices.
+func AutoDiscoverDevices(params AutoDiscoverParams, onProgress func(phase string, currentBaud uint, currentParity string, currentSlave uint8, foundCount int)) []DiscoveredDevice {
+	var results []DiscoveredDevice
+
+	bauds := params.Bauds
+	if len(bauds) == 0 {
+		bauds = []uint{9600, 19200, 115200, 38400, 4800, 57600}
+	}
+	parities := params.Parities
+	if len(parities) == 0 {
+		parities = []string{"none", "even", "odd"}
+	}
+	slaveIDs := params.SlaveIDs
+	if len(slaveIDs) == 0 {
+		// Common industrial default IDs
+		slaveIDs = []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 20, 32, 100, 247}
+	}
+	timeoutMs := params.TimeoutMs
+	if timeoutMs == 0 {
+		timeoutMs = 120
+	}
+
+	pLower := strings.ToLower(params.Port)
+	if pLower == "simulator" || pLower == "sim" {
+		results = append(results, DiscoveredDevice{
+			Port:         params.Port,
+			BaudRate:     9600,
+			Parity:       "none",
+			StopBits:     1,
+			SlaveID:      1,
+			FunctionCode: 3,
+			Address:      0,
+			Value:        0,
+			LatencyMs:    10,
+			Detail:       "Thiết bị Simulator (Khớp 9600 8-N-1 ID:1)",
+		})
+		return results
+	}
+
+	formattedPort := normalizeSerialPort(params.Port)
+
+	for _, baud := range bauds {
+		for _, parityStr := range parities {
+			client, err := simonmodbus.NewClient(&simonmodbus.ClientConfiguration{
+				URL:      fmt.Sprintf("rtu://%s", formattedPort),
+				Speed:    baud,
+				DataBits: 8,
+				Parity:   libParity(parityStr),
+				StopBits: 1,
+				Timeout:  time.Duration(timeoutMs) * time.Millisecond,
+			})
+			if err != nil {
+				continue
+			}
+
+			if err := client.Open(); err != nil {
+				// Port cannot be opened (busy or absent)
+				return results
+			}
+
+			for _, slaveID := range slaveIDs {
+				if onProgress != nil {
+					onProgress("probing", baud, parityStr, slaveID, len(results))
+				}
+
+				client.SetUnitId(slaveID)
+				startTime := time.Now()
+				fc := uint8(3)
+				addr := uint16(0)
+				val, readErr := client.ReadRegister(0, simonmodbus.HOLDING_REGISTER)
+				latency := uint64(time.Since(startTime).Milliseconds())
+
+				if readErr != nil && !isModbusExceptionError(readErr) {
+					// Fallback to Address 1 (many Chinese sensors start at 1)
+					startTime = time.Now()
+					val, readErr = client.ReadRegister(1, simonmodbus.HOLDING_REGISTER)
+					latency = uint64(time.Since(startTime).Milliseconds())
+					addr = 1
+				}
+
+				if readErr != nil && !isModbusExceptionError(readErr) {
+					// Fallback to Input Register 0 (FC04)
+					startTime = time.Now()
+					val, readErr = client.ReadRegister(0, simonmodbus.INPUT_REGISTER)
+					latency = uint64(time.Since(startTime).Milliseconds())
+					fc = 4
+					addr = 0
+				}
+
+				if readErr == nil {
+					results = append(results, DiscoveredDevice{
+						Port:         params.Port,
+						BaudRate:     baud,
+						Parity:       parityStr,
+						StopBits:     1,
+						SlaveID:      slaveID,
+						FunctionCode: fc,
+						Address:      addr,
+						Value:        val,
+						LatencyMs:    latency,
+						Detail:       fmt.Sprintf("Tìm thấy thiết bị (FC%02d, Đ/chỉ: %d, Giá trị: %d)", fc, addr, val),
+					})
+					if params.StopOnFirst {
+						_ = client.Close()
+						return results
+					}
+				} else if isModbusExceptionError(readErr) {
+					results = append(results, DiscoveredDevice{
+						Port:         params.Port,
+						BaudRate:     baud,
+						Parity:       parityStr,
+						StopBits:     1,
+						SlaveID:      slaveID,
+						FunctionCode: fc,
+						Address:      addr,
+						LatencyMs:    latency,
+						Detail:       fmt.Sprintf("Khớp thiết bị (Modbus Exception: %s)", readErr.Error()),
+					})
+					if params.StopOnFirst {
+						_ = client.Close()
+						return results
+					}
+				}
+			}
+
+			_ = client.Close()
+		}
+	}
+
+	return results
+}
+

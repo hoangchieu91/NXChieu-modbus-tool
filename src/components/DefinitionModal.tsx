@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Settings, Check, HelpCircle } from 'lucide-react';
 import { PollDefinition } from '../types/modbus';
 import { parseModbusAddress, formatModbusAddress, getModbusAddressLabel } from '../utils/formatters';
+import { parseAddrRangeArray, formatAddrRangeString } from '../utils/projectStorage';
 
 interface DefinitionModalProps {
   isOpen: boolean;
@@ -34,6 +35,7 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
   const [addrError, setAddrError] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(definition.quantity);
   const [scanRate, setScanRate] = useState(definition.scan_rate_ms);
+  const [disabledInput, setDisabledInput] = useState<string>(formatAddrRangeString(definition.disabled_addrs));
 
   useEffect(() => {
     setSlaveId(definition.slave_id);
@@ -47,6 +49,7 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
     setAddrError(null);
     setQuantity(definition.quantity);
     setScanRate(definition.scan_rate_ms);
+    setDisabledInput(formatAddrRangeString(definition.disabled_addrs));
   }, [definition, isOpen]);
 
   const handleToggleAddrMode = (mode: 'dec' | 'hex') => {
@@ -88,8 +91,8 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
       setAddrError('Slave ID phải là số nguyên từ 1 đến 247');
       return;
     }
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 125) {
-      setAddrError('Số lượng phải là số nguyên từ 1 đến 125');
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 250) {
+      setAddrError('Số lượng phải là số nguyên từ 1 đến 250');
       return;
     }
     if (finalAddress + quantity > 65536) {
@@ -107,6 +110,7 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
       start_address: finalAddress,
       quantity,
       scan_rate_ms: Math.round(scanRate),
+      disabled_addrs: parseAddrRangeArray(disabledInput),
     });
     onClose();
   };
@@ -240,20 +244,37 @@ export const DefinitionModal: React.FC<DefinitionModalProps> = ({
             <div>
               <div className="flex items-center mb-1">
                 <label className="text-slate-400">
-                  Quantity (Số lượng 1 - 125):
+                  Quantity (Số lượng 1 - 250):
                 </label>
-                <FieldTooltip text="Số lượng thanh ghi cần đọc liên tục trong 1 gói tin. Chuẩn Modbus RTU giới hạn tối đa 125 thanh ghi (250 bytes) mỗi chu kỳ." />
+                <FieldTooltip text="Số lượng thanh ghi trong bảng (lên tới 250). Nếu vượt quá 120 hoặc có thanh ghi cấm đọc ở giữa, hệ thống tự động tách thành các khối lệnh liên tiếp (Contiguous Sub-Blocks)." />
               </div>
               <input
                 type="number"
                 min={1}
-                max={125}
+                max={250}
                 value={quantity}
                 onChange={(e) => setQuantity(Number(e.target.value))}
                 className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
                 required
               />
             </div>
+          </div>
+
+          {/* Forbidden / Disabled Addresses (Smart Contiguous Sub-Blocks) */}
+          <div>
+            <div className="flex items-center mb-1">
+              <label className="text-amber-300 font-medium">
+                🚫 Địa chỉ Cấm Đọc ở giữa (Né lỗi Exception 0x02):
+              </label>
+              <FieldTooltip text="Nhập các địa chỉ hoặc dải địa chỉ bị thiết bị cấm đọc ở giữa (ví dụ: 3-5, 8-10, 12). Phần mềm sẽ tự động chia nhỏ thành các khối lệnh liên tiếp hợp lệ và tuyệt đối KHÔNG gửi lệnh Modbus chạm vào các địa chỉ này!" />
+            </div>
+            <input
+              type="text"
+              value={disabledInput}
+              onChange={(e) => setDisabledInput(e.target.value)}
+              placeholder="Ví dụ: 3-5, 8-10, 12, 17-18 (Để trống nếu đọc liên tục)"
+              className="w-full bg-slate-950 border border-amber-500/40 rounded px-2.5 py-1.5 text-amber-200 focus:outline-none focus:border-amber-400 font-mono"
+            />
           </div>
 
           {/* Scan Rate */}

@@ -15,8 +15,10 @@ import {
   RotateCcw,
   Radio,
   Sliders,
+  Plus,
+  LineChart,
 } from 'lucide-react';
-import { ChartDataPoint, ChartTrace } from '../types/modbus';
+import { ChartDataPoint, ChartTrace, RegisterRow } from '../types/modbus';
 
 interface TrendChartProps {
   traces: ChartTrace[];
@@ -25,6 +27,9 @@ interface TrendChartProps {
   onRemoveTrace: (traceId: string) => void;
   onClear: () => void;
   onClose: () => void;
+  isFullScreen?: boolean;
+  availableRows?: RegisterRow[];
+  onAddTrace?: (row: RegisterRow) => void;
 }
 
 export const TrendChart: React.FC<TrendChartProps> = ({
@@ -34,6 +39,9 @@ export const TrendChart: React.FC<TrendChartProps> = ({
   onRemoveTrace,
   onClear,
   onClose,
+  isFullScreen = false,
+  availableRows,
+  onAddTrace,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,6 +50,7 @@ export const TrendChart: React.FC<TrendChartProps> = ({
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [isNormalizedScale, setIsNormalizedScale] = useState<boolean>(false);
+  const [showAddMenu, setShowAddMenu] = useState<boolean>(false);
 
 
   // Zoom & Pan state
@@ -472,13 +481,104 @@ export const TrendChart: React.FC<TrendChartProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  if (traces.length === 0) return null;
+  if (traces.length === 0) {
+    if (!isFullScreen) return null;
+    return (
+      <div className="flex-1 flex flex-col h-full bg-slate-950 text-slate-200 overflow-hidden select-none">
+        {/* Top Header */}
+        <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-5 h-5 text-cyan-400" />
+            <span className="font-bold text-slate-100 text-sm">Biểu Đồ Xu Hướng Đa Kênh (Realtime Trend)</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs font-semibold"
+          >
+            Quay lại Bảng Dữ Liệu
+          </button>
+        </div>
+
+        {/* Empty State Body */}
+        <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center max-w-3xl mx-auto w-full">
+          <div className="w-16 h-16 rounded-2xl bg-cyan-950/80 border border-cyan-500/30 flex items-center justify-center mb-4 shadow-lg shadow-cyan-950/50">
+            <LineChart className="w-8 h-8 text-cyan-400" />
+          </div>
+          <h2 className="text-lg font-bold text-white mb-2">Chưa có kênh nào được theo dõi trên Biểu Đồ Sóng</h2>
+          <p className="text-slate-400 text-xs text-center max-w-md mb-6 leading-relaxed">
+            Bạn có thể theo dõi sự thay đổi của các thanh ghi hoặc cuộn hút Modbus theo thời gian thực (hỗ trợ phóng to/thu nhỏ dòng thời gian, chuẩn hóa thang %, tạm dừng phân tích và xuất dữ liệu CSV).
+          </p>
+
+          {availableRows && availableRows.length > 0 ? (
+            <div className="w-full bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-2xl">
+              <div className="flex items-center justify-between mb-4 border-b border-slate-800/80 pb-3">
+                <div>
+                  <h3 className="font-bold text-white text-xs uppercase tracking-wider">Chọn nhanh thanh ghi từ phiên hiện tại:</h3>
+                  <p className="text-[11px] text-slate-400">Bấm "+ Vẽ sóng" để bắt đầu quan sát kênh đó:</p>
+                </div>
+                {onAddTrace && (
+                  <button
+                    onClick={() => {
+                      availableRows.slice(0, 4).forEach((r) => onAddTrace(r));
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30 transition text-xs font-bold"
+                  >
+                    + Vẽ nhanh 4 kênh đầu
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-[340px] overflow-y-auto pr-1">
+                {availableRows.map((row) => (
+                  <div
+                    key={row.address}
+                    className="flex items-center justify-between p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 hover:border-cyan-500/40 transition group"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-cyan-400 font-bold text-xs">{row.displayAddress}</span>
+                        <span className="text-slate-200 text-xs font-medium truncate">
+                          {row.alias || `Thanh ghi ${row.displayAddress}`}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400 font-mono">
+                        <span>Giá trị: <strong className="text-amber-300">{row.displayValue}</strong> {row.unit}</span>
+                      </div>
+                    </div>
+
+                    {onAddTrace && (
+                      <button
+                        onClick={() => onAddTrace(row)}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 group-hover:bg-cyan-600 text-slate-300 group-hover:text-white transition text-xs font-semibold shrink-0"
+                      >
+                        + Vẽ sóng
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-center p-6 bg-slate-900/60 border border-slate-800 rounded-2xl max-w-sm">
+              <p className="text-slate-400 text-xs mb-4">Chưa có kết nối hoặc dữ liệu thanh ghi nào để chọn.</p>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 rounded-xl bg-cyan-400 text-slate-950 font-bold text-xs hover:bg-cyan-300 transition"
+              >
+                Về Bảng Dữ Liệu & Bật Polling
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
       ref={containerRef}
-      className={`flex flex-col bg-slate-950 border-t border-cyan-800/40 text-xs font-sans transition-all duration-300 shadow-2xl relative ${
-        isExpanded ? 'h-96' : 'h-72'
+      className={`flex flex-col bg-slate-950 text-xs font-sans shadow-2xl relative ${
+        isFullScreen ? 'flex-1 h-full border-0' : isExpanded ? 'h-96 border-t border-cyan-800/40' : 'h-72 border-t border-cyan-800/40'
       }`}
     >
       {/* Top Header & Toolbar */}
@@ -537,6 +637,47 @@ export const TrendChart: React.FC<TrendChartProps> = ({
 
         {/* Right Actions */}
         <div className="flex items-center space-x-1.5">
+          {/* Quick Add Channel Dropdown */}
+          {availableRows && availableRows.length > 0 && onAddTrace && (
+            <div className="relative">
+              <button
+                onClick={() => setShowAddMenu(!showAddMenu)}
+                className="flex items-center space-x-1 px-2 py-1 rounded text-[11px] font-semibold bg-cyan-950/80 border border-cyan-600/50 text-cyan-300 hover:bg-cyan-900 transition"
+                title="Thêm thanh ghi khác vào biểu đồ sóng"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Thêm Kênh</span>
+              </button>
+              {showAddMenu && (
+                <div className="absolute right-0 top-full mt-1 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-30 p-2 max-h-72 overflow-y-auto">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold px-2 py-1 border-b border-slate-800 mb-1">
+                    Chọn kênh để vẽ thêm:
+                  </div>
+                  {availableRows.map((r) => {
+                    const isTraced = traces.some((t) => t.address === r.address);
+                    return (
+                      <button
+                        key={r.address}
+                        disabled={isTraced}
+                        onClick={() => {
+                          onAddTrace(r);
+                          setShowAddMenu(false);
+                        }}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between text-xs transition ${
+                          isTraced ? 'opacity-40 cursor-not-allowed bg-slate-950/40 text-slate-500' : 'hover:bg-slate-800 text-slate-200'
+                        }`}
+                      >
+                        <span className="font-mono text-cyan-400">{r.displayAddress}</span>
+                        <span className="truncate max-w-[100px] text-[11px] text-slate-400">{r.alias || r.displayValue}</span>
+                        <span className="text-[10px] font-bold text-amber-300">{isTraced ? 'Đang vẽ' : '+ Thêm'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Normalized Scale Toggle */}
           <button
             onClick={() => setIsNormalizedScale(!isNormalizedScale)}

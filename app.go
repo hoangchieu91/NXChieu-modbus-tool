@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"nxchieu-modbus-tool/pkg/datalogger"
 	"nxchieu-modbus-tool/pkg/modbus"
+	"nxchieu-modbus-tool/pkg/rawserial"
 	"nxchieu-modbus-tool/pkg/sniffer"
 	"nxchieu-modbus-tool/pkg/web"
 
@@ -28,6 +31,9 @@ type App struct {
 	// traffic never enters the user's baseline, health score, reports or saved captures.
 	diagnosticSniffer *sniffer.Engine
 	remoteServer      *web.RemoteServer
+	rawSerial         *rawserial.Manager
+	gateway           *modbus.ModbusGatewayBridge
+	datalogger        *datalogger.DataloggerEngine
 
 	pendingWrites map[string]chan string // remote writes awaiting the desktop UI, by request id
 }
@@ -36,6 +42,21 @@ type App struct {
 func NewApp() *App {
 	app := &App{sniffer: sniffer.NewEngine(50000), diagnosticSniffer: sniffer.NewEngine(2000)}
 	app.capture = sniffer.NewSessionManager(app.sniffer)
+	app.rawSerial = rawserial.NewManager(func(frame rawserial.RawSerialFrame) {
+		if app.ctx != nil {
+			runtime.EventsEmit(app.ctx, "raw-serial-frame", frame)
+		}
+	})
+
+	app.gateway = modbus.NewModbusGatewayBridge(func(event modbus.GatewayTrafficEvent) {
+		if app.ctx != nil {
+			runtime.EventsEmit(app.ctx, "gateway-traffic", event)
+		}
+	})
+
+	if dl, err := datalogger.NewDataloggerEngine(""); err == nil {
+		app.datalogger = dl
+	}
 
 	app.remoteServer = web.NewRemoteServer(
 		app.handleRemoteWrite,
@@ -45,6 +66,18 @@ func NewApp() *App {
 			}
 		},
 	)
+
+	// Always start Web Remote Server on port 8088 with fixed token so remote phone can connect anytime
+	const defaultToken = "nxchieu_modbus_remote"
+	status, err := app.StartRemoteServerWithToken(8088, true, defaultToken)
+	if err == nil && len(status.Interfaces) > 0 {
+		var urlLines []string
+		urlLines = append(urlLines, "=== NXChieu Modbus Remote Monitor URLs ===")
+		for _, iface := range status.Interfaces {
+			urlLines = append(urlLines, fmt.Sprintf("[%s] %s -> %s", iface.Type, iface.Name, iface.URL))
+		}
+		_ = os.WriteFile("remote_url.txt", []byte(strings.Join(urlLines, "\r\n")), 0644)
+	}
 
 	app.sessMgr = modbus.NewSessionManager(
 		func(sessionID string, res modbus.PollResult) {
@@ -181,6 +214,18 @@ func (a *App) CompleteRemoteWrite(id string, errMsg string) {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	runtime.WindowShow(ctx)
+
+	// Automatically start Web Remote Server on port 8088 with fixed token
+	const defaultToken = "nxchieu_modbus_remote"
+	status, err := a.StartRemoteServerWithToken(8088, true, defaultToken)
+	if err == nil && len(status.Interfaces) > 0 {
+		var urlLines []string
+		urlLines = append(urlLines, "=== NXChieu Modbus Remote Monitor URLs ===")
+		for _, iface := range status.Interfaces {
+			urlLines = append(urlLines, fmt.Sprintf("[%s] %s -> %s", iface.Type, iface.Name, iface.URL))
+		}
+		_ = os.WriteFile("remote_url.txt", []byte(strings.Join(urlLines, "\r\n")), 0644)
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -189,6 +234,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.remoteServer != nil {
 		a.remoteServer.Stop()
+	}
+	if a.rawSerial != nil {
+		_ = a.rawSerial.Close()
 	}
 }
 
@@ -304,6 +352,95 @@ func (a *App) ScanSlaveIDs(sessionID string, startID, endID uint8, timeoutMs uin
 // AutoDetectBaudrate probes multiple Baudrate & Parity configurations on a COM port.
 func (a *App) AutoDetectBaudrate(port string, slaveID uint8, bauds []uint, parities []string) []modbus.BaudScanItem {
 	return modbus.AutoDetectBaudrate(port, slaveID, bauds, parities)
+}
+
+// AutoDiscoverDevices scans an unknown port to automatically discover Baudrate, Parity, Slave ID, and readable registers.
+func (a *App) AutoDiscoverDevices(params modbus.AutoDiscoverParams) []modbus.DiscoveredDevice {
+	return modbus.AutoDiscoverDevices(params, func(phase string, currentBaud uint, currentParity string, currentSlave uint8, foundCount int) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "auto-discover-progress", map[string]interface{}{
+				"phase":          phase,
+				"current_baud":   currentBaud,
+				"current_parity": currentParity,
+				"current_slave":  currentSlave,
+				"found_count":    foundCount,
+			})
+		}
+	})
+}
+
+// OpenNewInstance launches another independent instance/window of NXChieu Modbus Studio.
+func (a *App) OpenNewInstance() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("không tìm thấy file thực thi: %w", err)
+	}
+	cmd := exec.Command(exe)
+	return cmd.Start()
+}
+
+// --- Raw Serial & TTL Terminal Methods ---
+
+// RawSerialOpen opens a serial port in raw mode for TTL / UART debugging.
+func (a *App) RawSerialOpen(port string, baud int, dataBits int, parity string, stopBits float32) error {
+	return a.rawSerial.Open(port, baud, dataBits, parity, stopBits)
+}
+
+// RawSerialClose closes the raw serial port connection.
+func (a *App) RawSerialClose() error {
+	return a.rawSerial.Close()
+}
+
+// RawSerialSend sends arbitrary HEX or ASCII bytes over the raw serial port.
+func (a *App) RawSerialSend(text string, isHex bool, appendCrc string) (int, error) {
+	bytesToSend, err := rawserial.ParseHexOrASCII(text, isHex)
+	if err != nil {
+		return 0, fmt.Errorf("lỗi cú pháp dữ liệu: %w", err)
+	}
+
+	switch strings.ToLower(appendCrc) {
+	case "crc16_modbus", "modbus_crc", "crc16":
+		_, le := rawserial.CalculateCRC16Modbus(bytesToSend)
+		bytesToSend = append(bytesToSend, le...)
+	case "crc16_be":
+		crc, _ := rawserial.CalculateCRC16Modbus(bytesToSend)
+		be := []byte{byte((crc >> 8) & 0xFF), byte(crc & 0xFF)}
+		bytesToSend = append(bytesToSend, be...)
+	case "sum8", "checksum8":
+		sum := byte(0)
+		for _, b := range bytesToSend {
+			sum += b
+		}
+		bytesToSend = append(bytesToSend, sum)
+	case "xor", "bcc":
+		xor := byte(0)
+		for _, b := range bytesToSend {
+			xor ^= b
+		}
+		bytesToSend = append(bytesToSend, xor)
+	}
+
+	return a.rawSerial.Write(bytesToSend)
+}
+
+// RawSerialSetDTR toggles the DTR hardware pin.
+func (a *App) RawSerialSetDTR(val bool) error {
+	return a.rawSerial.SetDTR(val)
+}
+
+// RawSerialSetRTS toggles the RTS hardware pin.
+func (a *App) RawSerialSetRTS(val bool) error {
+	return a.rawSerial.SetRTS(val)
+}
+
+// RawSerialIsOpen reports whether the raw serial port is currently open.
+func (a *App) RawSerialIsOpen() bool {
+	return a.rawSerial.IsOpen()
+}
+
+// RawSerialGetPort returns the currently connected raw serial port.
+func (a *App) RawSerialGetPort() string {
+	return a.rawSerial.GetPort()
 }
 
 // ScanRegisters scans a range of register addresses to inspect availability.
@@ -500,9 +637,15 @@ func (a *App) CheckNpcapStatus() sniffer.NpcapStatus {
 
 // StartRemoteServer starts the HTTP & WebSocket server for mobile phone live monitoring.
 func (a *App) StartRemoteServer(port uint16, allowWrite bool) (web.RemoteServerStatus, error) {
+	return a.StartRemoteServerWithToken(port, allowWrite, "")
+}
+
+// StartRemoteServerWithToken starts the HTTP & WebSocket server with a specific token or generated token.
+func (a *App) StartRemoteServerWithToken(port uint16, allowWrite bool, token string) (web.RemoteServerStatus, error) {
 	err := a.remoteServer.Start(web.RemoteServerConfig{
 		Port:       port,
 		AllowWrite: allowWrite,
+		Token:      token,
 	})
 	return a.remoteServer.GetStatus(), err
 }
@@ -523,4 +666,77 @@ func (a *App) UpdateRemoteServerState(state map[string]interface{}) {
 	if a.remoteServer != nil {
 		a.remoteServer.BroadcastState(state)
 	}
+}
+
+// --- Modbus Gateway Bridge Operations ---
+
+func (a *App) GatewayStart(cfg modbus.GatewayConfig) error {
+	if a.gateway == nil {
+		return fmt.Errorf("gateway not initialized")
+	}
+	return a.gateway.Start(cfg)
+}
+
+func (a *App) GatewayStop() {
+	if a.gateway != nil {
+		a.gateway.Stop()
+	}
+}
+
+func (a *App) GatewayGetStats() modbus.GatewayStats {
+	if a.gateway == nil {
+		return modbus.GatewayStats{}
+	}
+	return a.gateway.GetStats()
+}
+
+// --- Datalogger Engine Operations ---
+
+func (a *App) DatalogStartSession(name string, intervalSec int, pointCount int) (string, error) {
+	if a.datalogger == nil {
+		return "", fmt.Errorf("datalogger not initialized")
+	}
+	return a.datalogger.StartSession(name, intervalSec, pointCount)
+}
+
+func (a *App) DatalogStopSession(sessID string) error {
+	if a.datalogger == nil {
+		return fmt.Errorf("datalogger not initialized")
+	}
+	return a.datalogger.StopSession(sessID)
+}
+
+func (a *App) DatalogLogBatch(sessID string, records []datalogger.DatalogRecord) error {
+	if a.datalogger == nil {
+		return fmt.Errorf("datalogger not initialized")
+	}
+	return a.datalogger.LogSampleBatch(sessID, records)
+}
+
+func (a *App) DatalogListSessions() ([]datalogger.DatalogSessionInfo, error) {
+	if a.datalogger == nil {
+		return nil, fmt.Errorf("datalogger not initialized")
+	}
+	return a.datalogger.ListSessions()
+}
+
+func (a *App) DatalogGetRecords(sessID string, limit, offset int) ([]datalogger.DatalogRecord, error) {
+	if a.datalogger == nil {
+		return nil, fmt.Errorf("datalogger not initialized")
+	}
+	return a.datalogger.GetSessionRecords(sessID, limit, offset)
+}
+
+func (a *App) DatalogExportCSV(sessID, destPath string) (int, error) {
+	if a.datalogger == nil {
+		return 0, fmt.Errorf("datalogger not initialized")
+	}
+	return a.datalogger.ExportCSV(sessID, destPath)
+}
+
+func (a *App) DatalogDeleteSession(sessID string) error {
+	if a.datalogger == nil {
+		return fmt.Errorf("datalogger not initialized")
+	}
+	return a.datalogger.DeleteSession(sessID)
 }

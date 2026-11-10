@@ -21,14 +21,23 @@ src-tauri/target/
 *.test
 *.prof
 
-# Logs & temp files
+# Logs, Runtime DB & temp files
 *.log
 err.txt
 out.txt
 package.json.md5
+nxmodbus_datalog.db*
+bridges.json
+__pycache__/
+*.pyc
+router_app/modbus_data/
 
 # Large third-party installers & inputs
 input/
+Virtual_Com/
+cmd/
+remote_url.txt
+nxmodbus-studio*
 
 # IDE & OS files
 .vscode/

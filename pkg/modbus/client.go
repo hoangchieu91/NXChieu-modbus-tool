@@ -330,8 +330,18 @@ func (m *ModbusClientWrapper) noteResultLocked(err error) {
 	}
 	var mbErr simonmodbus.Error
 	if errors.As(err, &mbErr) {
+		if mbErr == simonmodbus.ErrProtocolError || mbErr == simonmodbus.ErrBadCRC || mbErr == simonmodbus.ErrShortFrame {
+			// On serial RTU links, a protocol error or bad CRC often indicates misaligned UART buffer
+			// (stale bytes from previous frames or framing mismatch). If it persists, reopen the link
+			// to flush the hardware UART buffer.
+			m.consecTimeouts++
+			if m.consecTimeouts >= 2 {
+				m.needsReopen = true
+			}
+			return
+		}
 		if mbErr != simonmodbus.ErrRequestTimedOut {
-			// An exception or protocol error is still an answer: the link is alive.
+			// A Modbus exception (e.g. Illegal Data Address) is a valid response from the slave: the link is alive.
 			m.consecTimeouts = 0
 			return
 		}
@@ -469,7 +479,117 @@ func (m *ModbusClientWrapper) executeRead(def PollDefinition) PollResult {
 		}
 	}
 
-	// 2. Hardware Live Client
+	// 2. Hardware Live Client (with Smart Contiguous Sub-Block Splitting when DisabledAddrs or Quantity > 125)
+	needsSplitting := len(def.DisabledAddrs) > 0 || (def.FunctionCode >= 3 && def.Quantity > 125)
+	if needsSplitting {
+		blocks := def.BuildSubBlocks()
+		if len(blocks) == 0 {
+			return PollResult{
+				Timestamp:  timestamp,
+				Values:     make([]uint16, def.Quantity),
+				BoolValues: make([]bool, def.Quantity),
+				IsCoil:     isCoil,
+				TxCount:    tx,
+				ErrCount:   errCount,
+				LatencyMs:  0,
+			}
+		}
+
+		fullRegs := make([]uint16, def.Quantity)
+		fullCoils := make([]bool, def.Quantity)
+		var txFrames, rxFrames []string
+		var anySuccess bool
+		var firstErr error
+		isTCP := m.activeConfig != nil && m.activeConfig.Type == "tcp"
+
+		for bIdx, blk := range blocks {
+			var bRegs []uint16
+			var bCoils []bool
+			bReq := BuildRTUReadRequest(def.SlaveID, def.FunctionCode, blk.StartAddress, blk.Quantity)
+			txnBefore := m.txnID
+			bErr := m.hardwareCallLocked(def.SlaveID, func() (err error) {
+				switch def.FunctionCode {
+				case 1:
+					bCoils, err = m.client.ReadCoils(blk.StartAddress, blk.Quantity)
+				case 2:
+					bCoils, err = m.client.ReadDiscreteInputs(blk.StartAddress, blk.Quantity)
+				case 3:
+					bRegs, err = m.client.ReadRegisters(blk.StartAddress, blk.Quantity, simonmodbus.HOLDING_REGISTER)
+				case 4:
+					bRegs, err = m.client.ReadRegisters(blk.StartAddress, blk.Quantity, simonmodbus.INPUT_REGISTER)
+				}
+				return err
+			})
+			sent := m.txnID != txnBefore
+			if sent {
+				txFrames = append(txFrames, FormatHex(wireFrame(bReq, isTCP, m.txnID)))
+			}
+			if bErr != nil {
+				if firstErr == nil {
+					firstErr = bErr
+				}
+				if exc := buildRTUExceptionResponse(def.SlaveID, def.FunctionCode, bErr); exc != nil && sent {
+					rxFrames = append(rxFrames, FormatHex(wireFrame(exc, isTCP, m.txnID)))
+				}
+				// If the very first sub-block times out, the device is offline — abort early so we don't stall on remaining sub-blocks
+				if bIdx == 0 && !anySuccess && errors.Is(bErr, simonmodbus.ErrRequestTimedOut) {
+					break
+				}
+				continue
+			}
+
+			anySuccess = true
+			if isCoil {
+				for j, v := range bCoils {
+					if int(blk.Offset)+j < int(def.Quantity) {
+						fullCoils[int(blk.Offset)+j] = v
+					}
+				}
+				bResp := BuildRTUCoilResponse(def.SlaveID, def.FunctionCode, bCoils)
+				rxFrames = append(rxFrames, FormatHex(wireFrame(bResp, isTCP, m.txnID)))
+			} else {
+				for j, v := range bRegs {
+					if int(blk.Offset)+j < int(def.Quantity) {
+						fullRegs[int(blk.Offset)+j] = v
+					}
+				}
+				bResp := BuildRTURegisterResponse(def.SlaveID, def.FunctionCode, bRegs)
+				rxFrames = append(rxFrames, FormatHex(wireFrame(bResp, isTCP, m.txnID)))
+			}
+		}
+
+		latency := uint64(time.Since(startTime).Milliseconds())
+		joinedTx := strings.Join(txFrames, "  ||  ")
+		joinedRx := strings.Join(rxFrames, "  ||  ")
+
+		if !anySuccess && firstErr != nil {
+			errCount = atomic.AddUint64(&m.errCount, 1)
+			return PollResult{
+				Timestamp: timestamp,
+				IsCoil:    isCoil,
+				TxCount:   tx,
+				ErrCount:  errCount,
+				LatencyMs: latency,
+				Error:     firstErr.Error(),
+				RawTx:     joinedTx,
+				RawRx:     joinedRx,
+			}
+		}
+
+		return PollResult{
+			Timestamp:  timestamp,
+			Values:     fullRegs,
+			BoolValues: fullCoils,
+			IsCoil:     isCoil,
+			TxCount:    tx,
+			ErrCount:   errCount,
+			LatencyMs:  latency,
+			RawTx:      joinedTx,
+			RawRx:      joinedRx,
+		}
+	}
+
+	// Standard Single-Block Hardware Live Client
 	var regVals []uint16
 	var coilVals []bool
 	var readErr error

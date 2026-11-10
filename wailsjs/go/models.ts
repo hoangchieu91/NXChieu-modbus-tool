@@ -1,5 +1,82 @@
+export namespace datalogger {
+	
+	export class DatalogRecord {
+	    timestamp: string;
+	    address: number;
+	    display_address: string;
+	    alias: string;
+	    value: number;
+	    unit: string;
+	    raw_hex: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DatalogRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.timestamp = source["timestamp"];
+	        this.address = source["address"];
+	        this.display_address = source["display_address"];
+	        this.alias = source["alias"];
+	        this.value = source["value"];
+	        this.unit = source["unit"];
+	        this.raw_hex = source["raw_hex"];
+	    }
+	}
+	export class DatalogSessionInfo {
+	    id: string;
+	    name: string;
+	    created_at: string;
+	    closed_at: string;
+	    point_count: number;
+	    sample_count: number;
+	    interval_sec: number;
+	    is_active: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DatalogSessionInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.created_at = source["created_at"];
+	        this.closed_at = source["closed_at"];
+	        this.point_count = source["point_count"];
+	        this.sample_count = source["sample_count"];
+	        this.interval_sec = source["interval_sec"];
+	        this.is_active = source["is_active"];
+	    }
+	}
+
+}
+
 export namespace modbus {
 	
+	export class AutoDiscoverParams {
+	    port: string;
+	    bauds?: number[];
+	    parities?: string[];
+	    slave_ids?: number[];
+	    timeout_ms?: number;
+	    stop_on_first: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoDiscoverParams(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.port = source["port"];
+	        this.bauds = source["bauds"];
+	        this.parities = source["parities"];
+	        this.slave_ids = source["slave_ids"];
+	        this.timeout_ms = source["timeout_ms"];
+	        this.stop_on_first = source["stop_on_first"];
+	    }
+	}
 	export class BaudScanItem {
 	    baud_rate: number;
 	    parity: string;
@@ -50,12 +127,97 @@ export namespace modbus {
 	        this.timeout_ms = source["timeout_ms"];
 	    }
 	}
+	export class DiscoveredDevice {
+	    port: string;
+	    baud_rate: number;
+	    parity: string;
+	    stop_bits: number;
+	    slave_id: number;
+	    function_code: number;
+	    address: number;
+	    value: number;
+	    latency_ms: number;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiscoveredDevice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.port = source["port"];
+	        this.baud_rate = source["baud_rate"];
+	        this.parity = source["parity"];
+	        this.stop_bits = source["stop_bits"];
+	        this.slave_id = source["slave_id"];
+	        this.function_code = source["function_code"];
+	        this.address = source["address"];
+	        this.value = source["value"];
+	        this.latency_ms = source["latency_ms"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class GatewayConfig {
+	    tcp_port: number;
+	    serial_port: string;
+	    baud_rate: number;
+	    data_bits: number;
+	    parity: string;
+	    stop_bits: number;
+	    timeout_ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new GatewayConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tcp_port = source["tcp_port"];
+	        this.serial_port = source["serial_port"];
+	        this.baud_rate = source["baud_rate"];
+	        this.data_bits = source["data_bits"];
+	        this.parity = source["parity"];
+	        this.stop_bits = source["stop_bits"];
+	        this.timeout_ms = source["timeout_ms"];
+	    }
+	}
+	export class GatewayStats {
+	    is_running: boolean;
+	    tcp_address: string;
+	    serial_port: string;
+	    active_clients: number;
+	    packets_bridged: number;
+	    packets_failed: number;
+	    bytes_tx: number;
+	    bytes_rx: number;
+	    last_latency_ms: number;
+	    last_activity_str: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GatewayStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.is_running = source["is_running"];
+	        this.tcp_address = source["tcp_address"];
+	        this.serial_port = source["serial_port"];
+	        this.active_clients = source["active_clients"];
+	        this.packets_bridged = source["packets_bridged"];
+	        this.packets_failed = source["packets_failed"];
+	        this.bytes_tx = source["bytes_tx"];
+	        this.bytes_rx = source["bytes_rx"];
+	        this.last_latency_ms = source["last_latency_ms"];
+	        this.last_activity_str = source["last_activity_str"];
+	    }
+	}
 	export class PollDefinition {
 	    slave_id: number;
 	    function_code: number;
 	    start_address: number;
 	    quantity: number;
 	    scan_rate_ms: number;
+	    disabled_addrs?: number[];
 	
 	    static createFrom(source: any = {}) {
 	        return new PollDefinition(source);
@@ -68,6 +230,7 @@ export namespace modbus {
 	        this.start_address = source["start_address"];
 	        this.quantity = source["quantity"];
 	        this.scan_rate_ms = source["scan_rate_ms"];
+	        this.disabled_addrs = source["disabled_addrs"];
 	    }
 	}
 	export class PollResult {

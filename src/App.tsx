@@ -21,16 +21,10 @@ import {
   subscribeSlaveActivity,
   subscribeRemoteWrite,
   sessionResetCounters,
-  scanRegisters,
-  scanSlaveIDs,
-  autoDetectBaudrate,
   completeRemoteWrite,
-  getDiagnosticSnifferSnapshot,
   updateRemoteServerState,
 } from './services/backend';
 
-import { MenuBar } from './components/MenuBar';
-import { Toolbar } from './components/Toolbar';
 import { TabBar } from './components/TabBar';
 import { DataGrid } from './components/DataGrid';
 import { TrafficBox } from './components/TrafficBox';
@@ -44,22 +38,29 @@ import { HelpModal } from './components/HelpModal';
 import { ScannerModal } from './components/ScannerModal';
 import { ActionNotice, ActionNoticeState } from './components/ActionNotice';
 import { QuickInspector } from './components/QuickInspector';
-import { DiagnosticCheck, StudioDiagnostics } from './components/StudioDiagnostics';
+import { StudioDiagnostics } from './components/StudioDiagnostics';
 import { ErrorBoundary } from './components/ErrorBoundary';
-const FRONTEND_MODE_KEY = 'nxchieu-frontend-mode';
-const WorkspaceStudio = lazy(() => import('./components/WorkspaceStudio').then((module) => ({ default: module.WorkspaceStudio })));
+
+import { TopQuickBar } from './components/TopQuickBar';
+import { SidebarDock, WorkspaceView } from './components/SidebarDock';
+import { ScannerView } from './components/ScannerView';
+import { DeviceTemplatesModal } from './components/DeviceTemplatesModal';
+import { RawSerialStudio } from './components/RawSerialStudio';
+import { GatewayBridgeStudio } from './components/GatewayBridgeStudio';
+import { DataloggerStudio } from './components/DataloggerStudio';
+import { MacroRunnerStudio } from './components/MacroRunnerStudio';
+import { openNewInstance } from './services/backend';
+
 const ProtocolAnalyzer = lazy(() => import('./components/ProtocolAnalyzer').then((module) => ({ default: module.ProtocolAnalyzer })));
 const AnalyzerStudio = lazy(() => import('./components/AnalyzerStudio').then((module) => ({ default: module.AnalyzerStudio })));
 const MobileRemoteModal = lazy(() => import('./components/MobileRemoteModal').then((module) => ({ default: module.MobileRemoteModal })));
 
-
 import {
-  ChartDataPoint,
-  ChartTrace,
   ConnectionConfig,
   DataFormat,
   PollResult,
   PollDefinition,
+  RegisterControlConfig,
   RegisterRow,
   SerialPortDetail,
   SessionRole,
@@ -70,12 +71,7 @@ import {
   TrafficEntry,
 } from './types/modbus';
 import {
-  formatValue,
-  getModbusAddressLabel,
-  decodeAllColumns,
   encodeRegisterInput,
-  modiconAddress,
-  modiconTableDigit,
 } from './utils/formatters';
 
 import {
@@ -87,267 +83,51 @@ import {
   exportSheetToCSV,
 } from './utils/projectStorage';
 
-// HH:MM:SS.mmm shown in the grid, traffic log and chart.
-const clockStamp = (d: Date) => d.toLocaleTimeString('vi-VN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
-
-// Whether a tab shows bit values (coils / discrete inputs) rather than registers.
-const isCoilTab = (tab: TabSession) =>
-  tab.role === 'slave'
-    ? tab.slaveTable === 'coils' || tab.slaveTable === 'discrete'
-    : tab.definition.function_code === 1 || tab.definition.function_code === 2;
-
-// FC02 (Discrete Inputs) and FC04 (Input Registers) are read-only tables on a Modbus device.
-const isReadOnlyFunction = (fc: number) => fc === 2 || fc === 4;
-
-// Numeric value plotted on the trend chart. Text formats (hex/bin/ascii) do not parse as numbers,
-// so they fall back to the scaled raw register instead of a flat 0.
-const toChartValue = (values: number[], idx: number, fmt: DataFormat, scaling: number): number => {
-  if (fmt === 'hex16' || fmt === 'bin16' || fmt === 'ascii') return values[idx] * scaling;
-  const display = formatValue(values, idx, fmt, scaling).display;
-  if (display === '--') return NaN; // value spans registers outside the read block
-  const parsed = parseFloat(display.replace(/,/g, ''));
-  return isNaN(parsed) ? values[idx] * scaling : parsed;
-};
-
-// --- Grid Row Construction Helper ---
-
-// Pure function of the tab config and its live state; memoized by callers so rows (and the
-// multi-column decodes) are rebuilt only when data changes, not on every App render.
-
-function buildRowsForTab(tab: TabSession, state: PerTabState): { rows: RegisterRow[]; isCoil: boolean } {
-  const isCoil = isCoilTab(tab);
-
-  const startAddr = tab.role === 'slave' ? tab.slaveStartAddr : tab.definition.start_address;
-  const quantity = tab.role === 'slave' ? tab.slaveQuantity : tab.definition.quantity;
-
-  const resultRows: RegisterRow[] = [];
-  for (let i = 0; i < quantity; i++) {
-    const addr = startAddr + i;
-    const alias = tab.aliases[addr] || '';
-    const unit = tab.units[addr] || '';
-    const scaling = tab.scalings[addr] ?? 1;
-    const rowFormat = tab.formats?.[addr];
-
-    let rawVal: number | boolean | null = null;
-    let displayVal = '--';
-    let rawHex = '--';
-    let changed = false;
-    let changeDirection: 'up' | 'down' | null = null;
-    let decodedMulti: import('./types/modbus').MultiColumnDecoded | undefined = undefined;
-
-    const hasData = tab.role === 'slave' ? true : state.hasData;
-    let cellHasValue = false;
-
-    if (hasData) {
-      if (isCoil) {
-        if (i < state.coils.length) {
-          const bit = state.coils[i];
-          const prevBit = (state.lastValues[i] as boolean) ?? bit;
-          rawVal = bit;
-          displayVal = bit ? 'ON' : 'OFF';
-          rawHex = bit ? '0x01' : '0x00';
-          changed = bit !== prevBit;
-          if (changed) {
-            changeDirection = bit ? 'up' : 'down';
-          }
-          cellHasValue = true;
-        }
-      } else {
-        if (i < state.regs.length) {
-          const v = state.regs[i];
-          const prevV = (state.lastValues[i] as number) ?? v;
-          rawVal = v;
-          const effectiveFmt = rowFormat || tab.format;
-          const fmtRes = formatValue(state.regs, i, effectiveFmt, scaling);
-          displayVal = fmtRes.display;
-          rawHex = fmtRes.hex;
-          changed = v !== prevV;
-          if (changed) {
-            changeDirection = v > prevV ? 'up' : 'down';
-          }
-          cellHasValue = true;
-          decodedMulti = decodeAllColumns(state.regs, i, addr, tab.definition.function_code);
-        }
-      }
-    }
-
-    let displayAddress = '';
-    if (tab.role === 'slave') {
-      displayAddress = `${modiconAddress(modiconTableDigit(tab.slaveTable), addr)} (${addr})`;
-    } else {
-      displayAddress = getModbusAddressLabel(tab.definition.function_code, addr);
-    }
-
-    const lastUpdated = state.lastUpdatedMap?.[addr] || (cellHasValue ? state.lastUpdatedTime : undefined);
-
-    resultRows.push({
-      address: addr,
-      displayAddress,
-      alias,
-      rawValue: rawVal,
-      displayValue: displayVal,
-      rawHex,
-      unit,
-      scaling,
-      format: rowFormat,
-      lastUpdated,
-      changed,
-      changeDirection,
-      hasValue: cellHasValue,
-      decodedMulti,
-    });
-  }
-
-
-  return { rows: resultRows, isCoil };
-}
-
-type TracePoint = { timestamp: string; timeMs: number; value: number };
-
-// Value a trace samples from a read result: a register (decoded with its format) or a coil as 0/1.
-const sampleTrace = (values: number[], bools: boolean[], idx: number, fmt: DataFormat, scaling: number): number => {
-  if (values.length === 0 && bools.length > 0) {
-    return idx >= 0 && idx < bools.length ? (bools[idx] ? 1 : 0) : NaN;
-  }
-  return idx >= 0 && idx < values.length ? toChartValue(values, idx, fmt, scaling) : NaN;
-};
-
-// Appends one point per trace in a single state update, keeping the last 300 points.
-const appendTracePoints = (prev: Record<string, TracePoint[]>, points: Record<string, TracePoint>) => {
-  const next = { ...prev };
-  for (const [id, point] of Object.entries(points)) {
-    next[id] = [...(prev[id] || []).slice(-299), point];
-  }
-  return next;
-};
-
-const DEFAULT_DEFINITION: PollDefinition = {
-  slave_id: 1,
-  function_code: 3, // Read Holding Registers
-  start_address: 0,
-  quantity: 10,
-  scan_rate_ms: 1000,
-};
-
-const DEFAULT_SLAVE_CONFIG: SlaveConfig = {
-  type: 'tcp',
-  host: '0.0.0.0',
-  port_tcp: 5020,
-  slave_id: 1,
-};
-
-interface PerTabState {
-  isConnected: boolean;
-  isPolling: boolean;
-  connectionConfig: ConnectionConfig | null;
-  txCount: number;
-  errCount: number;
-  latencyMs: number;
-  traffic: TrafficEntry[];
-  hasData: boolean;
-  regs: number[];
-  coils: boolean[];
-  lastValues: (number | boolean)[];
-  slaveActivityCount: number;
-  isListening: boolean;
-  isSimulating: boolean;
-  lastUpdatedMap: Record<number, string>;
-  lastUpdatedTime?: string;
-}
-
-const INITIAL_TAB: TabSession = {
-  id: 'tab-com3-slaves-airmeter',
-  title: 'Slave 1..20 (Đồng hồ khí nén)',
-  role: 'slave',
-  definition: {
-    slave_id: 1,
-    function_code: 3,
-    start_address: 512,
-    quantity: 25,
-    scan_rate_ms: 1000,
-  },
-  format: 'unsigned16',
-  formats: {
-    512: 'long_abcd',
-    514: 'signed16',
-    515: 'signed16',
-    531: 'uint32_abcd',
-  },
-  aliases: {
-    512: 'Lưu lượng tức thời (Flow Rate)',
-    513: 'Lưu lượng tức thời (Low Word)',
-    514: 'Áp suất khí nén (Pressure)',
-    515: 'Nhiệt độ khí nén (Temperature)',
-    531: 'Tổng thể tích khí tích lũy (Total m3)',
-    532: 'Tổng thể tích khí (Low Word)',
-  },
-  units: {
-    512: 'Nm3/h',
-    514: 'bar',
-    515: '°C',
-    531: 'm3',
-  },
-  scalings: {
-    512: 0.01,
-    514: 1,
-    515: 0.1,
-    531: 0.1,
-  },
-  slaveConfig: {
-    type: 'serial',
-    port: 'COM3',
-    baud_rate: 9600,
-    data_bits: 8,
-    parity: 'none',
-    stop_bits: 1,
-    slave_id: 1,
-    slave_id_end: 20,
-  },
-  slaveTable: 'holding',
-  slaveStartAddr: 512,
-  slaveQuantity: 25,
-};
-
-const createEmptyTabState = (): PerTabState => ({
-  isConnected: false,
-  isPolling: false,
-  connectionConfig: null,
-  txCount: 0,
-  errCount: 0,
-  latencyMs: 0,
-  traffic: [],
-  hasData: false,
-  regs: [],
-  coils: [],
-  lastValues: [],
-  slaveActivityCount: 0,
-  isListening: false,
-  isSimulating: false,
-  lastUpdatedMap: {},
-});
+import {
+  clockStamp,
+  isCoilTab,
+  isReadOnlyFunction,
+  DEFAULT_DEFINITION,
+  DEFAULT_SLAVE_CONFIG,
+  PerTabState,
+  INITIAL_TAB,
+  createEmptyTabState,
+  buildRowsForTab,
+} from './utils/rowBuilder';
+import { useTrendChart } from './hooks/useTrendChart';
+import { runStudioDiagnostics } from './services/diagnostics';
 
 export const App: React.FC = () => {
   const [tabs, setTabs] = useState<TabSession[]>(() => {
     const saved = loadWorkspace();
-    return saved && saved.tabs && saved.tabs.length > 0 ? saved.tabs : [INITIAL_TAB];
+    if (saved && saved.tabs && saved.tabs.length > 0) {
+      if (saved.tabs.length === 1 && saved.tabs[0].id === 'tab-com3-slaves-airmeter') {
+        return [INITIAL_TAB];
+      }
+      return saved.tabs;
+    }
+    return [INITIAL_TAB];
   });
   const [activeTabId, setActiveTabId] = useState<string>(() => {
     const saved = loadWorkspace();
-    return saved ? saved.activeTabId : 'tab-1';
+    if (saved && saved.tabs && saved.tabs.length === 1 && saved.tabs[0].id === 'tab-com3-slaves-airmeter') {
+      return INITIAL_TAB.id;
+    }
+    return saved ? saved.activeTabId : INITIAL_TAB.id;
   });
   const [availablePorts, setAvailablePorts] = useState<SerialPortDetail[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Per-session independent runtime states
   const [tabStates, setTabStates] = useState<Record<string, PerTabState>>({
-    'tab-1': createEmptyTabState(),
+    [INITIAL_TAB.id]: createEmptyTabState(),
   });
 
   // UI display toggles
   const [showTraffic, setShowTraffic] = useState<boolean>(true);
   const [isProtocolAnalyzerOpen, setIsProtocolAnalyzerOpen] = useState<boolean>(false);
-  const [isAnalyzerStudioOpen, setIsAnalyzerStudioOpen] = useState<boolean>(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
+  const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState<boolean>(false);
   const [actionNotice, setActionNotice] = useState<ActionNoticeState | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notify = useCallback((tone: ActionNoticeState['tone'], message: string) => {
@@ -359,47 +139,41 @@ export const App: React.FC = () => {
   useEffect(() => () => {
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
   }, []);
-  const [frontendMode, setFrontendMode] = useState<'classic' | 'studio'>(() => {
-    try {
-      return localStorage.getItem(FRONTEND_MODE_KEY) === 'studio' ? 'studio' : 'classic';
-    } catch {
-      return 'classic';
-    }
-  });
+  const [currentView, setCurrentView] = useState<WorkspaceView>('registers');
   const [isSplitView, setIsSplitView] = useState<boolean>(false);
   const [splitTabId, setSplitTabId] = useState<string>('');
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(FRONTEND_MODE_KEY, frontendMode);
-    } catch {
-      // storage unavailable: the mode just is not remembered
-    }
-  }, [frontendMode]);
-
-  // Multi-trace Realtime Trend Chart State
-  const [chartTraces, setChartTraces] = useState<ChartTrace[]>([]);
-  const [traceData, setTraceData] = useState<Record<string, ChartDataPoint[]>>({});
-  const [isChartVisible, setIsChartVisible] = useState<boolean>(false);
+  // Multi-trace Realtime Trend Chart Hook
+  const {
+    chartTraces,
+    traceData,
+    isChartVisible,
+    setIsChartVisible,
+    handleToggleTrace,
+    handleToggleTraceVisibility,
+    handleRemoveTrace,
+    handleClearAllChart,
+    resetAllTraces,
+    removeTracesForTab,
+    ingestSamplePoints,
+    activeChartColorMap,
+    splitChartColorMap,
+  } = useTrendChart(activeTabId, splitTabId, tabStates);
 
   // Quick Inspector Panel State
   const [showInspector, setShowInspector] = useState<boolean>(true);
   const [selectedRowAddress, setSelectedRowAddress] = useState<number | null>(null);
-
-  const TRACE_PALETTE = useMemo(
-    () => ['#22d3ee', '#10b981', '#f59e0b', '#f43f5e', '#a855f7', '#38bdf8', '#eab308', '#ec4899'],
-    []
-  );
 
   // Handlers for hotkeys that are defined further down; assigned on every render.
   const hotkeyActionsRef = useRef<{ connectToggle: () => void; readOnce: () => void; definition: () => void } | null>(null);
   // Device actions (F3 connect/disconnect, F7 read, F8 definition) are ignored while a
   // full-screen analyzer or diagnostics view hides the workspace they act on.
   const overlayOpenRef = useRef(false);
+  overlayOpenRef.current = currentView === 'analyzer' || isProtocolAnalyzerOpen || isDiagnosticsOpen;
 
   // Global Hotkeys: F1 (Help), F3 (Connect/Disconnect), F4 (Scanner), F7 (Read Once),
-  // F8 (Definition), F9 (Mobile Remote)
+  // F8 (Definition), F9 (Mobile Remote), F10 (Classic Sniffer), F11 (Analyzer)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const actions = overlayOpenRef.current ? null : hotkeyActionsRef.current;
@@ -419,19 +193,16 @@ export const App: React.FC = () => {
         setIsHelpModalOpen((prev) => !prev);
       } else if (e.key === 'F4') {
         e.preventDefault();
-        setIsScannerModalOpen((prev) => !prev);
+        setCurrentView((prev) => (prev === 'scanner' ? 'registers' : 'scanner'));
       } else if (e.key === 'F9') {
         e.preventDefault();
         setIsMobileModalOpen((prev) => !prev);
       } else if (e.key === 'F10') {
-        // Only one analyzer at a time: each polls thousands of frames.
         e.preventDefault();
-        setIsAnalyzerStudioOpen(false);
         setIsProtocolAnalyzerOpen((prev) => !prev);
       } else if (e.key === 'F11') {
         e.preventDefault();
-        setIsProtocolAnalyzerOpen(false);
-        setIsAnalyzerStudioOpen((prev) => !prev);
+        setCurrentView((prev) => (prev === 'analyzer' ? 'registers' : 'analyzer'));
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -467,23 +238,32 @@ export const App: React.FC = () => {
     tabsRef.current = tabs;
   }, [tabs]);
 
-  const chartTracesRef = useRef<ChartTrace[]>(chartTraces);
-  useEffect(() => {
-    chartTracesRef.current = chartTraces;
-  }, [chartTraces]);
 
   // Fetch available COM ports
   const refreshPorts = useCallback(async () => {
     try {
       const ports = await listSerialPorts();
       setAvailablePorts(ports);
+      return ports;
     } catch (e) {
       console.warn('Could not list serial ports:', e);
+      return [];
     }
   }, []);
 
   useEffect(() => {
     refreshPorts();
+    // Auto-detect when user switches back to the app after plugging in USB
+    const handleFocus = () => refreshPorts();
+    window.addEventListener('focus', handleFocus);
+    // Periodic background scan every 3 seconds to auto-detect newly plugged USB devices
+    const timer = setInterval(() => {
+      refreshPorts();
+    }, 3000);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(timer);
+    };
   }, [refreshPorts]);
 
   // Helper to update state for a specific tab
@@ -527,28 +307,13 @@ export const App: React.FC = () => {
         });
 
         // Record point for any chart trace matching this tab
-        if (chartTracesRef.current.length > 0) {
-          const targetTab = tabsRef.current.find((t) => t.id === tabId) || activeTabRef.current;
-          const points: Record<string, TracePoint> = {};
-          chartTracesRef.current.forEach((trace) => {
-            if (trace.tabId === tabId) {
-              const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
-              const scaling = targetTab.scalings?.[trace.address] ?? 1;
-              const value = sampleTrace(slice.values || [], slice.bool_values || [], trace.address - startAddr, regFmt, scaling);
-              if (Number.isFinite(value)) {
-                points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
-              }
-            }
-          });
-          if (Object.keys(points).length > 0) {
-            setTraceData((prev) => appendTracePoints(prev, points));
-          }
-        }
+        const targetTab = tabsRef.current.find((t) => t.id === tabId) || activeTabRef.current;
+        ingestSamplePoints(tabId, slice.values || [], slice.bool_values || [], startAddr, targetTab, timeStr, now.getTime());
       } catch (err) {
         console.error('Failed to load slave memory slice:', err);
       }
     },
-    [updateTabState]
+    [updateTabState, ingestSamplePoints]
   );
 
   // Load slave slice on mount or when switching to slave mode
@@ -637,27 +402,13 @@ export const App: React.FC = () => {
 
       // Record point for any chart trace matching this tab
       const isSuccess = !payload.error && (payload.values.length > 0 || payload.bool_values.length > 0);
-      if (isSuccess && chartTracesRef.current.length > 0) {
+      if (isSuccess) {
         const targetTab = tabsRef.current.find((t) => t.id === targetId) || activeTabRef.current;
         const start = payload.start_address ?? targetTab.definition.start_address;
-        const points: Record<string, TracePoint> = {};
-
-        chartTracesRef.current.forEach((trace) => {
-          if (trace.tabId === targetId) {
-            const regFmt = targetTab.formats?.[trace.address] || targetTab.format;
-            const scaling = targetTab.scalings?.[trace.address] ?? 1;
-            const value = sampleTrace(payload.values, payload.bool_values, trace.address - start, regFmt, scaling);
-            if (Number.isFinite(value)) {
-              points[trace.id] = { timestamp: timeStr, timeMs: now.getTime(), value };
-            }
-          }
-        });
-        if (Object.keys(points).length > 0) {
-          setTraceData((prev) => appendTracePoints(prev, points));
-        }
+        ingestSamplePoints(targetId, payload.values, payload.bool_values, start, targetTab, timeStr, now.getTime());
       }
     },
-    [updateTabState]
+    [updateTabState, ingestSamplePoints]
   );
 
   // Subscribe to Master Poll-Data Events
@@ -879,11 +630,12 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleToggleSlaveServer = async () => {
+  const handleToggleSlaveServer = async (overrideCfg?: SlaveConfig) => {
     if (activeState.isListening) {
       await handleStopSlaveServer();
     } else {
-      await handleStartSlaveServer(activeTab.slaveConfig || DEFAULT_SLAVE_CONFIG);
+      const cfg = overrideCfg || activeTab.slaveConfig || DEFAULT_SLAVE_CONFIG;
+      await handleStartSlaveServer(cfg);
     }
   };
 
@@ -1131,12 +883,11 @@ export const App: React.FC = () => {
     const newTab: TabSession = {
       id: newId,
       title: `Sheet ${tabs.length + 1}`,
-      role: 'master',
+      role: activeTab.role,
       definition: {
-        ...DEFAULT_DEFINITION,
-        slave_id: tabs.length + 1,
+        ...activeTab.definition,
       },
-      format: 'unsigned16',
+      format: activeTab.format,
       aliases: {},
       units: {},
       scalings: {},
@@ -1152,7 +903,19 @@ export const App: React.FC = () => {
     };
 
     setTabs([...tabs, newTab]);
-    setTabStates((prev) => ({ ...prev, [newId]: createEmptyTabState() }));
+    if (activeState.isConnected && activeState.connectionConfig && activeTab.role === 'master') {
+      sessionConnect(newId, activeState.connectionConfig).catch(console.error);
+      setTabStates((prev) => ({
+        ...prev,
+        [newId]: {
+          ...createEmptyTabState(),
+          isConnected: true,
+          connectionConfig: activeState.connectionConfig,
+        },
+      }));
+    } else {
+      setTabStates((prev) => ({ ...prev, [newId]: createEmptyTabState() }));
+    }
     setActiveTabId(newId);
   };
 
@@ -1178,15 +941,7 @@ export const App: React.FC = () => {
       return next;
     });
     // Drop the closed tab's chart traces and their history; they could no longer be toggled.
-    const closedTraceIds = new Set(chartTracesRef.current.filter((t) => t.tabId === id).map((t) => t.id));
-    if (closedTraceIds.size > 0) {
-      setChartTraces((prev) => prev.filter((t) => t.tabId !== id));
-      setTraceData((prev) => {
-        const next = { ...prev };
-        closedTraceIds.forEach((traceId) => delete next[traceId]);
-        return next;
-      });
-    }
+    removeTracesForTab(id);
 
     if (remaining.length === 0) return;
     setActiveTabId((cur) => (cur === id ? remaining[0].id : cur));
@@ -1217,8 +972,7 @@ export const App: React.FC = () => {
     }
 
     setTabStates({});
-    setChartTraces([]);
-    setTraceData({});
+    resetAllTraces();
     setIsSplitView(false);
     setSplitTabId('');
     setTabs(imported.tabs);
@@ -1316,6 +1070,90 @@ export const App: React.FC = () => {
     );
   };
 
+  const handleToggleDisabledAddr = async (tabId: string, address: number, disabled: boolean) => {
+    const targetTab = tabsRef.current.find((t) => t.id === tabId);
+    if (!targetTab || targetTab.role === 'slave') return;
+    const set = new Set<number>(targetTab.definition.disabled_addrs || []);
+    if (disabled) set.add(address);
+    else set.delete(address);
+    const nextDisabled = [...set].sort((a, b) => a - b);
+    const nextDef: PollDefinition = {
+      ...targetTab.definition,
+      disabled_addrs: nextDisabled,
+    };
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, definition: nextDef } : t))
+    );
+    const st = tabStates[tabId];
+    if (st?.isPolling) {
+      try {
+        await sessionStopPolling(tabId);
+        await sessionStartPolling(tabId, nextDef);
+      } catch (err) {
+        console.error('Lỗi cập nhật danh sách cấm đọc khi đang poll:', err);
+      }
+    }
+  };
+
+  const handleUpdateControl = (tabId: string, address: number, control: RegisterControlConfig) => {
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== tabId) return t;
+        const newControls = { ...(t.controls || {}) };
+        if (!control || control.type === 'none') {
+          delete newControls[address];
+        } else {
+          newControls[address] = control;
+        }
+        return { ...t, controls: newControls };
+      })
+    );
+  };
+
+  const handleApplyDeviceTemplate = (tpl: Partial<TabSession>, replaceTab: boolean) => {
+    if (replaceTab) {
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== activeTabId) return t;
+          return {
+            ...t,
+            title: tpl.title || t.title,
+            role: tpl.role || t.role,
+            definition: tpl.definition ? { ...t.definition, ...tpl.definition } : t.definition,
+            format: tpl.format || t.format,
+            formats: tpl.formats || {},
+            aliases: tpl.aliases || {},
+            units: tpl.units || {},
+            scalings: tpl.scalings || {},
+            controls: tpl.controls || {},
+          };
+        })
+      );
+      notify('success', `Đã nạp mẫu thiết bị "${tpl.title}" vào tab hiện tại!`);
+    } else {
+      const newId = `tab-${Date.now()}`;
+      const newTab: TabSession = {
+        id: newId,
+        title: tpl.title || `Sheet ${tabs.length + 1}`,
+        role: tpl.role || 'master',
+        definition: tpl.definition ? { ...DEFAULT_DEFINITION, ...tpl.definition } : { ...DEFAULT_DEFINITION },
+        format: tpl.format || 'unsigned16',
+        formats: tpl.formats || {},
+        aliases: tpl.aliases || {},
+        units: tpl.units || {},
+        scalings: tpl.scalings || {},
+        controls: tpl.controls || {},
+        slaveTable: 'holding',
+        slaveStartAddr: 0,
+        slaveQuantity: 20,
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setTabStates((prev) => ({ ...prev, [newId]: createEmptyTabState() }));
+      setActiveTabId(newId);
+      notify('success', `Đã tạo tab mới từ mẫu "${tpl.title}"!`);
+    }
+  };
+
   // --- Split View Management ---
 
   const handleToggleSplitView = () => {
@@ -1351,76 +1189,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // --- Realtime Multi-Trace Chart Management ---
 
-  const handleToggleTrace = (tab: TabSession, row: RegisterRow) => {
-    const traceId = `${tab.id}_${row.address}`;
-    const existingIdx = chartTraces.findIndex((t) => t.id === traceId);
-
-    if (existingIdx >= 0) {
-      // Toggle off / remove trace
-      const updated = chartTraces.filter((t) => t.id !== traceId);
-      setChartTraces(updated);
-      if (updated.length === 0) {
-        setIsChartVisible(false);
-      }
-    } else {
-      // Add new trace with auto-cycling color
-      // First colour not in use; length-based picking repeats colours after a removal.
-      const used = new Set(chartTraces.map((t) => t.color));
-      const nextColor = TRACE_PALETTE.find((c) => !used.has(c)) ?? TRACE_PALETTE[chartTraces.length % TRACE_PALETTE.length];
-      const newTrace: ChartTrace = {
-        id: traceId,
-        tabId: tab.id,
-        tabTitle: tab.title,
-        address: row.address,
-        label: row.alias || `Register ${row.address}`,
-        unit: row.unit || '',
-        displayAddress: row.displayAddress,
-        color: nextColor,
-        visible: true,
-      };
-
-      setChartTraces((prev) => [...prev, newTrace]);
-      setIsChartVisible(true);
-
-      // Seed initial data point if row has value
-      if (row.hasValue) {
-        const state = tabStates[tab.id];
-        const start = tab.role === 'slave' ? tab.slaveStartAddr : tab.definition.start_address;
-        const fmt = tab.formats?.[row.address] || tab.format;
-        const val = state
-          ? sampleTrace(state.regs, state.coils, row.address - start, fmt, tab.scalings?.[row.address] ?? 1)
-          : NaN;
-        if (Number.isFinite(val)) {
-          const timeNow = new Date();
-          const timeStr = clockStamp(timeNow);
-          setTraceData((prev) => ({
-            ...prev,
-            [traceId]: [{ timestamp: timeStr, timeMs: timeNow.getTime(), value: val }],
-          }));
-        }
-      }
-    }
-  };
-
-  const handleToggleTraceVisibility = (traceId: string) => {
-    setChartTraces((prev) =>
-      prev.map((t) => (t.id === traceId ? { ...t, visible: !t.visible } : t))
-    );
-  };
-
-  const handleRemoveTrace = (traceId: string) => {
-    const updated = chartTraces.filter((t) => t.id !== traceId);
-    setChartTraces(updated);
-    if (updated.length === 0) {
-      setIsChartVisible(false);
-    }
-  };
-
-  const handleClearAllChart = () => {
-    setTraceData({});
-  };
 
   const activeRowsObj = useMemo(() => buildRowsForTab(activeTab, activeState), [activeTab, activeState]);
 
@@ -1475,7 +1244,7 @@ export const App: React.FC = () => {
     [isSplitView, splitTab, splitState]
   );
 
-  overlayOpenRef.current = isProtocolAnalyzerOpen || isAnalyzerStudioOpen || isDiagnosticsOpen;
+  overlayOpenRef.current = isProtocolAnalyzerOpen || currentView === 'analyzer' || isDiagnosticsOpen;
   hotkeyActionsRef.current = {
     connectToggle: () => {
       if (activeTab.role !== 'master') return;
@@ -1495,6 +1264,7 @@ export const App: React.FC = () => {
     handleUpdateUnit,
     handleUpdateScaling,
     handleUpdateFormat,
+    handleToggleDisabledAddr,
     handleInlineWriteForTab,
     handleToggleCoilForTab,
     handleToggleTrace,
@@ -1504,6 +1274,7 @@ export const App: React.FC = () => {
     handleUpdateUnit,
     handleUpdateScaling,
     handleUpdateFormat,
+    handleToggleDisabledAddr,
     handleInlineWriteForTab,
     handleToggleCoilForTab,
     handleToggleTrace,
@@ -1523,6 +1294,7 @@ export const App: React.FC = () => {
       onUpdateUnit: (addr: number, val: string) => h().handleUpdateUnit(tabId, addr, val),
       onUpdateScaling: (addr: number, val: number) => h().handleUpdateScaling(tabId, addr, val),
       onUpdateFormat: (addr: number, fmt: DataFormat) => h().handleUpdateFormat(tabId, addr, fmt),
+      onToggleDisabledAddr: (addr: number, dis: boolean) => h().handleToggleDisabledAddr(tabId, addr, dis),
       onInlineWrite: (addr: number, val: string) => h().handleInlineWriteForTab(tabId, addr, val),
       onToggleCoil: (addr: number, cur: boolean) => h().handleToggleCoilForTab(tabId, addr, cur),
       onOpenChart: (row: RegisterRow) => {
@@ -1536,26 +1308,7 @@ export const App: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const splitGridHandlers = useMemo(() => createGridHandlers(splitTab.id), [splitTab.id]);
 
-  // Trace Color Maps for DataGrid row indicators
-  const activeChartColorMap = useMemo(() => {
-    const map: Record<number, string> = {};
-    chartTraces.forEach((t) => {
-      if (t.tabId === activeTab.id) {
-        map[t.address] = t.color;
-      }
-    });
-    return map;
-  }, [chartTraces, activeTab.id]);
 
-  const splitChartColorMap = useMemo(() => {
-    const map: Record<number, string> = {};
-    chartTraces.forEach((t) => {
-      if (t.tabId === splitTab.id) {
-        map[t.address] = t.color;
-      }
-    });
-    return map;
-  }, [chartTraces, splitTab.id]);
 
   const handleExportCSV = () => {
     exportSheetToCSV(activeTab, activeRowsObj.rows);
@@ -1573,107 +1326,11 @@ export const App: React.FC = () => {
     return chartTraces.some((t) => t.tabId === activeTab.id && t.address === inspectorSelectedRow.address);
   }, [chartTraces, activeTab.id, inspectorSelectedRow]);
 
-  const runStudioDiagnostics = async (): Promise<DiagnosticCheck[]> => {
-    const results: DiagnosticCheck[] = [];
-    const check = async (name: string, action: () => Promise<string>) => {
-      const started = performance.now();
-      try {
-        const detail = await action();
-        results.push({ name, status: 'pass', detail, durationMs: Math.round(performance.now() - started) });
-        return true;
-      } catch (error) {
-        results.push({ name, status: 'fail', detail: String(error), durationMs: Math.round(performance.now() - started) });
-        return false;
-      }
-    };
-
-    const bridgeReady = await check('Wails desktop bridge', async () => {
-      if (!(window as any).go?.main?.App) throw new Error('Không thấy Wails bridge. Hãy chạy file EXE thay vì mở frontend bằng trình duyệt.');
-      return 'Frontend đã kết nối được với Go backend.';
-    });
-    if (!bridgeReady) return results;
-
-    await check('Nhận diện cổng truyền thông', async () => {
-      const ports = await listSerialPorts();
-      return `Backend phản hồi ${ports.length} cổng COM.`;
-    });
-
-    const masterID = `__studio_diagnostic_master_${Date.now()}`;
-    let masterConnected = false;
-    try {
-      masterConnected = await check('Master simulator: kết nối', async () => {
-        await sessionConnect(masterID, { type: 'serial', port: 'simulator', baud_rate: 9600, data_bits: 8, parity: 'none', stop_bits: 1, timeout_ms: 1000 });
-        return 'Session simulator đã kết nối.';
-      });
-      if (masterConnected) {
-        await check('Master simulator: đọc và ghi', async () => {
-          const definition: PollDefinition = { slave_id: 1, function_code: 3, start_address: 20, quantity: 2, scan_rate_ms: 50 };
-          const before = await sessionReadOnce(masterID, definition);
-          if (before.error || before.values.length !== 2) throw new Error(before.error || 'Read Once không trả đủ dữ liệu.');
-          await sessionWriteRegister(masterID, { slave_id: 1, address: 20, value: 4321 });
-          const after = await sessionReadOnce(masterID, definition);
-          if (after.error || after.values[0] !== 4321) throw new Error(after.error || `Giá trị đọc lại là ${after.values[0]}, mong đợi 4321.`);
-          return 'Read Once và FC06 round-trip thành công.';
-        });
-        await check('Scanner: Unit, baudrate và register', async () => {
-          const [devices, baud, registers] = await Promise.all([
-            scanSlaveIDs(masterID, 1, 3, 50),
-            autoDetectBaudrate('simulator', 1, [9600], ['none']),
-            scanRegisters(masterID, 3, 0, 4),
-          ]);
-          if (devices[0]?.status !== 'online' || !baud[0]?.success || !registers[0]?.valid) throw new Error('Scanner không nhận diện đúng simulator.');
-          return 'Unit 1, 9600-none và vùng Holding Register đều được nhận diện.';
-        });
-        await check('Polling và Analyzer pipeline', async () => {
-          const definition: PollDefinition = { slave_id: 1, function_code: 3, start_address: 0, quantity: 4, scan_rate_ms: 50 };
-          await sessionStartPolling(masterID, definition);
-          await new Promise((resolve) => window.setTimeout(resolve, 130));
-          await sessionStopPolling(masterID);
-          // Self-test traffic goes to a separate analyzer so it never pollutes the real baseline,
-          // health score, reports or saved captures.
-          const snapshot = await getDiagnosticSnifferSnapshot(50);
-          const diagnosticFrames = snapshot.frames.filter((frame) => frame.source_id === masterID);
-          if (!diagnosticFrames.length) throw new Error('Polling chạy nhưng Analyzer chưa nhận được frame của phiên tự kiểm tra.');
-          return `Analyzer nhận ${diagnosticFrames.length} frame từ phiên tự kiểm tra.`;
-        });
-      }
-    } finally {
-      if (masterConnected) await sessionDisconnect(masterID).catch(() => undefined);
-      await closeSession(masterID).catch(() => undefined);
-    }
-
-    const slaveID = `__studio_diagnostic_slave_${Date.now()}`;
-    try {
-      await check('Slave memory: register và coil', async () => {
-        await slaveSetRegister(slaveID, 'holding', 7, 2468);
-        await slaveSetCoil(slaveID, 'coils', 3, true);
-        const [registers, coils] = await Promise.all([
-          slaveGetSlice(slaveID, 'holding', 7, 1),
-          slaveGetSlice(slaveID, 'coils', 3, 1),
-        ]);
-        if (registers.values?.[0] !== 2468 || coils.bool_values?.[0] !== true) throw new Error('Bộ nhớ Slave không giữ đúng dữ liệu đã ghi.');
-        return 'Holding register và coil round-trip thành công.';
-      });
-      await check('Slave simulation', async () => {
-        await slaveSetRegister(slaveID, 'holding', 50, 100);
-        await slaveStartSim(slaveID, { session_id: slaveID, table: 'holding', address: 50, mode: 'increment', min: 0, max: 1000, step: 2, interval_ms: 100 });
-        await new Promise((resolve) => window.setTimeout(resolve, 130));
-        await slaveStopSim(slaveID);
-        const values = await slaveGetSlice(slaveID, 'holding', 50, 1);
-        if (values.values?.[0] === 100) throw new Error('Simulation chạy nhưng giá trị không thay đổi.');
-        return `Thanh ghi mô phỏng đã thay đổi thành ${values.values?.[0]}.`;
-      });
-    } finally {
-      await closeSession(slaveID).catch(() => undefined);
-    }
-    return results;
-  };
-
   // Determine which tab is targeted by the Write Modal
   const modalTab = selectedTabForWrite || activeTab;
 
   return (
-    <div className={`flex h-screen w-screen flex-col overflow-hidden bg-slate-950 font-sans text-slate-100 ${frontendMode === 'studio' ? 'nx-studio-mode' : ''}`}>
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950 font-sans text-slate-100">
       {/* Hidden File Input for Project Import */}
       <input
         ref={fileInputRef}
@@ -1683,129 +1340,325 @@ export const App: React.FC = () => {
         onChange={handleFileChange}
       />
 
-      {/* 1. Menu Bar. The classic shell is only mounted in classic mode; hidden with display:none
-          it kept re-rendering its grids and a second trend chart on every poll under Studio. */}
-      {frontendMode === 'classic' && (
-      <div className="contents">
-      <MenuBar
-        role={activeTab.role}
+      {/* 1. TOP QUICK CONTROL BAR (All-in-one 1-click connect, polling, telemetry & view controls) */}
+      <TopQuickBar
+        activeTab={activeTab}
         onRoleChange={handleRoleChange}
         isConnected={activeState.isConnected}
-        isPolling={activeState.isPolling}
-        isListening={activeState.isListening}
-        onOpenConnection={() => setIsConnectionModalOpen(true)}
+        connectionConfig={activeState.connectionConfig}
+        availablePorts={availablePorts}
+        onRefreshPorts={refreshPorts}
+        onConnect={handleConnect}
         onDisconnect={handleDisconnect}
-        onOpenDefinition={() => setIsDefinitionModalOpen(true)}
-        onOpenSlaveSetup={() => setIsSlaveModalOpen(true)}
+        onOpenAdvancedConnection={() => setIsConnectionModalOpen(true)}
+        isPolling={activeState.isPolling}
         onTogglePoll={handleTogglePoll}
-        onToggleSlaveServer={handleToggleSlaveServer}
         onReadOnce={handleReadOnce}
+        onSaveDefinition={handleSaveDefinition}
+        onOpenAdvancedDefinition={() => setIsDefinitionModalOpen(true)}
+        isListening={activeState.isListening}
+        onToggleSlaveServer={handleToggleSlaveServer}
+        onOpenSlaveSetup={() => setIsSlaveModalOpen(true)}
+        onTableChange={handleSlaveTableChange}
+        txCount={activeState.txCount}
+        errCount={activeState.errCount}
+        latencyMs={activeState.latencyMs}
         onClearCounters={() => {
           sessionResetCounters(activeTab.id).catch((err) => console.error('Reset counters failed:', err));
           updateTabState(activeTab.id, (prev) => ({ ...prev, txCount: 0, errCount: 0 }));
         }}
-        onQuickSimulate={() =>
-          handleConnect({
-            type: 'serial',
-            port: 'simulator',
-            baud_rate: 9600,
-            data_bits: 8,
-            parity: 'none',
-            stop_bits: 1,
-            timeout_ms: 1000,
-          })
-        }
-        onOpenProject={handleOpenProjectClick}
-        onSaveProject={handleSaveProject}
-        onExportCSV={handleExportCSV}
-        onToggleTraffic={() => setShowTraffic(!showTraffic)}
-        showTraffic={showTraffic}
-        isSplitView={isSplitView}
-        onToggleSplitView={handleToggleSplitView}
-        showInspector={showInspector}
-        onToggleInspector={() => setShowInspector(!showInspector)}
-        onOpenScanner={() => setIsScannerModalOpen(true)}
-        onOpenMobileRemote={() => setIsMobileModalOpen(true)}
-        onOpenProtocolAnalyzer={() => { setIsAnalyzerStudioOpen(false); setIsProtocolAnalyzerOpen(true); }}
-        onOpenHelp={() => setIsHelpModalOpen(true)}
-      />
-
-      {/* 2. Toolbar */}
-      <Toolbar
-        role={activeTab.role}
-        onRoleChange={handleRoleChange}
-        isConnected={activeState.isConnected}
-        isPolling={activeState.isPolling}
         format={activeTab.format}
         onFormatChange={(fmt) =>
           setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, format: fmt } : t)))
         }
-        onConnectClick={() => setIsConnectionModalOpen(true)}
-        onDisconnectClick={handleDisconnect}
-        onDefinitionClick={() => setIsDefinitionModalOpen(true)}
-        onTogglePoll={handleTogglePoll}
-        onReadOnce={handleReadOnce}
-        onClearCounters={() => {
-          // Reset in the backend too; otherwise the next poll restores its running totals.
-          sessionResetCounters(activeTab.id).catch((err) => console.error('Reset counters failed:', err));
-          updateTabState(activeTab.id, (prev) => ({ ...prev, txCount: 0, errCount: 0 }));
-        }}
-        isListening={activeState.isListening}
-        slaveTable={activeTab.slaveTable}
-        onTableChange={handleSlaveTableChange}
-        onOpenSlaveModal={() => setIsSlaveModalOpen(true)}
-        onToggleSlaveServer={handleToggleSlaveServer}
-        onToggleTraffic={() => setShowTraffic(!showTraffic)}
-        showTraffic={showTraffic}
-        onNewTab={handleAddTab}
-        isSplitView={isSplitView}
-        onToggleSplitView={handleToggleSplitView}
-        hasActiveChart={chartTraces.length > 0}
-        onToggleChart={() => setIsChartVisible(!isChartVisible)}
-        onOpenHelp={() => setIsHelpModalOpen(true)}
-        onOpenScanner={() => setIsScannerModalOpen(true)}
-        onOpenMobileRemote={() => setIsMobileModalOpen(true)}
-        onOpenProtocolAnalyzer={() => { setIsAnalyzerStudioOpen(false); setIsProtocolAnalyzerOpen(true); }}
         showInspector={showInspector}
         onToggleInspector={() => setShowInspector(!showInspector)}
+        showTraffic={showTraffic}
+        onToggleTraffic={() => setShowTraffic(!showTraffic)}
+        isSplitView={isSplitView}
+        onToggleSplitView={handleToggleSplitView}
       />
 
-      {/* 3. Tab Bar */}
-      <TabBar
-        tabs={tabs}
-        activeTabId={activeTabId}
-        onSelectTab={setActiveTabId}
-        onCloseTab={handleCloseTab}
-        onAddTab={handleAddTab}
-        onRenameTab={handleRenameTab}
-      />
+      {/* 2. MAIN WORKSPACE CONTAINER */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Side Navigation Dock */}
+        <SidebarDock
+          activeView={currentView}
+          onSelectView={(view) => {
+            if (view === 'slave' && activeTab.role !== 'slave') {
+              const existingSlave = tabs.find((t) => t.role === 'slave');
+              if (existingSlave) {
+                setActiveTabId(existingSlave.id);
+              } else {
+                handleRoleChange('slave');
+              }
+            }
+            setCurrentView(view);
+          }}
+          onOpenMobileRemote={() => setIsMobileModalOpen(true)}
+          onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
+          onOpenHelp={() => setIsHelpModalOpen(true)}
+          onOpenNewTab={handleAddTab}
+          onSaveProject={handleSaveProject}
+          onOpenProject={handleOpenProjectClick}
+          onExportCSV={handleExportCSV}
+          onOpenTemplates={() => setIsTemplatesModalOpen(true)}
+          onOpenNewInstance={() => openNewInstance()}
+          isPolling={activeState.isPolling}
+          slaveRunning={activeState.isListening}
+        />
 
-      {/* 4. Main Data Grid Viewport (Single View or Split Dual View) with QuickInspector */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div className="flex-1 flex min-h-0 overflow-hidden">
-          {!isSplitView ? (
-            <DataGrid
-              rows={activeRowsObj.rows}
-              isCoil={activeRowsObj.isCoil}
-              sheetFormat={activeTab.format}
-              selectedAddress={inspectorSelectedRow?.address}
-              onSelectRow={(row) => setSelectedRowAddress(row.address)}
-              {...activeGridHandlers}
-              activeChartColorMap={activeChartColorMap}
+        {/* Center / Right Content Views */}
+        <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative bg-slate-950">
+          {/* VIEW: REGISTERS & DATA GRID */}
+          {currentView === 'registers' && (
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              <TabBar
+                tabs={tabs}
+                activeTabId={activeTabId}
+                onSelectTab={setActiveTabId}
+                onCloseTab={handleCloseTab}
+                onAddTab={handleAddTab}
+                onRenameTab={handleRenameTab}
+              />
+
+              <div className="flex-1 flex min-h-0 overflow-hidden">
+                {!isSplitView ? (
+                  <DataGrid
+                    rows={activeRowsObj.rows}
+                    isCoil={activeRowsObj.isCoil}
+                    sheetFormat={activeTab.format}
+                    selectedAddress={inspectorSelectedRow?.address}
+                    onSelectRow={(row) => setSelectedRowAddress(row.address)}
+                    {...activeGridHandlers}
+                    activeChartColorMap={activeChartColorMap}
+                  />
+                ) : (
+                  <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-800 overflow-hidden bg-slate-950">
+                    {/* Left Panel: Active Tab */}
+                    <div className="flex flex-col h-full overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
+                        <span className="flex items-center space-x-1.5 text-cyan-400 font-bold">
+                          <span>◫ Cửa sổ 1: {activeTab.title}</span>
+                          <span className="text-[10px] text-slate-400 font-normal">
+                            ({activeTab.role === 'master' ? 'Master Poll' : 'Slave Server'})
+                          </span>
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-mono">Sheet chính</span>
+                      </div>
+                      <DataGrid
+                        rows={activeRowsObj.rows}
+                        isCoil={activeRowsObj.isCoil}
+                        sheetFormat={activeTab.format}
+                        selectedAddress={inspectorSelectedRow?.address}
+                        onSelectRow={(row) => setSelectedRowAddress(row.address)}
+                        {...activeGridHandlers}
+                        activeChartColorMap={activeChartColorMap}
+                      />
+                    </div>
+
+                    {/* Right Panel: Split Tab */}
+                    <div className="flex flex-col h-full overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-indigo-400 font-bold">◫ Cửa sổ 2:</span>
+                          <select
+                            value={splitTab.id}
+                            onChange={(e) => setSplitTabId(e.target.value)}
+                            className="bg-slate-950 text-indigo-300 text-xs border border-slate-700 rounded px-2 py-0.5 focus:outline-none focus:border-cyan-400 cursor-pointer font-semibold"
+                          >
+                            {tabs.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.title} ({t.role === 'master' ? 'Master' : 'Slave'})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <button
+                          onClick={() => setIsSplitView(false)}
+                          className="text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded text-xs transition-colors"
+                          title="Đóng chế độ xem song song"
+                        >
+                          ✕ Đóng Split
+                        </button>
+                      </div>
+                      <DataGrid
+                        rows={splitRowsObj.rows}
+                        isCoil={splitRowsObj.isCoil}
+                        sheetFormat={splitTab.format}
+                        {...splitGridHandlers}
+                        activeChartColorMap={splitChartColorMap}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Quick Inspector Side Panel */}
+                {showInspector && !isSplitView && (
+                  <QuickInspector
+                    selectedRow={inspectorSelectedRow}
+                    isCoil={activeRowsObj.isCoil}
+                    isReadOnly={isCurrentTabReadOnly}
+                    sheetFormat={activeTab.format}
+                    onClose={() => setShowInspector(false)}
+                    onUpdateAlias={(addr, alias) => handleUpdateAlias(activeTab.id, addr, alias)}
+                    onUpdateUnit={(addr, unit) => handleUpdateUnit(activeTab.id, addr, unit)}
+                    onUpdateScaling={(addr, scaling) => handleUpdateScaling(activeTab.id, addr, scaling)}
+                    onUpdateFormat={(addr, fmt) => handleUpdateFormat(activeTab.id, addr, fmt)}
+                    onUpdateControl={(addr, ctrl) => handleUpdateControl(activeTab.id, addr, ctrl)}
+                    onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
+                    onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
+                    onOpenChart={(row) => handleToggleTrace(activeTab, row)}
+                    isTracing={isInspectorRowTracing}
+                  />
+                )}
+              </div>
+
+              {/* Realtime Multi-Trace Trend Chart Drawer */}
+              {chartTraces.length > 0 && isChartVisible && (
+                <TrendChart
+                  traces={chartTraces}
+                  traceData={traceData}
+                  onToggleTraceVisibility={handleToggleTraceVisibility}
+                  onRemoveTrace={handleRemoveTrace}
+                  onClear={handleClearAllChart}
+                  onClose={() => setIsChartVisible(false)}
+                  availableRows={activeRowsObj.rows}
+                  onAddTrace={(row) => handleToggleTrace(activeTab, row)}
+                />
+              )}
+
+              {/* Communication Traffic Box */}
+              {showTraffic && (
+                <TrafficBox
+                  entries={activeState.traffic}
+                  onClear={() => updateTabState(activeTab.id, (prev) => ({ ...prev, traffic: [] }))}
+                  onOpenAnalyzer={() => setCurrentView('analyzer')}
+                />
+              )}
+
+              {/* Status Bar */}
+              <StatusBar
+                role={activeTab.role}
+                isConnected={activeState.isConnected}
+                isPolling={activeState.isPolling}
+                connectionConfig={activeState.connectionConfig}
+                definition={activeTab.definition}
+                txCount={activeState.txCount}
+                errCount={activeState.errCount}
+                latencyMs={activeState.latencyMs}
+                isListening={activeState.isListening}
+                slaveConfig={activeTab.slaveConfig}
+                slaveTable={activeTab.slaveTable}
+                slaveActivityCount={activeState.slaveActivityCount}
+              />
+            </div>
+          )}
+
+          {/* VIEW: SCANNER & DISCOVERY */}
+          {currentView === 'scanner' && (
+            <ScannerView
+              activeSession={activeTab}
+              onApplySlaveId={handleApplySlaveId}
+              onApplyConnection={handleApplyScannerConnection}
+              onApplyRange={handleApplyScannerRange}
+              onReturnToRegisters={() => setCurrentView('registers')}
             />
-          ) : (
-            <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-800 overflow-hidden bg-slate-950">
-              {/* Left Panel: Active Tab */}
-              <div className="flex flex-col h-full overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
-                  <span className="flex items-center space-x-1.5 text-cyan-400 font-bold">
-                    <span>◫ Cửa sổ 1: {activeTab.title}</span>
-                    <span className="text-[10px] text-slate-400 font-normal">
-                      ({activeTab.role === 'master' ? 'Master Poll' : 'Slave Server'})
-                    </span>
-                  </span>
-                  <span className="text-[11px] text-slate-500 font-mono">Sheet chính</span>
-                </div>
+          )}
+
+          {/* VIEW: TREND CHARTS FULLSCREEN */}
+          {currentView === 'charts' && (
+            <div className="flex-1 flex flex-col h-full bg-slate-950 overflow-hidden">
+              <TrendChart
+                traces={chartTraces}
+                traceData={traceData}
+                onToggleTraceVisibility={handleToggleTraceVisibility}
+                onRemoveTrace={handleRemoveTrace}
+                onClear={handleClearAllChart}
+                onClose={() => setCurrentView('registers')}
+                isFullScreen
+                availableRows={activeRowsObj.rows}
+                onAddTrace={(row) => handleToggleTrace(activeTab, row)}
+              />
+            </div>
+          )}
+
+          {/* VIEW: PROTOCOL ANALYZER */}
+          {currentView === 'analyzer' && (
+            <div className="flex-1 h-full overflow-hidden">
+              <AnalyzerStudio
+                isOpen={true}
+                onClose={() => setCurrentView('registers')}
+                onOpenClassic={() => {
+                  setIsProtocolAnalyzerOpen(true);
+                }}
+              />
+            </div>
+          )}
+
+          {/* VIEW: RAW SERIAL & TTL TERMINAL */}
+          {currentView === 'rawserial' && (
+            <div className="flex-1 h-full overflow-hidden">
+              <RawSerialStudio onClose={() => setCurrentView('registers')} />
+            </div>
+          )}
+
+          {/* VIEW: MODBUS GATEWAY BRIDGE */}
+          {currentView === 'gateway' && (
+            <div className="flex-1 h-full overflow-hidden">
+              <GatewayBridgeStudio onClose={() => setCurrentView('registers')} />
+            </div>
+          )}
+
+          {/* VIEW: OVERNIGHT DATALOGGER */}
+          {currentView === 'datalogger' && (
+            <div className="flex-1 h-full overflow-hidden">
+              <DataloggerStudio
+                activeRows={activeRowsObj.rows}
+                activeTab={activeTab}
+                onClose={() => setCurrentView('registers')}
+              />
+            </div>
+          )}
+
+          {/* VIEW: AUTO-SCRIPTING MACRO RUNNER */}
+          {currentView === 'macro' && (
+            <div className="flex-1 h-full overflow-hidden">
+              <MacroRunnerStudio
+                activeTab={activeTab}
+                onExecuteWriteRegister={async (addr, val) => {
+                  const err = await performWrite(activeTab.id, addr, String(val));
+                  return !err;
+                }}
+                onExecuteWriteCoil={async (addr, val) => {
+                  const err = await performWrite(activeTab.id, addr, val ? '1' : '0');
+                  return !err;
+                }}
+                onExecuteReadValue={async (addr) => {
+                  const row = activeRowsObj.rows.find((r) => r.address === addr);
+                  if (!row) return null;
+                  if (typeof row.rawValue === 'number') return row.rawValue;
+                  const parsed = parseFloat(String(row.displayValue).replace(/,/g, ''));
+                  return isNaN(parsed) ? null : parsed;
+                }}
+                onClose={() => setCurrentView('registers')}
+              />
+            </div>
+          )}
+
+          {/* VIEW: SLAVE WORKSTATION */}
+          {currentView === 'slave' && (
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              <TabBar
+                tabs={tabs}
+                activeTabId={activeTabId}
+                onSelectTab={setActiveTabId}
+                onCloseTab={handleCloseTab}
+                onAddTab={handleAddTab}
+                onRenameTab={handleRenameTab}
+              />
+
+              <div className="flex-1 flex min-h-0 overflow-hidden">
                 <DataGrid
                   rows={activeRowsObj.rows}
                   isCoil={activeRowsObj.isCoil}
@@ -1815,193 +1668,59 @@ export const App: React.FC = () => {
                   {...activeGridHandlers}
                   activeChartColorMap={activeChartColorMap}
                 />
+                {showInspector && !isSplitView && (
+                  <QuickInspector
+                    selectedRow={inspectorSelectedRow}
+                    isCoil={activeRowsObj.isCoil}
+                    isReadOnly={isCurrentTabReadOnly}
+                    sheetFormat={activeTab.format}
+                    onClose={() => setShowInspector(false)}
+                    onUpdateAlias={(addr, alias) => handleUpdateAlias(activeTab.id, addr, alias)}
+                    onUpdateUnit={(addr, unit) => handleUpdateUnit(activeTab.id, addr, unit)}
+                    onUpdateScaling={(addr, scaling) => handleUpdateScaling(activeTab.id, addr, scaling)}
+                    onUpdateFormat={(addr, fmt) => handleUpdateFormat(activeTab.id, addr, fmt)}
+                    onUpdateControl={(addr, ctrl) => handleUpdateControl(activeTab.id, addr, ctrl)}
+                    onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
+                    onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
+                    onOpenChart={(row) => handleToggleTrace(activeTab, row)}
+                    isTracing={isInspectorRowTracing}
+                  />
+                )}
               </div>
 
-              {/* Right Panel: Split Tab */}
-              <div className="flex flex-col h-full overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300 font-medium select-none">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-indigo-400 font-bold">◫ Cửa sổ 2:</span>
-                    <select
-                      value={splitTab.id}
-                      onChange={(e) => setSplitTabId(e.target.value)}
-                      className="bg-slate-950 text-indigo-300 text-xs border border-slate-700 rounded px-2 py-0.5 focus:outline-none focus:border-cyan-400 cursor-pointer font-semibold"
-                    >
-                      {tabs.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.title} ({t.role === 'master' ? 'Master' : 'Slave'})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <button
-                    onClick={() => setIsSplitView(false)}
-                    className="text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded text-xs transition-colors"
-                    title="Đóng chế độ xem song song"
-                  >
-                    ✕ Đóng Split
-                  </button>
-                </div>
-                <DataGrid
-                  rows={splitRowsObj.rows}
-                  isCoil={splitRowsObj.isCoil}
-                  sheetFormat={splitTab.format}
-                  {...splitGridHandlers}
-                  activeChartColorMap={splitChartColorMap}
+              {showTraffic && (
+                <TrafficBox
+                  entries={activeState.traffic}
+                  onClear={() => updateTabState(activeTab.id, (prev) => ({ ...prev, traffic: [] }))}
+                  onOpenAnalyzer={() => setCurrentView('analyzer')}
                 />
-              </div>
+              )}
+
+              <StatusBar
+                role={activeTab.role}
+                isConnected={activeState.isConnected}
+                isPolling={activeState.isPolling}
+                connectionConfig={activeState.connectionConfig}
+                definition={activeTab.definition}
+                txCount={activeState.txCount}
+                errCount={activeState.errCount}
+                latencyMs={activeState.latencyMs}
+                isListening={activeState.isListening}
+                slaveConfig={activeTab.slaveConfig}
+                slaveTable={activeTab.slaveTable}
+                slaveActivityCount={activeState.slaveActivityCount}
+              />
             </div>
           )}
+        </main>
+      </div>
 
-          {/* Quick Inspector Side Panel */}
-          {showInspector && !isSplitView && (
-            <QuickInspector
-              selectedRow={inspectorSelectedRow}
-              isCoil={activeRowsObj.isCoil}
-              isReadOnly={isCurrentTabReadOnly}
-              sheetFormat={activeTab.format}
-              onClose={() => setShowInspector(false)}
-              onUpdateAlias={(addr, alias) => handleUpdateAlias(activeTab.id, addr, alias)}
-              onUpdateUnit={(addr, unit) => handleUpdateUnit(activeTab.id, addr, unit)}
-              onUpdateScaling={(addr, scaling) => handleUpdateScaling(activeTab.id, addr, scaling)}
-              onUpdateFormat={(addr, fmt) => handleUpdateFormat(activeTab.id, addr, fmt)}
-              onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
-              onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
-              onOpenChart={(row) => handleToggleTrace(activeTab, row)}
-              isTracing={isInspectorRowTracing}
-            />
-          )}
-        </div>
-
-        {/* Realtime Multi-Trace Trend Chart Drawer (MQTT Explorer style) */}
-        {chartTraces.length > 0 && isChartVisible && (
-          <TrendChart
-            traces={chartTraces}
-            traceData={traceData}
-            onToggleTraceVisibility={handleToggleTraceVisibility}
-            onRemoveTrace={handleRemoveTrace}
-            onClear={handleClearAllChart}
-            onClose={() => setIsChartVisible(false)}
-          />
+      {/* Classic Sniffer Modal fallback */}
+      <Suspense fallback={null}>
+        {isProtocolAnalyzerOpen && (
+          <ProtocolAnalyzer isOpen onClose={() => setIsProtocolAnalyzerOpen(false)} />
         )}
-      </div>
-
-      {/* 5. Communication Traffic Box (Hex frame sniffer) */}
-      {showTraffic && (
-        <TrafficBox
-          entries={activeState.traffic}
-          onClear={() => updateTabState(activeTab.id, (prev) => ({ ...prev, traffic: [] }))}
-          onOpenAnalyzer={() => { setIsAnalyzerStudioOpen(false); setIsProtocolAnalyzerOpen(true); }}
-        />
-      )}
-
-      {/* 6. Status Bar */}
-      <StatusBar
-        role={activeTab.role}
-        isConnected={activeState.isConnected}
-        isPolling={activeState.isPolling}
-        connectionConfig={activeState.connectionConfig}
-        definition={activeTab.definition}
-        txCount={activeState.txCount}
-        errCount={activeState.errCount}
-        latencyMs={activeState.latencyMs}
-        isListening={activeState.isListening}
-        slaveConfig={activeTab.slaveConfig}
-        slaveTable={activeTab.slaveTable}
-        slaveActivityCount={activeState.slaveActivityCount}
-      />
-      </div>
-      )}
-
-      {/* A Studio crash (or chunk load failure) falls back to the classic UI instead of a white
-          screen that would come back on every launch, since the mode is remembered. */}
-      <ErrorBoundary
-        key={frontendMode}
-        name="Workspace Studio"
-        onError={() => {
-          setFrontendMode('classic');
-          notify('error', 'Giao diện Studio gặp lỗi và đã chuyển về giao diện cổ điển.');
-        }}
-      >
-      <Suspense fallback={<div className="flex flex-1 items-center justify-center bg-[#07100e] text-xs text-emerald-200">Đang mở Workspace Studio…</div>}>
-      {frontendMode === 'studio' && (
-        <WorkspaceStudio
-          tabs={tabs}
-          activeTab={activeTab}
-          activeTabId={activeTabId}
-          runtime={activeState}
-          primary={{ tab: activeTab, rows: activeRowsObj.rows, isCoil: activeRowsObj.isCoil, handlers: activeGridHandlers, chartColors: activeChartColorMap }}
-          secondary={{ tab: splitTab, rows: splitRowsObj.rows, isCoil: splitRowsObj.isCoil, handlers: splitGridHandlers, chartColors: splitChartColorMap }}
-          splitView={isSplitView}
-          showTraffic={showTraffic}
-          chart={chartTraces.length > 0 && isChartVisible ? (
-            <TrendChart
-              traces={chartTraces}
-              traceData={traceData}
-              onToggleTraceVisibility={handleToggleTraceVisibility}
-              onRemoveTrace={handleRemoveTrace}
-              onClear={handleClearAllChart}
-              onClose={() => setIsChartVisible(false)}
-            />
-          ) : undefined}
-          onUseClassic={() => setFrontendMode('classic')}
-          onSelectTab={setActiveTabId}
-          onCloseTab={handleCloseTab}
-          onAddTab={handleAddTab}
-          onRenameTab={handleRenameTab}
-          onRoleChange={handleRoleChange}
-          onFormatChange={(fmt) => setTabs((prev) => prev.map((tab) => tab.id === activeTabId ? { ...tab, format: fmt } : tab))}
-          onTableChange={handleSlaveTableChange}
-          onSecondaryTabChange={setSplitTabId}
-          onConnect={() => setIsConnectionModalOpen(true)}
-          onDisconnect={handleDisconnect}
-          onDefinition={() => setIsDefinitionModalOpen(true)}
-          onTogglePoll={handleTogglePoll}
-          onReadOnce={handleReadOnce}
-          onClearCounters={() => {
-            sessionResetCounters(activeTab.id).catch((err) => console.error('Reset counters failed:', err));
-            updateTabState(activeTab.id, (prev) => ({ ...prev, txCount: 0, errCount: 0 }));
-          }}
-          onSlaveSetup={() => setIsSlaveModalOpen(true)}
-          onToggleSlave={handleToggleSlaveServer}
-          onOpenProject={handleOpenProjectClick}
-          onSaveProject={handleSaveProject}
-          onExportCSV={handleExportCSV}
-          onOpenScanner={() => setIsScannerModalOpen(true)}
-          onOpenMobile={() => setIsMobileModalOpen(true)}
-          onOpenAnalyzerStudio={() => { setIsProtocolAnalyzerOpen(false); setIsAnalyzerStudioOpen(true); }}
-          onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
-          onOpenHelp={() => setIsHelpModalOpen(true)}
-          onToggleTraffic={() => setShowTraffic(!showTraffic)}
-          onClearTraffic={() => updateTabState(activeTab.id, (prev) => ({ ...prev, traffic: [] }))}
-          onToggleSplit={handleToggleSplitView}
-          onToggleChart={() => setIsChartVisible(!isChartVisible)}
-        />
-      )}
       </Suspense>
-      </ErrorBoundary>
-
-      <ErrorBoundary
-        key={`${isProtocolAnalyzerOpen}-${isAnalyzerStudioOpen}`}
-        name="Analyzer"
-        onError={() => {
-          setIsProtocolAnalyzerOpen(false);
-          setIsAnalyzerStudioOpen(false);
-          notify('error', 'Analyzer gặp lỗi và đã được đóng.');
-        }}
-      >
-      <Suspense fallback={<div className="fixed inset-0 z-[90] grid place-items-center bg-[#07100e] text-xs text-emerald-200">Đang mở Analyzer…</div>}>
-        {isProtocolAnalyzerOpen && <ProtocolAnalyzer isOpen onClose={() => setIsProtocolAnalyzerOpen(false)} />}
-        {isAnalyzerStudioOpen && <AnalyzerStudio
-          isOpen
-          onClose={() => setIsAnalyzerStudioOpen(false)}
-          onOpenClassic={() => {
-            setIsAnalyzerStudioOpen(false);
-            setIsProtocolAnalyzerOpen(true);
-          }}
-        />}
-      </Suspense>
-      </ErrorBoundary>
 
       <StudioDiagnostics isOpen={isDiagnosticsOpen} onClose={() => setIsDiagnosticsOpen(false)} onRun={runStudioDiagnostics} />
       <ActionNotice notice={actionNotice} onClose={() => setActionNotice(null)} />
@@ -2063,6 +1782,15 @@ export const App: React.FC = () => {
         onStartSim={handleStartSimulation}
         onStopSim={handleStopSimulation}
         isSimulating={activeState.isSimulating}
+      />
+
+      {/* 6. Device Templates & JSON Profile Modal */}
+      <DeviceTemplatesModal
+        isOpen={isTemplatesModalOpen}
+        onClose={() => setIsTemplatesModalOpen(false)}
+        activeTab={activeTab}
+        onApplyTemplate={handleApplyDeviceTemplate}
+        onImportProfile={(imported) => handleApplyDeviceTemplate(imported, true)}
       />
 
       {/* 7. Comprehensive Interactive User Guide Modal */}

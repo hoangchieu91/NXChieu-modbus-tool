@@ -67,7 +67,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           <div className="flex items-center space-x-1 text-slate-300">
             <Shield className="w-3 h-3 text-amber-400" />
             <span>
-              Device ID: <strong className="text-amber-300">{slaveConfig?.slave_id || 1}</strong> | Vùng nhớ: <strong className="text-slate-200">{(slaveTable || 'holding').toUpperCase()}</strong>
+              Device ID:{' '}
+              <strong className="text-amber-300">
+                {slaveConfig?.slave_id_end && slaveConfig.slave_id_end > (slaveConfig.slave_id || 1)
+                  ? `${slaveConfig.slave_id || 1}..${slaveConfig.slave_id_end} (Multi-Slave)`
+                  : `${slaveConfig?.slave_id || 1}`}
+              </strong>{' '}
+              | Vùng nhớ: <strong className="text-slate-200">{(slaveTable || 'holding').toUpperCase()}</strong>
             </span>
           </div>
         </div>

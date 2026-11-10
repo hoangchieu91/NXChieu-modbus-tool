@@ -22,7 +22,7 @@ import {
   Smartphone,
   Sliders,
 } from 'lucide-react';
-import { DataFormat, SessionRole, SlaveTable } from '../types/modbus';
+import { DataFormat, SessionRole, SlaveTable, SlaveConfig } from '../types/modbus';
 
 interface ToolbarProps {
   role: SessionRole;
@@ -41,6 +41,7 @@ interface ToolbarProps {
   // Slave props
   isListening: boolean;
   slaveTable: SlaveTable;
+  slaveConfig?: SlaveConfig;
   onTableChange: (table: SlaveTable) => void;
   onOpenSlaveModal: () => void;
   onToggleSlaveServer: () => void;
@@ -75,6 +76,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onClearCounters,
   isListening,
   slaveTable,
+  slaveConfig,
   onTableChange,
   onOpenSlaveModal,
   onToggleSlaveServer,
@@ -201,6 +203,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   <option value="discrete" className="bg-slate-900 text-slate-100">1x Discrete (FC02)</option>
                 </select>
               </div>
+
+              {/* Multi-Slave Range Indicator */}
+              {slaveConfig?.slave_id_end && slaveConfig.slave_id_end > (slaveConfig.slave_id || 1) && (
+                <div
+                  className="flex items-center space-x-1 px-2 py-1 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-[11px] font-semibold cursor-pointer"
+                  onClick={onOpenSlaveModal}
+                  title="Đang giả lập dải nhiều Slave IDs trên cùng 1 cổng COM"
+                >
+                  <Shield className="w-3 h-3 text-amber-400" />
+                  <span>Slave {slaveConfig.slave_id}..{slaveConfig.slave_id_end} ({slaveConfig.slave_id_end - (slaveConfig.slave_id || 1) + 1} Slaves)</span>
+                </div>
+              )}
             </>
           )}
         </div>

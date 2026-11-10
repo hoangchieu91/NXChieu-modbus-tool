@@ -24,11 +24,12 @@ type ConnectionConfig struct {
 
 // PollDefinition defines what registers or coils to poll.
 type PollDefinition struct {
-	SlaveID      uint8  `json:"slave_id"`
-	FunctionCode uint8  `json:"function_code"` // 1: Coils, 2: Discrete, 3: Holding, 4: Input
-	StartAddress uint16 `json:"start_address"`
-	Quantity     uint16 `json:"quantity"`
-	ScanRateMs   uint64 `json:"scan_rate_ms"`
+	SlaveID       uint8    `json:"slave_id"`
+	FunctionCode  uint8    `json:"function_code"` // 1: Coils, 2: Discrete, 3: Holding, 4: Input
+	StartAddress  uint16   `json:"start_address"`
+	Quantity      uint16   `json:"quantity"`
+	ScanRateMs    uint64   `json:"scan_rate_ms"`
+	DisabledAddrs []uint16 `json:"disabled_addrs,omitempty"` // Addresses inside [StartAddress..StartAddress+Quantity-1] to skip (Contiguous Sub-Blocks)
 }
 
 // PollResult represents the result of a single read cycle.
@@ -138,7 +139,7 @@ func (p WriteRegistersParam) Validate() error {
 // Validate checks a read request against the Modbus limits before it reaches a device or the
 // simulator (which would otherwise wrap past address 65535 and label data wrongly).
 func (d PollDefinition) Validate() error {
-	maxQty := 125
+	maxQty := 250
 	switch d.FunctionCode {
 	case 1, 2:
 		maxQty = 2000
@@ -153,4 +154,52 @@ func (d PollDefinition) Validate() error {
 		return fmt.Errorf("read range %d..%d exceeds address 65535", d.StartAddress, int(d.StartAddress)+int(d.Quantity)-1)
 	}
 	return nil
+}
+
+// SubBlock represents a contiguous range of addresses that are safe to read in one Modbus request.
+type SubBlock struct {
+	Offset       uint16 `json:"offset"`
+	StartAddress uint16 `json:"start_address"`
+	Quantity     uint16 `json:"quantity"`
+}
+
+// BuildSubBlocks splits [StartAddress..StartAddress+Quantity-1] around DisabledAddrs and respects
+// the 120-register max chunk size so no request ever touches a forbidden middle register.
+func (d PollDefinition) BuildSubBlocks() []SubBlock {
+	disSet := make(map[uint16]bool, len(d.DisabledAddrs))
+	for _, a := range d.DisabledAddrs {
+		disSet[a] = true
+	}
+	maxChunk := uint16(120)
+	if d.FunctionCode == 1 || d.FunctionCode == 2 {
+		maxChunk = 1900
+	}
+	var blocks []SubBlock
+	var curOff, curStart, curCnt uint16
+	for i := uint16(0); i < d.Quantity; i++ {
+		addr := d.StartAddress + i
+		if disSet[addr] {
+			if curCnt > 0 {
+				blocks = append(blocks, SubBlock{Offset: curOff, StartAddress: curStart, Quantity: curCnt})
+				curCnt = 0
+			}
+		} else {
+			if curCnt == 0 {
+				curOff = i
+				curStart = addr
+				curCnt = 1
+			} else if curCnt >= maxChunk {
+				blocks = append(blocks, SubBlock{Offset: curOff, StartAddress: curStart, Quantity: curCnt})
+				curOff = i
+				curStart = addr
+				curCnt = 1
+			} else {
+				curCnt++
+			}
+		}
+	}
+	if curCnt > 0 {
+		blocks = append(blocks, SubBlock{Offset: curOff, StartAddress: curStart, Quantity: curCnt})
+	}
+	return blocks
 }

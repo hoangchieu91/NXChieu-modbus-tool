@@ -3,6 +3,7 @@ package modbus
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,20 +27,28 @@ type EngineSession struct {
 	mu          sync.Mutex
 }
 
+type sharedMasterEntry struct {
+	client *ModbusClientWrapper
+	users  map[string]bool
+	config ConnectionConfig
+}
+
 // SessionManager manages concurrent Master and Slave instances across multiple tabs.
 type SessionManager struct {
-	mu         sync.RWMutex
-	sessions   map[string]*EngineSession
-	onPollData func(string, PollResult)
-	onSlaveAct func(SlaveActivityEvent)
+	mu            sync.RWMutex
+	sessions      map[string]*EngineSession
+	sharedClients map[string]*sharedMasterEntry
+	onPollData    func(string, PollResult)
+	onSlaveAct    func(SlaveActivityEvent)
 }
 
 // NewSessionManager creates a SessionManager.
 func NewSessionManager(onPollData func(string, PollResult), onSlaveAct func(SlaveActivityEvent)) *SessionManager {
 	return &SessionManager{
-		sessions:   make(map[string]*EngineSession),
-		onPollData: onPollData,
-		onSlaveAct: onSlaveAct,
+		sessions:      make(map[string]*EngineSession),
+		sharedClients: make(map[string]*sharedMasterEntry),
+		onPollData:    onPollData,
+		onSlaveAct:    onSlaveAct,
 	}
 }
 
@@ -78,6 +87,19 @@ func (sm *SessionManager) GetOrCreateSession(sessionID string, role SessionRole)
 	return sess
 }
 
+func configKey(cfg ConnectionConfig) string {
+	switch strings.ToLower(cfg.Type) {
+	case "serial":
+		return fmt.Sprintf("serial:%s:%d:%d:%s:%d", strings.ToLower(cfg.Port), cfg.BaudRate, cfg.DataBits, strings.ToLower(cfg.Parity), cfg.StopBits)
+	case "tcp":
+		return fmt.Sprintf("tcp:%s:%d", strings.ToLower(cfg.Host), cfg.TcpPort)
+	case "rtu_over_tcp":
+		return fmt.Sprintf("rtu_over_tcp:%s:%d", strings.ToLower(cfg.Host), cfg.TcpPort)
+	default:
+		return fmt.Sprintf("%s:%s", cfg.Type, cfg.Port)
+	}
+}
+
 // CloseSession gracefully tears down a session and releases serial/socket resources.
 func (sm *SessionManager) CloseSession(sessionID string) {
 	sessionID = normalizeSessionID(sessionID)
@@ -85,6 +107,17 @@ func (sm *SessionManager) CloseSession(sessionID string) {
 	sess, exists := sm.sessions[sessionID]
 	if exists {
 		delete(sm.sessions, sessionID)
+	}
+
+	for key, entry := range sm.sharedClients {
+		if entry.users[sessionID] {
+			delete(entry.users, sessionID)
+			if len(entry.users) == 0 {
+				entry.client.Disconnect()
+				delete(sm.sharedClients, key)
+			}
+			break
+		}
 	}
 	sm.mu.Unlock()
 
@@ -96,26 +129,49 @@ func (sm *SessionManager) CloseSession(sessionID string) {
 			sess.pollCancel()
 			sess.pollCancel = nil
 		}
-		if sess.Master != nil {
-			sess.Master.Disconnect()
-		}
 		if sess.Slave != nil {
 			sess.Slave.Stop()
 		}
 	}
 }
 
-// MasterConnect connects a session's master client.
+// MasterConnect connects a session's master client, reusing existing transport if already connected.
 func (sm *SessionManager) MasterConnect(sessionID string, config ConnectionConfig) (string, error) {
+	sessionID = normalizeSessionID(sessionID)
 	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.Role = RoleMaster
-	return sess.Master.Connect(config)
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	key := configKey(config)
+	if entry, exists := sm.sharedClients[key]; exists && entry.client.IsConnected() {
+		sess.Master = entry.client
+		entry.users[sessionID] = true
+		return "Đã kết nối qua cổng dùng chung (Shared Connection)", nil
+	}
+
+	client := NewModbusClientWrapper()
+	msg, err := client.Connect(config)
+	if err != nil {
+		return "", err
+	}
+
+	entry := &sharedMasterEntry{
+		client: client,
+		users:  map[string]bool{sessionID: true},
+		config: config,
+	}
+	sm.sharedClients[key] = entry
+	sess.Master = client
+	return msg, nil
 }
 
 // MasterDisconnect disconnects a session's master client and stops its polling loop.
 func (sm *SessionManager) MasterDisconnect(sessionID string) {
+	sessionID = normalizeSessionID(sessionID)
 	sess := sm.GetOrCreateSession(sessionID, RoleMaster)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
@@ -124,7 +180,20 @@ func (sm *SessionManager) MasterDisconnect(sessionID string) {
 		sess.pollCancel()
 		sess.pollCancel = nil
 	}
-	sess.Master.Disconnect()
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	for key, entry := range sm.sharedClients {
+		if entry.users[sessionID] {
+			delete(entry.users, sessionID)
+			if len(entry.users) == 0 {
+				entry.client.Disconnect()
+				delete(sm.sharedClients, key)
+			}
+			break
+		}
+	}
 }
 
 // MasterStartPolling initiates periodic polling on the target session.

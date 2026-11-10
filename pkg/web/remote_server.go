@@ -30,6 +30,7 @@ type NetworkInterfaceInfo struct {
 type RemoteServerConfig struct {
 	Port       uint16 `json:"port"`        // Default 8088
 	AllowWrite bool   `json:"allow_write"` // Allow remote writes from phone
+	Token      string `json:"token"`       // Optional persistent or fixed token; generated if empty
 }
 
 // RemoteServerStatus returns live status of the web server.
@@ -212,15 +213,29 @@ func (s *RemoteServer) Start(cfg RemoteServerConfig) error {
 		cfg.Port = 8088
 	}
 
-	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-	// Listen synchronously so a busy port is reported to the caller instead of failing silently.
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	startPort := cfg.Port
+	var ln net.Listener
+	var actualPort uint16
+	for p := startPort; p <= startPort+30; p++ {
+		addr := fmt.Sprintf("0.0.0.0:%d", p)
+		l, err := net.Listen("tcp", addr)
+		if err == nil {
+			ln = l
+			actualPort = p
+			break
+		}
 	}
+	if ln == nil {
+		return fmt.Errorf("không thể mở cổng lắng nghe từ %d đến %d", startPort, startPort+30)
+	}
+	cfg.Port = actualPort
 
 	s.config = cfg
-	s.token = newToken()
+	if cfg.Token != "" {
+		s.token = cfg.Token
+	} else {
+		s.token = newToken()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWebSocket)

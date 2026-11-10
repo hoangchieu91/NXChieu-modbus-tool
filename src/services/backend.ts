@@ -195,6 +195,7 @@ export async function slaveStart(sessionId: string, config: SlaveConfig): Promis
   const goConfig: Record<string, unknown> = {
     type: config.type,
     slave_id: config.slave_id,
+    slave_id_end: config.slave_id_end || config.slave_id,
   };
   if (config.type === 'serial') {
     goConfig.port = config.port;
@@ -435,3 +436,141 @@ export async function completeRemoteWrite(id: string, errorMessage: string): Pro
     console.error('completeRemoteWrite error:', e);
   }
 }
+
+// Auto-discovery of baud, parity, slave id and readable registers
+export async function autoDiscoverDevices(
+  params: import('../types/modbus').AutoDiscoverParams
+): Promise<import('../types/modbus').DiscoveredDevice[]> {
+  try {
+    const results = await (AppMethods as any).AutoDiscoverDevices(params);
+    return results || [];
+  } catch (e: any) {
+    console.error('autoDiscoverDevices error:', e);
+    return [];
+  }
+}
+
+// Launch another independent instance/window of NXChieu Modbus Studio
+export async function openNewInstance(): Promise<void> {
+  try {
+    await (AppMethods as any).OpenNewInstance();
+  } catch (e: any) {
+    console.error('openNewInstance error:', e);
+  }
+}
+
+// Raw Serial / TTL Terminal backend bridges
+export async function rawSerialOpen(
+  port: string,
+  baud: number,
+  dataBits: number,
+  parity: string,
+  stopBits: number
+): Promise<void> {
+  await (AppMethods as any).RawSerialOpen(port, baud, dataBits, parity, stopBits);
+}
+
+export async function rawSerialClose(): Promise<void> {
+  await (AppMethods as any).RawSerialClose();
+}
+
+export async function rawSerialSend(
+  text: string,
+  isHex: boolean,
+  appendCrc: string
+): Promise<number> {
+  return await (AppMethods as any).RawSerialSend(text, isHex, appendCrc);
+}
+
+export async function rawSerialSetDTR(val: boolean): Promise<void> {
+  await (AppMethods as any).RawSerialSetDTR(val);
+}
+
+export async function rawSerialSetRTS(val: boolean): Promise<void> {
+  await (AppMethods as any).RawSerialSetRTS(val);
+}
+
+export async function rawSerialIsOpen(): Promise<boolean> {
+  try {
+    return await (AppMethods as any).RawSerialIsOpen();
+  } catch {
+    return false;
+  }
+}
+
+export async function rawSerialGetPort(): Promise<string> {
+  try {
+    return await (AppMethods as any).RawSerialGetPort();
+  } catch {
+    return '';
+  }
+}
+
+// --- Modbus TCP <-> RTU Gateway Bridge ---
+
+export async function gatewayStart(cfg: {
+  tcp_port: number;
+  serial_port: string;
+  baud_rate: number;
+  data_bits: number;
+  parity: string;
+  stop_bits: number;
+  timeout_ms: number;
+}): Promise<void> {
+  await (AppMethods as any).GatewayStart(cfg);
+}
+
+export async function gatewayStop(): Promise<void> {
+  await (AppMethods as any).GatewayStop();
+}
+
+export async function gatewayGetStats(): Promise<any> {
+  try {
+    return await (AppMethods as any).GatewayGetStats();
+  } catch {
+    return { is_running: false };
+  }
+}
+
+export function subscribeGatewayTraffic(callback: (event: any) => void): () => void {
+  return WailsRuntime.EventsOn('gateway-traffic', callback);
+}
+
+// --- SQLite Overnight Datalogger Engine ---
+
+export async function datalogStartSession(name: string, intervalSec: number, pointCount: number): Promise<string> {
+  return await (AppMethods as any).DatalogStartSession(name, intervalSec, pointCount);
+}
+
+export async function datalogStopSession(sessID = ''): Promise<void> {
+  await (AppMethods as any).DatalogStopSession(sessID);
+}
+
+export async function datalogLogBatch(sessID: string, records: any[]): Promise<void> {
+  await (AppMethods as any).DatalogLogBatch(sessID, records);
+}
+
+export async function datalogListSessions(): Promise<any[]> {
+  try {
+    return await (AppMethods as any).DatalogListSessions();
+  } catch {
+    return [];
+  }
+}
+
+export async function datalogGetRecords(sessID: string, limit = 1000, offset = 0): Promise<any[]> {
+  try {
+    return await (AppMethods as any).DatalogGetRecords(sessID, limit, offset);
+  } catch {
+    return [];
+  }
+}
+
+export async function datalogExportCSV(sessID: string, destPath: string): Promise<number> {
+  return await (AppMethods as any).DatalogExportCSV(sessID, destPath);
+}
+
+export async function datalogDeleteSession(sessID: string): Promise<void> {
+  await (AppMethods as any).DatalogDeleteSession(sessID);
+}
+

@@ -54,6 +54,7 @@ export interface PollDefinition {
   start_address: number;
   quantity: number;
   scan_rate_ms: number;
+  disabled_addrs?: number[];
 }
 
 export interface PollResult {
@@ -312,6 +313,23 @@ export interface SnifferCaptureStatus {
   last_error?: string;
 }
 
+export type ControlWidgetType = 'none' | 'stepper' | 'toggle' | 'dropdown';
+
+export interface DropdownOption {
+  label: string;
+  value: number;
+}
+
+export interface RegisterControlConfig {
+  type: ControlWidgetType;
+  step?: number;
+  min?: number;
+  max?: number;
+  onValue?: number;
+  offValue?: number;
+  options?: DropdownOption[];
+}
+
 export interface RegisterRow {
   address: number;
   displayAddress: string;
@@ -326,7 +344,9 @@ export interface RegisterRow {
   changed: boolean;
   changeDirection?: 'up' | 'down' | null;
   hasValue: boolean;
+  disabled?: boolean;
   decodedMulti?: MultiColumnDecoded;
+  control?: RegisterControlConfig;
 }
 
 
@@ -390,6 +410,7 @@ export interface TabSession {
   aliases: Record<number, string>;
   units: Record<number, string>;
   scalings: Record<number, number>;
+  controls?: Record<number, RegisterControlConfig>;
   // Slave settings
   slaveConfig?: SlaveConfig;
   slaveTable: SlaveTable;
@@ -509,3 +530,42 @@ export interface RemoteServerStatus {
   token: string;
   interfaces: NetworkInterfaceInfo[];
 }
+
+export interface DiscoveredDevice {
+  port: string;
+  baud_rate: number;
+  parity: string;
+  stop_bits: number;
+  slave_id: number;
+  function_code: number;
+  address: number;
+  value: number;
+  latency_ms: number;
+  detail: string;
+}
+
+export interface AutoDiscoverParams {
+  port: string;
+  bauds?: number[];
+  parities?: string[];
+  slave_ids?: number[];
+  timeout_ms?: number;
+  stop_on_first: boolean;
+}
+
+export interface AutoDiscoverProgress {
+  phase: string;
+  current_baud: number;
+  current_parity: string;
+  current_slave: number;
+  found_count: number;
+}
+
+export interface RawSerialFrame {
+  timestamp: string;
+  direction: 'rx' | 'tx';
+  hex: string;
+  ascii: string;
+  length: number;
+}
+

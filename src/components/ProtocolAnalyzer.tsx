@@ -1,16 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualList } from '../utils/useVirtualList';
-
-// Fixed row height so the frame table can be windowed.
-const FRAME_ROW_HEIGHT = 36;
 import {
   Activity,
   ArrowDownLeft,
   ArrowUpRight,
   BookOpen,
-  Braces,
   CheckCircle2,
-  Clock3,
   Cpu,
   Download,
   ExternalLink,
@@ -24,7 +19,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  ShieldCheck,
   Square,
   Target,
   Trash2,
@@ -51,83 +45,33 @@ import {
 } from '../services/backend';
 import {
   CaptureDiffResult,
-  ModbusDeviceHealth,
   NpcapStatus,
   ShiftReportOptions,
   SnifferCaptureConfig,
   SnifferCaptureStatus,
-  SnifferDeviceBaseline,
   SnifferSnapshot,
 } from '../types/modbus';
+import { CaptureDiffModal } from './analyzer/CaptureDiffModal';
+import { ShiftReportModal } from './analyzer/ShiftReportModal';
+import { DeviceRow } from './analyzer/DeviceRow';
+import { FrameInspector } from './analyzer/FrameInspector';
+import {
+  FRAME_ROW_HEIGHT,
+  stateTone,
+  stateLabel,
+  formatLatency,
+} from './analyzer/analyzerUtils';
 
 interface ProtocolAnalyzerProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const stateTone: Record<string, string> = {
-  healthy: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10',
-  degraded: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
-  critical: 'text-rose-300 border-rose-500/30 bg-rose-500/10',
-  suspected_offline: 'text-rose-300 border-rose-500/30 bg-rose-500/10',
-  offline: 'text-rose-300 border-rose-500/30 bg-rose-500/10',
-  unknown: 'text-slate-400 border-slate-700 bg-slate-800/50',
-};
-
-const stateLabel: Record<string, string> = {
-  healthy: 'Ổn định',
-  degraded: 'Suy giảm',
-  critical: 'Nghiêm trọng',
-  suspected_offline: 'Nghi mất kết nối',
-  offline: 'Mất kết nối',
-  not_polled: 'Không được poll',
-  unknown: 'Chưa đủ dữ liệu',
-};
-
-const formatLatency = (us?: number) => {
-  if (!us) return '—';
-  if (us < 1000) return `${us} µs`;
-  return `${(us / 1000).toFixed(us < 10000 ? 2 : 1)} ms`;
-};
-
 const Metric: React.FC<{ label: string; value: React.ReactNode; accent?: string }> = ({ label, value, accent = 'text-slate-100' }) => (
   <div className="border-l border-slate-700/80 pl-3 min-w-0">
     <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 whitespace-nowrap">{label}</div>
     <div className={`mt-0.5 text-sm font-semibold font-mono ${accent}`}>{value}</div>
   </div>
-);
-
-const DeviceRow: React.FC<{ device: ModbusDeviceHealth; baseline?: SnifferDeviceBaseline; selected: boolean; onClick: () => void }> = ({
-  device,
-  baseline,
-  selected,
-  onClick,
-}) => (
-  <button
-    onClick={onClick}
-    className={`w-full text-left px-3 py-2.5 border-b border-slate-800/70 transition ${
-      selected ? 'bg-cyan-400/10 border-l-2 border-l-cyan-400' : 'hover:bg-slate-900/80 border-l-2 border-l-transparent'
-    }`}
-  >
-    <div className="flex items-center justify-between gap-2">
-      <span className="font-mono font-bold text-slate-100">UNIT {String(device.unit_id).padStart(3, '0')}</span>
-      <span className={`rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${stateTone[device.state] || stateTone.unknown}`}>
-        {stateLabel[device.state] || device.state}
-      </span>
-    </div>
-    <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-slate-500">
-      <span>Success <b className="text-slate-300">{device.success_rate.toFixed(1)}%</b></span>
-      <span>P95 <b className="text-slate-300">{formatLatency(device.p95_latency_us)}</b></span>
-      <span>REQ <b className="text-sky-300">{device.requests}</b></span>
-      <span>RSP <b className="text-emerald-300">{device.responses}</b></span>
-    </div>
-    {baseline && (
-      <div className="mt-1.5 border-t border-slate-800/60 pt-1 text-[9px] text-slate-500 font-mono flex items-center justify-between">
-        <span>Base P95: <b className="text-cyan-400">{formatLatency(baseline.p95_latency_us)}</b></span>
-        <span>Poll ~<b className="text-cyan-400">{Math.round(baseline.median_poll_interval_ms)}ms</b></span>
-      </div>
-    )}
-  </button>
 );
 
 export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onClose }) => {
@@ -630,139 +574,7 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
           </div>
         </main>
 
-        <aside className="hidden min-h-0 flex-col border-l border-slate-800 bg-[#08111b]/95 xl:flex">
-          <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-800 px-4">
-            <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500"><Braces className="h-3.5 w-3.5" /> Frame inspector</span>
-            {selected && <span className="font-mono text-[9px] text-slate-600">#{selected.sequence}</span>}
-          </div>
-          {!selected ? (
-            <div className="grid flex-1 place-items-center text-[11px] text-slate-600">Chọn một frame để phân tích</div>
-          ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <section className="border-b border-slate-800 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className={`border px-2 py-1 text-[9px] font-bold uppercase tracking-wide ${selected.direction === 'master_to_slave' ? 'border-sky-500/30 bg-sky-500/10 text-sky-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'}`}>{selected.direction.replaceAll('_', ' ')}</span>
-                  <span className="text-[9px] uppercase text-slate-600">{selected.capture_quality}</span>
-                </div>
-                <div className="mt-3 font-mono text-xs font-semibold leading-5 text-slate-100">{selected.parsed?.summary || 'Unknown frame'}</div>
-                <div className="mt-1 text-[10px] text-slate-600">Source: {selected.source_id} · {selected.transport.toUpperCase()}</div>
-              </section>
-
-              <section className="border-b border-slate-800 p-4">
-                <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-600">Decoded fields</div>
-                <div className="grid grid-cols-[120px_1fr] gap-y-2 text-[10px]">
-                  <span className="text-slate-600">Message</span><span className="text-slate-300">{selected.parsed?.kind || 'unknown'}</span>
-                  <span className="text-slate-600">Unit ID</span><span className="font-mono text-cyan-300">{selected.parsed?.unit_id ?? '—'}</span>
-                  <span className="text-slate-600">Transaction ID</span><span className="font-mono text-slate-300">{selected.parsed?.transaction_id ?? '—'}</span>
-                  <span className="text-slate-600">Function</span><span className="text-slate-300">FC{selected.parsed?.function_code?.toString().padStart(2, '0')} · {selected.parsed?.function_name}</span>
-                  {selected.parsed?.sub_function != null && (
-                    <>
-                      <span className="text-slate-600">Sub-function</span>
-                      <span className="font-mono text-amber-300">0x{selected.parsed.sub_function.toString(16).padStart(4, '0').toUpperCase()}</span>
-                    </>
-                  )}
-                  {selected.parsed?.address != null && (
-                    <>
-                      <span className="text-slate-600">Address</span>
-                      <span className="font-mono text-slate-300">{selected.parsed.address}</span>
-                    </>
-                  )}
-                  {selected.parsed?.quantity != null && (
-                    <>
-                      <span className="text-slate-600">Quantity</span>
-                      <span className="font-mono text-slate-300">{selected.parsed.quantity}</span>
-                    </>
-                  )}
-                  {selected.parsed?.write_address != null && (
-                    <>
-                      <span className="text-slate-600">Write Addr / Qty</span>
-                      <span className="font-mono text-amber-300">@{selected.parsed.write_address} ×{selected.parsed.write_quantity}</span>
-                    </>
-                  )}
-                  {selected.parsed?.and_mask != null && (
-                    <>
-                      <span className="text-slate-600">AND Mask</span>
-                      <span className="font-mono text-cyan-300">0x{selected.parsed.and_mask.toString(16).padStart(4, '0').toUpperCase()} ({selected.parsed.and_mask})</span>
-                    </>
-                  )}
-                  {selected.parsed?.or_mask != null && (
-                    <>
-                      <span className="text-slate-600">OR Mask</span>
-                      <span className="font-mono text-cyan-300">0x{selected.parsed.or_mask.toString(16).padStart(4, '0').toUpperCase()} ({selected.parsed.or_mask})</span>
-                    </>
-                  )}
-                  {selected.parsed?.text_data && (
-                    <>
-                      <span className="text-slate-600">Data / Device ID</span>
-                      <span className="font-mono text-amber-300 break-all">{selected.parsed.text_data}</span>
-                    </>
-                  )}
-                  <span className="text-slate-600">Response time</span><span className="font-mono text-emerald-300">{formatLatency(selected.response_time_us)}</span>
-                  <span className="text-slate-600">Integrity</span><span className="text-slate-300">{selected.parsed?.crc_valid === false || selected.parsed?.mbap_valid === false ? 'Invalid' : 'Valid'}</span>
-                </div>
-                {(selected.parsed?.values?.length || 0) > 0 && (
-                  <div className="mt-3 border border-slate-800 bg-slate-950 p-2 font-mono text-[10px] leading-5 text-amber-200 whitespace-pre-wrap">
-                    <div className="text-[9px] uppercase tracking-wider text-slate-500 mb-1">Register Values:</div>
-                    {selected.parsed?.values?.map((v, i) => `R${i}: ${v} (0x${v.toString(16).padStart(4, '0').toUpperCase()})`).join('\n')}
-                  </div>
-                )}
-                {(selected.parsed?.engineering_values?.length || 0) > 0 && (
-                  <div className="mt-3 border border-emerald-900/40 bg-emerald-950/20 p-2.5 font-mono text-[10px]">
-                    <div className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold mb-1.5 flex items-center justify-between">
-                      <span>Biến kỹ thuật (Engineering Values):</span>
-                      <span className="text-[8px] text-emerald-500 font-normal">Profile Mapped</span>
-                    </div>
-                    <div className="space-y-1">
-                      {selected.parsed?.engineering_values?.map((ev, i) => (
-                        <div key={i} className="flex items-center justify-between border-b border-emerald-900/30 pb-1">
-                          <span className="text-slate-300 font-medium">@{ev.address} {ev.name}:</span>
-                          <span className="text-emerald-300 font-bold">{ev.value} <span className="text-emerald-500 font-normal">{ev.unit}</span></span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {(selected.parsed?.write_values?.length || 0) > 0 && (
-                  <div className="mt-2 border border-amber-900/30 bg-amber-950/20 p-2 font-mono text-[10px] leading-5 text-amber-300 whitespace-pre-wrap">
-                    <div className="text-[9px] uppercase tracking-wider text-amber-500 mb-1">Write Values:</div>
-                    {selected.parsed?.write_values?.map((v, i) => `W${i}: ${v} (0x${v.toString(16).padStart(4, '0').toUpperCase()})`).join('\n')}
-                  </div>
-                )}
-                {(selected.parsed?.bits?.length || 0) > 0 && (
-                  <div className="mt-2 border border-slate-800 bg-slate-950 p-2 font-mono text-[10px] leading-5 text-cyan-300">
-                    <div className="text-[9px] uppercase tracking-wider text-slate-500 mb-1">Bits:</div>
-                    <div className="flex flex-wrap gap-1">
-                      {selected.parsed?.bits?.map((b, i) => (
-                        <span key={i} className={`px-1.5 py-0.5 rounded text-[9px] ${b ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
-                          b{i}:{b ? '1' : '0'}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              <section className="border-b border-slate-800 p-4">
-                <div className="mb-3 flex items-center justify-between"><span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-600">Raw ADU</span><span className="text-[9px] text-slate-700">{selected.raw?.length || 0} bytes</span></div>
-                <div className="select-text break-words border border-cyan-950 bg-[#03070c] p-3 font-mono text-[11px] leading-6 tracking-wide text-cyan-200 shadow-inner">{selected.hex}</div>
-              </section>
-
-              <section className="p-4">
-                <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-600">Diagnostics</div>
-                {(selected.diagnostics?.length || 0) === 0 ? (
-                  <div className="flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/[.06] p-3 text-[10px] text-emerald-300"><ShieldCheck className="h-4 w-4" /> Không phát hiện lỗi trên frame này</div>
-                ) : selected.diagnostics?.map((item, index) => (
-                  <div key={`${item.rule_id}-${index}`} className="mb-2 border border-rose-500/20 bg-rose-500/[.06] p-3">
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-rose-300"><TriangleAlert className="h-3.5 w-3.5" /> {item.rule_id}</div>
-                    <p className="mt-1.5 text-[10px] leading-4 text-slate-400">{item.message}</p>
-                    {item.recommendation && <p className="mt-2 border-l border-amber-500/40 pl-2 text-[9px] leading-4 text-amber-200/80">{item.recommendation}</p>}
-                    <div className="mt-2 flex items-center gap-1 text-[9px] text-slate-600"><Clock3 className="h-3 w-3" /> Confidence {item.confidence}%</div>
-                  </div>
-                ))}
-              </section>
-            </div>
-          )}
-        </aside>
+        <FrameInspector selected={selected} />
       </div>
 
       <footer className="relative flex h-7 shrink-0 items-center justify-between border-t border-slate-800 bg-[#060c13] px-4 font-mono text-[9px] uppercase tracking-wider text-slate-600">
@@ -783,209 +595,27 @@ export const ProtocolAnalyzer: React.FC<ProtocolAnalyzerProps> = ({ isOpen, onCl
       )}
 
       {/* Capture Diff Analyzer Modal */}
-      {showDiffModal && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl border border-cyan-900/60 bg-[#09131d] shadow-2xl overflow-hidden">
-            <div className="flex h-12 items-center justify-between border-b border-slate-800 bg-[#0c1824] px-5">
-              <div className="flex items-center gap-2">
-                <GitCompare className="h-4 w-4 text-cyan-400" />
-                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-100">Capture Diff Analyzer · So sánh 2 phiên Modbus</h2>
-              </div>
-              <button onClick={() => setShowDiffModal(false)} className="text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="rounded border border-slate-800 bg-slate-950/80 p-3">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Tệp A: Baseline / Trước bảo trì</div>
-                  <div className="flex items-center gap-2">
-                    <input readOnly value={diffPathA} placeholder="Chưa chọn tệp A (.nxcap)..." className="h-8 flex-1 border border-slate-800 bg-slate-900 px-2.5 text-[11px] text-slate-300 truncate" />
-                    <button onClick={handleSelectDiffFileA} className="h-8 border border-cyan-800 bg-cyan-950/40 px-3 text-[11px] text-cyan-300 hover:bg-cyan-900/60 whitespace-nowrap">Chọn tệp A</button>
-                  </div>
-                </div>
-                <div className="rounded border border-slate-800 bg-slate-950/80 p-3">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Tệp B: Hiện tại / Sau bảo trì</div>
-                  <div className="flex items-center gap-2">
-                    <input readOnly value={diffPathB} placeholder="Chưa chọn tệp B (.nxcap)..." className="h-8 flex-1 border border-slate-800 bg-slate-900 px-2.5 text-[11px] text-slate-300 truncate" />
-                    <button onClick={handleSelectDiffFileB} className="h-8 border border-cyan-800 bg-cyan-950/40 px-3 text-[11px] text-cyan-300 hover:bg-cyan-900/60 whitespace-nowrap">Chọn tệp B</button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  disabled={diffLoading || !diffPathA || !diffPathB}
-                  onClick={handleRunDiff}
-                  className="flex h-9 items-center gap-2 rounded bg-cyan-600 px-4 text-xs font-bold uppercase text-white hover:bg-cyan-500 disabled:opacity-40"
-                >
-                  <GitCompare className="h-4 w-4" /> {diffLoading ? 'Đang so sánh...' : 'Bắt đầu Phân tích So sánh'}
-                </button>
-              </div>
-
-              {diffResult && (
-                <div className="mt-4 space-y-4 border-t border-slate-800 pt-4">
-                  <div className="rounded border border-cyan-900/50 bg-cyan-950/20 p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold uppercase tracking-wide text-cyan-300">Kết luận tổng quan (Verdict): {diffResult.verdict}</span>
-                      <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${diffResult.health_score_delta >= 0 ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
-                        Score Δ {diffResult.health_score_delta >= 0 ? `+${diffResult.health_score_delta}` : diffResult.health_score_delta}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[11px] text-slate-400">{diffResult.summary}</p>
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-3">
-                    <div className="rounded border border-slate-800 bg-slate-900/50 p-2.5 text-center">
-                      <div className="text-[10px] text-slate-500 uppercase">Điểm Bus Health</div>
-                      <div className="mt-1 text-base font-bold font-mono text-slate-200">
-                        {diffResult.health_score_a} → {diffResult.health_score_b}
-                      </div>
-                    </div>
-                    <div className="rounded border border-slate-800 bg-slate-900/50 p-2.5 text-center">
-                      <div className="text-[10px] text-slate-500 uppercase">Tỷ lệ lỗi (Error Rate)</div>
-                      <div className="mt-1 text-base font-bold font-mono text-slate-200">
-                        {diffResult.error_rate_a.toFixed(1)}% → {diffResult.error_rate_b.toFixed(1)}%
-                      </div>
-                    </div>
-                    <div className="rounded border border-slate-800 bg-slate-900/50 p-2.5 text-center">
-                      <div className="text-[10px] text-slate-500 uppercase">Độ trễ P95</div>
-                      <div className="mt-1 text-base font-bold font-mono text-slate-200">
-                        {formatLatency(diffResult.p95_latency_us_a)} → {formatLatency(diffResult.p95_latency_us_b)}
-                      </div>
-                    </div>
-                    <div className="rounded border border-slate-800 bg-slate-900/50 p-2.5 text-center">
-                      <div className="text-[10px] text-slate-500 uppercase">Timeout Khung tin</div>
-                      <div className="mt-1 text-base font-bold font-mono text-slate-200">
-                        {diffResult.timeout_count_a} → {diffResult.timeout_count_b}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Device Status Flags */}
-                  <div className="flex flex-wrap gap-2 text-xs">
-                    {diffResult.missing_devices.length > 0 && (
-                      <div className="rounded border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-rose-300">
-                        ⚠ Không quan sát thấy trong Capture B ({diffResult.missing_devices.length}): Unit {diffResult.missing_devices.join(', ')}
-                      </div>
-                    )}
-                    {diffResult.new_devices.length > 0 && (
-                      <div className="rounded border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-sky-300">
-                        ✦ Thiết bị mới ({diffResult.new_devices.length}): Unit {diffResult.new_devices.join(', ')}
-                      </div>
-                    )}
-                    {diffResult.regressed_devices.length > 0 && (
-                      <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-amber-300">
-                        ▼ Thiết bị suy giảm ({diffResult.regressed_devices.length}): Unit {diffResult.regressed_devices.join(', ')}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Device Comparison Matrix */}
-                  <div className="rounded border border-slate-800 overflow-hidden">
-                    <table className="w-full text-left text-[11px]">
-                      <thead className="bg-slate-950 text-slate-500 uppercase text-[9px]">
-                        <tr>
-                          <th className="px-3 py-2">Unit</th>
-                          <th className="px-3 py-2">Trạng thái</th>
-                          <th className="px-3 py-2">Điểm A → B</th>
-                          <th className="px-3 py-2">Thành công A → B</th>
-                          <th className="px-3 py-2">P95 Trễ A → B</th>
-                          <th className="px-3 py-2">Nhận xét</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800 bg-slate-900/30">
-                        {diffResult.device_diffs.map((d) => (
-                          <tr key={d.unit_id} className="hover:bg-slate-800/40">
-                            <td className="px-3 py-2 font-bold font-mono text-slate-200">Unit {d.unit_id}</td>
-                            <td className="px-3 py-2">
-                              <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase font-bold ${
-                                d.status === 'missing' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
-                                d.status === 'regressed' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                                d.status === 'new' ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' :
-                                d.status === 'improved' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
-                                'bg-slate-800 text-slate-400'
-                              }`}>
-                                {d.status}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2 font-mono">{d.health_score_a} → {d.health_score_b}</td>
-                            <td className="px-3 py-2 font-mono">{d.success_rate_a.toFixed(1)}% → {d.success_rate_b.toFixed(1)}%</td>
-                            <td className="px-3 py-2 font-mono">{formatLatency(d.p95_latency_us_a)} → {formatLatency(d.p95_latency_us_b)}</td>
-                            <td className="px-3 py-2 text-slate-400 text-[10px]">{d.remarks}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <CaptureDiffModal
+        isOpen={showDiffModal}
+        onClose={() => setShowDiffModal(false)}
+        diffPathA={diffPathA}
+        diffPathB={diffPathB}
+        onSelectDiffFileA={handleSelectDiffFileA}
+        onSelectDiffFileB={handleSelectDiffFileB}
+        onRunDiff={handleRunDiff}
+        diffLoading={diffLoading}
+        diffResult={diffResult}
+        formatLatency={formatLatency}
+      />
 
       {/* Shift Report Generator Modal */}
-      {showReportModal && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-xl border border-cyan-900/60 bg-[#09131d] shadow-2xl overflow-hidden">
-            <div className="flex h-12 items-center justify-between border-b border-slate-800 bg-[#0c1824] px-5">
-              <div className="flex items-center gap-2">
-                <FileText className="h-4 w-4 text-cyan-400" />
-                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-100">Báo cáo Sức khỏe Modbus (HTML Report)</h2>
-              </div>
-              <button onClick={() => setShowReportModal(false)} className="text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
-            </div>
-
-            <div className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="text-slate-400 font-semibold block mb-1">Tiêu đề báo cáo</label>
-                <input
-                  value={reportOpts.title}
-                  onChange={(e) => setReportOpts({ ...reportOpts, title: e.target.value })}
-                  className="w-full h-8 border border-slate-700 bg-slate-950 px-2.5 text-slate-200"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-slate-400 font-semibold block mb-1">Kỹ sư / Vận hành viên</label>
-                  <input
-                    value={reportOpts.operator}
-                    onChange={(e) => setReportOpts({ ...reportOpts, operator: e.target.value })}
-                    className="w-full h-8 border border-slate-700 bg-slate-950 px-2.5 text-slate-200"
-                  />
-                </div>
-                <div>
-                  <label className="text-slate-400 font-semibold block mb-1">Ca trực</label>
-                  <input
-                    value={reportOpts.shift}
-                    onChange={(e) => setReportOpts({ ...reportOpts, shift: e.target.value })}
-                    className="w-full h-8 border border-slate-700 bg-slate-950 px-2.5 text-slate-200"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-slate-400 font-semibold block mb-1">Ghi chú / Khu vực / Trạm điện</label>
-                <textarea
-                  rows={3}
-                  value={reportOpts.notes}
-                  onChange={(e) => setReportOpts({ ...reportOpts, notes: e.target.value })}
-                  className="w-full border border-slate-700 bg-slate-950 p-2 text-slate-200"
-                />
-              </div>
-
-              <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
-                <span className="text-[10px] text-slate-500">Định dạng HTML độc lập, tối ưu in ấn A4 (Ctrl+P / Lưu PDF)</span>
-                <button
-                  onClick={handleExportReport}
-                  className="flex h-9 items-center gap-1.5 rounded bg-emerald-600 px-4 font-bold text-white hover:bg-emerald-500"
-                >
-                  <Download className="h-4 w-4" /> Xuất Báo Cáo HTML
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <ShiftReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        reportOpts={reportOpts}
+        onChangeReportOpts={setReportOpts}
+        onExportReport={handleExportReport}
+      />
     </div>
   );
 };

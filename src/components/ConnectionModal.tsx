@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, RefreshCw, Cpu, Globe, Server, Check, HelpCircle, Radio } from 'lucide-react';
 import { ConnectionConfig, SerialPortDetail } from '../types/modbus';
+import { formatPortLabel, sortSerialPorts } from './TopQuickBar';
 
 const FieldTooltip: React.FC<{ text: string }> = ({ text }) => (
   <span className="relative group inline-flex items-center ml-1.5 align-middle cursor-help">
@@ -246,12 +247,12 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                   onChange={(e) => setSelectedPort(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
                 >
-                  {availablePorts.length === 0 ? (
+                  {sortSerialPorts(availablePorts).length === 0 ? (
                     <option value="COM1">COM1 (Không tìm thấy cổng phần cứng)</option>
                   ) : (
-                    availablePorts.map((p) => (
+                    sortSerialPorts(availablePorts).map((p) => (
                       <option key={p.port_name} value={p.port_name}>
-                        {p.port_name} {p.description ? `(${p.description})` : ''}
+                        {formatPortLabel(p)}
                       </option>
                     ))
                   )}
@@ -271,7 +272,11 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                     onChange={(e) => setBaudRate(Number(e.target.value))}
                     className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
                   >
-                    {[1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200].map((b) => (
+                    {[
+                      300, 600, 1200, 2400, 4800, 9600, 14400, 19200,
+                      28800, 38400, 56000, 57600, 115200, 128000,
+                      230400, 256000, 460800, 921600,
+                    ].map((b) => (
                       <option key={b} value={b}>
                         {b} bps
                       </option>

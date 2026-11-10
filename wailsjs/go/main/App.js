@@ -6,6 +6,10 @@ export function AutoDetectBaudrate(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['AutoDetectBaudrate'](arg1, arg2, arg3, arg4);
 }
 
+export function AutoDiscoverDevices(arg1) {
+  return window['go']['main']['App']['AutoDiscoverDevices'](arg1);
+}
+
 export function CheckNpcapStatus() {
   return window['go']['main']['App']['CheckNpcapStatus']();
 }
@@ -26,12 +30,52 @@ export function CompleteRemoteWrite(arg1, arg2) {
   return window['go']['main']['App']['CompleteRemoteWrite'](arg1, arg2);
 }
 
+export function DatalogDeleteSession(arg1) {
+  return window['go']['main']['App']['DatalogDeleteSession'](arg1);
+}
+
+export function DatalogExportCSV(arg1, arg2) {
+  return window['go']['main']['App']['DatalogExportCSV'](arg1, arg2);
+}
+
+export function DatalogGetRecords(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DatalogGetRecords'](arg1, arg2, arg3);
+}
+
+export function DatalogListSessions() {
+  return window['go']['main']['App']['DatalogListSessions']();
+}
+
+export function DatalogLogBatch(arg1, arg2) {
+  return window['go']['main']['App']['DatalogLogBatch'](arg1, arg2);
+}
+
+export function DatalogStartSession(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DatalogStartSession'](arg1, arg2, arg3);
+}
+
+export function DatalogStopSession(arg1) {
+  return window['go']['main']['App']['DatalogStopSession'](arg1);
+}
+
 export function ExportSnifferCSV() {
   return window['go']['main']['App']['ExportSnifferCSV']();
 }
 
 export function ExportSnifferHTMLReport(arg1) {
   return window['go']['main']['App']['ExportSnifferHTMLReport'](arg1);
+}
+
+export function GatewayGetStats() {
+  return window['go']['main']['App']['GatewayGetStats']();
+}
+
+export function GatewayStart(arg1) {
+  return window['go']['main']['App']['GatewayStart'](arg1);
+}
+
+export function GatewayStop() {
+  return window['go']['main']['App']['GatewayStop']();
 }
 
 export function GetDiagnosticSnifferSnapshot(arg1) {
@@ -70,6 +114,10 @@ export function LoadSnifferProfileFile() {
   return window['go']['main']['App']['LoadSnifferProfileFile']();
 }
 
+export function OpenNewInstance() {
+  return window['go']['main']['App']['OpenNewInstance']();
+}
+
 export function OpenProjectFile() {
   return window['go']['main']['App']['OpenProjectFile']();
 }
@@ -80,6 +128,34 @@ export function OpenSnifferCapture() {
 
 export function PickCaptureFile(arg1) {
   return window['go']['main']['App']['PickCaptureFile'](arg1);
+}
+
+export function RawSerialClose() {
+  return window['go']['main']['App']['RawSerialClose']();
+}
+
+export function RawSerialGetPort() {
+  return window['go']['main']['App']['RawSerialGetPort']();
+}
+
+export function RawSerialIsOpen() {
+  return window['go']['main']['App']['RawSerialIsOpen']();
+}
+
+export function RawSerialOpen(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['RawSerialOpen'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function RawSerialSend(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RawSerialSend'](arg1, arg2, arg3);
+}
+
+export function RawSerialSetDTR(arg1) {
+  return window['go']['main']['App']['RawSerialSetDTR'](arg1);
+}
+
+export function RawSerialSetRTS(arg1) {
+  return window['go']['main']['App']['RawSerialSetRTS'](arg1);
 }
 
 export function ResetSnifferBaseline() {
@@ -176,6 +252,10 @@ export function SlaveStopSim(arg1) {
 
 export function StartRemoteServer(arg1, arg2) {
   return window['go']['main']['App']['StartRemoteServer'](arg1, arg2);
+}
+
+export function StartRemoteServerWithToken(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartRemoteServerWithToken'](arg1, arg2, arg3);
 }
 
 export function StartSniffer(arg1) {

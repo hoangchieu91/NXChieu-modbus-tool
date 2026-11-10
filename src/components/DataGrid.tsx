@@ -7,6 +7,8 @@ import {
   LayoutGrid,
   ArrowUp,
   ArrowDown,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { DataFormat, RegisterRow } from '../types/modbus';
 
@@ -23,6 +25,7 @@ interface DataGridProps {
   onUpdateFormat?: (address: number, format: DataFormat) => void;
   onInlineWrite: (address: number, valueStr: string) => void;
   onToggleCoil: (address: number, currentVal: boolean) => void;
+  onToggleDisabledAddr?: (address: number, disabled: boolean) => void;
   onOpenChart?: (row: RegisterRow) => void;
   activeChartColorMap?: Record<number, string>;
 }
@@ -40,6 +43,7 @@ const DataGridView: React.FC<DataGridProps> = ({
   onUpdateFormat,
   onInlineWrite,
   onToggleCoil,
+  onToggleDisabledAddr,
   onOpenChart,
   activeChartColorMap,
 }) => {
@@ -206,6 +210,12 @@ const DataGridView: React.FC<DataGridProps> = ({
           {/* Table Header */}
           <thead className="sticky top-0 bg-slate-900 border-b border-slate-700 text-slate-300 font-semibold z-10 shadow-sm text-xs">
             <tr>
+              <th
+                className="px-2 py-2 border-r border-slate-800 w-12 text-center text-emerald-400"
+                title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)"
+              >
+                Đọc
+              </th>
               <th className="px-3 py-2 border-r border-slate-800 w-12 text-center text-slate-500">
                 #
               </th>
@@ -331,6 +341,7 @@ const DataGridView: React.FC<DataGridProps> = ({
                 }
 
                 const isSelected = selectedAddress === row.address;
+                const isRowDisabled = Boolean(row.disabled);
 
                 return (
                   <tr
@@ -338,6 +349,8 @@ const DataGridView: React.FC<DataGridProps> = ({
                     onClick={() => onSelectRow && onSelectRow(row)}
                     onDoubleClick={() => onRowDoubleClick(row)}
                     className={`hover:bg-cyan-950/20 transition-colors group cursor-pointer ${
+                      isRowDisabled ? 'opacity-50 bg-amber-950/10' : ''
+                    } ${
                       isSelected
                         ? 'bg-cyan-950/40 ring-1 ring-inset ring-cyan-500/50'
                         : idx % 2 === 0
@@ -345,6 +358,24 @@ const DataGridView: React.FC<DataGridProps> = ({
                         : 'bg-slate-900/25'
                     }`}
                   >
+                    {/* Read / Skip Toggle Checkbox */}
+                    <td
+                      className={`px-2 ${padY} border-r border-slate-800/80 text-center select-none`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!isRowDisabled}
+                        onChange={(e) => onToggleDisabledAddr && onToggleDisabledAddr(row.address, !e.target.checked)}
+                        className="accent-emerald-400 cursor-pointer"
+                        title={
+                          isRowDisabled
+                            ? `Địa chỉ ${row.address} đang bị Cấm Đọc (Né lỗi 0x02) — Nhấn để bật đọc lại`
+                            : `Tích chọn: Đọc địa chỉ ${row.address} — Bỏ tích để Cấm Đọc (tự động tách khối lệnh)`
+                        }
+                      />
+                    </td>
+
                     {/* Index & Trend Indicator */}
                     <td className={`px-2 ${padY} border-r border-slate-800/80 text-center select-none`}>
                       <div className="flex items-center justify-center space-x-1">
@@ -479,7 +510,86 @@ const DataGridView: React.FC<DataGridProps> = ({
                             >
                               {!row.hasValue ? '--' : row.rawValue ? 'ON (1)' : 'OFF (0)'}
                             </button>
+                          ) : row.control?.type === 'stepper' ? (
+                            /* 1. STEPPER CONTROLS (Up/Down Buttons) */
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                onClick={() => {
+                                  const cur = typeof row.rawValue === 'number' ? row.rawValue : parseFloat(row.displayValue) || 0;
+                                  const step = row.control?.step ?? 1;
+                                  let next = cur - step;
+                                  if (row.control?.min !== undefined && next < row.control.min) next = row.control.min;
+                                  onInlineWrite(row.address, String(next));
+                                }}
+                                title={`Giảm (-${row.control.step ?? 1})`}
+                                className="p-1 rounded bg-slate-800 hover:bg-rose-950/60 hover:text-rose-300 text-slate-400 border border-slate-700/80 transition"
+                              >
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              </button>
+                              <span
+                                onClick={() => startEdit(row)}
+                                className="font-bold font-mono text-amber-300 hover:underline cursor-pointer px-1 text-xs"
+                                title="Click để gõ số trực tiếp"
+                              >
+                                {row.displayValue}
+                              </span>
+                              <button
+                                onClick={() => {
+                                  const cur = typeof row.rawValue === 'number' ? row.rawValue : parseFloat(row.displayValue) || 0;
+                                  const step = row.control?.step ?? 1;
+                                  let next = cur + step;
+                                  if (row.control?.max !== undefined && next > row.control.max) next = row.control.max;
+                                  onInlineWrite(row.address, String(next));
+                                }}
+                                title={`Tăng (+${row.control.step ?? 1})`}
+                                className="p-1 rounded bg-slate-800 hover:bg-emerald-950/60 hover:text-emerald-300 text-slate-400 border border-slate-700/80 transition"
+                              >
+                                <ChevronUp className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : row.control?.type === 'toggle' ? (
+                            /* 2. HOLDING REGISTER TOGGLE (ON/OFF Switch) */
+                            (() => {
+                              const onVal = row.control.onValue ?? 1;
+                              const offVal = row.control.offValue ?? 0;
+                              const isCurrentlyOn = Number(row.rawValue) === onVal;
+                              return (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onInlineWrite(row.address, String(isCurrentlyOn ? offVal : onVal));
+                                  }}
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-bold transition shadow-sm ${
+                                    isCurrentlyOn
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/30'
+                                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 hover:text-slate-200'
+                                  }`}
+                                  title={`Click để chuyển sang: ${isCurrentlyOn ? `${offVal} (OFF)` : `${onVal} (ON)`}`}
+                                >
+                                  <span className={`w-2 h-2 rounded-full ${isCurrentlyOn ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-600'}`} />
+                                  <span>{isCurrentlyOn ? 'ON' : 'OFF'}</span>
+                                </button>
+                              );
+                            })()
+                          ) : row.control?.type === 'dropdown' ? (
+                            /* 3. DROPDOWN MENU */
+                            <select
+                              value={row.rawValue !== null ? String(row.rawValue) : ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                onInlineWrite(row.address, e.target.value);
+                              }}
+                              className="bg-slate-900 border border-cyan-500/60 text-cyan-300 text-xs rounded px-2 py-0.5 outline-none font-bold cursor-pointer hover:border-cyan-400"
+                            >
+                              {(row.control.options || []).map((opt, i) => (
+                                <option key={i} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
                           ) : (
+                            /* 4. DEFAULT DISPLAY CELL */
                             <div className="flex items-center justify-between group/cell cursor-pointer">
                               {!row.hasValue ? (
                                 <span className="text-slate-500 font-mono italic tracking-widest text-sm" title="Chưa đọc được dữ liệu hoặc đọc lỗi">
