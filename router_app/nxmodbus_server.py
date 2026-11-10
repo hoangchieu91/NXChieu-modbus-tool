@@ -3889,14 +3889,196 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         self.server_port = self.server_address[1]
 
 
+MDNS_HOSTNAMES = {"modbus.local", "nxmodbus.local", "gl-xe300.local", "modbus.lan", "nxmodbus.lan"}
+
+
+def _decode_dns_name(pkt: bytes, offset: int):
+    labels = []
+    jumped = False
+    orig_next = offset
+    visited = 0
+    while offset < len(pkt) and visited < 32:
+        visited += 1
+        length = pkt[offset]
+        if length == 0:
+            if not jumped:
+                orig_next = offset + 1
+            break
+        if (length & 0xC0) == 0xC0:
+            if offset + 1 >= len(pkt):
+                break
+            if not jumped:
+                orig_next = offset + 2
+            offset = ((length & 0x3F) << 8) | pkt[offset + 1]
+            jumped = True
+            continue
+        offset += 1
+        labels.append(pkt[offset:offset + length].decode("utf-8", errors="ignore").lower())
+        offset += length
+    return ".".join(labels), orig_next
+
+
+def _encode_dns_name(name: str) -> bytes:
+    out = bytearray()
+    for part in name.strip(".").split("."):
+        b = part.encode("utf-8")
+        out.append(len(b))
+        out.extend(b)
+    out.append(0)
+    return bytes(out)
+
+
+def _select_best_ip_for_sender(sender_ip: str) -> str:
+    try:
+        ifaces = get_network_interfaces()
+        sender_prefix = ".".join(sender_ip.split(".")[:3]) + "."
+        for it in ifaces:
+            ip = it.get("ip", "")
+            if ip and ip.startswith(sender_prefix) and it.get("type") not in ("frp_tunnel", "tailscale"):
+                return ip
+        for it in ifaces:
+            if it.get("device") == "br-lan" and it.get("ip"):
+                return it["ip"]
+        for it in ifaces:
+            if it.get("ip") and it.get("type") not in ("frp_tunnel", "tailscale"):
+                return it["ip"]
+    except Exception:
+        pass
+    return "192.168.10.1"
+
+
+def start_mdns_responder():
+    """
+    Bộ phản hồi mDNS (RFC 6762 — UDP 224.0.0.251:5353) tích hợp sẵn:
+    Cho phép kỹ sư gõ thẳng http://modbus.local hoặc http://modbus.local:8098
+    từ Windows, macOS, iPhone (iOS), Android, Ubuntu trong mạng LAN/Wi-Fi mà không cần nhớ IP.
+    """
+    def _mdns_worker():
+        MCAST_GRP = "224.0.0.251"
+        MCAST_PORT = 5353
+        sock = None
+        while True:
+            try:
+                if sock is None:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    if hasattr(socket, "SO_REUSEPORT"):
+                        try:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                        except Exception:
+                            pass
+                    sock.bind(("", MCAST_PORT))
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+                    sock.settimeout(25.0)
+
+                # Đăng ký nhận multicast trên toàn bộ các IP giao diện vật lý hiện có
+                joined_ips = ["0.0.0.0"]
+                for it in get_network_interfaces():
+                    ip = it.get("ip", "")
+                    if ip and it.get("type") not in ("frp_tunnel", "tailscale"):
+                        joined_ips.append(ip)
+                for j_ip in set(joined_ips):
+                    try:
+                        mreq = socket.inet_aton(MCAST_GRP) + socket.inet_aton(j_ip)
+                        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                    except Exception:
+                        pass
+
+                while True:
+                    try:
+                        data, addr = sock.recvfrom(1500)
+                    except socket.timeout:
+                        break
+                    if len(data) < 12:
+                        continue
+                    tid, flags, qdcount, ancount, _, _ = struct.unpack(">HHHHHH", data[:12])
+                    if (flags & 0x8000) != 0 or qdcount == 0:
+                        continue
+                    offset = 12
+                    matched_names = []
+                    for _ in range(min(qdcount, 8)):
+                        qname, next_off = _decode_dns_name(data, offset)
+                        if next_off + 4 > len(data):
+                            break
+                        qtype, qclass = struct.unpack(">HH", data[next_off:next_off + 4])
+                        offset = next_off + 4
+                        if qname in MDNS_HOSTNAMES and qtype in (1, 255):  # A (1) or ANY (255)
+                            matched_names.append((qname, qclass))
+
+                    if matched_names:
+                        reply_ip = _select_best_ip_for_sender(addr[0])
+                        ip_bytes = socket.inet_aton(reply_ip)
+                        ans_buf = bytearray()
+                        for qname, _ in matched_names:
+                            ans_buf.extend(_encode_dns_name(qname))
+                            # TYPE A (1), CLASS IN + Cache-Flush (0x8001), TTL 120s, RDLENGTH 4
+                            ans_buf.extend(struct.pack(">HHIH", 1, 0x8001, 120, 4))
+                            ans_buf.extend(ip_bytes)
+                        resp_hdr = struct.pack(">HHHHHH", tid, 0x8400, 0, len(matched_names), 0, 0)
+                        pkt_out = resp_hdr + bytes(ans_buf)
+                        try:
+                            sock.sendto(pkt_out, addr)
+                            sock.sendto(pkt_out, (MCAST_GRP, MCAST_PORT))
+                        except Exception:
+                            pass
+            except Exception:
+                time.sleep(5.0)
+
+    t = threading.Thread(target=_mdns_worker, daemon=True)
+    t.start()
+
+
+def start_flaky_wifi_guardian():
+    """
+    Chỉ chạy trên OpenWrt (GL-XE300):
+    Bảo vệ sóng Wi-Fi nội bộ (wlan0: NXChieu_12) không bị đứt quãng khi mang Router tới dự án
+    KHÔNG CÓ Wi-Fi hoặc Wi-Fi dự án quá yếu/chập chờn:
+    - Trên chip đơn băng tần QCA9533, nếu wlan-sta (Repeater) mất kết nối và quét kênh liên tục,
+      AP nội bộ wlan0 sẽ bị rớt mạng theo.
+    - Luồng này kiểm tra mỗi 45 giây: nếu wlan-sta không kết nối được, nó tự động giãn chu kỳ quét
+      (wpa_cli scan_interval 60) để giữ AP nội bộ luôn mượt 100%, và tự động khôi phục scan_interval 10
+      khi kết nối lại.
+    """
+    if not os.path.exists("/etc/openwrt_release"):
+        return
+
+    def _guardian_loop():
+        disconnected_streak = 0
+        while True:
+            time.sleep(45.0)
+            try:
+                if not os.path.exists("/sys/class/net/wlan-sta"):
+                    disconnected_streak = 0
+                    continue
+                st_out = os.popen("wpa_cli -i wlan-sta status 2>/dev/null").read()
+                if "wpa_state=COMPLETED" in st_out:
+                    if disconnected_streak >= 2:
+                        os.system("wpa_cli -i wlan-sta scan_interval 15 >/dev/null 2>&1")
+                    disconnected_streak = 0
+                else:
+                    disconnected_streak += 1
+                    if disconnected_streak >= 2:
+                        # Giãn chu kỳ quét của wlan-sta lên 60s để không làm nghẽn kênh AP wlan0
+                        os.system("wpa_cli -i wlan-sta scan_interval 60 >/dev/null 2>&1")
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_guardian_loop, daemon=True)
+    t.start()
+
+
 def ensure_router_remote_access_and_wg_watchdog():
     """
     Chỉ chạy trên OpenWrt (GL-XE300):
-    1. Đảm bảo cổng SSH (22), Web Admin (80), Web Studio (8098), Modbus TCP Gateways (5000:5015) và ICMP Ping
-       luôn mở trên giao diện WireGuard (wg0: 10.212.156.12) và WAN nội bộ.
-    2. Cài đặt hotplug hook /etc/hotplug.d/iface/99-nxmodbus-wg-fast-reconnect để khi cổng WAN đổi từ
-       IP tĩnh sang DHCP (hoặc đổi mạng Wi-Fi Repeater / 4G), hệ thống lập tức xóa conntrack UDP cũ
-       và ép WireGuard bắt tay lại ngay (< 3 giây) thay vì bị treo nhiều phút.
+    1. Mở tường lửa SSH (22), Web Admin (80), Web Studio (8098), Modbus TCP Gateways (5000:5015),
+       mDNS (UDP 5353) và ICMP Ping trên giao diện WireGuard (wg0) và WAN/LAN.
+    2. Cấu hình tên miền nội bộ `modbus.local`, `modbus.lan`, `nxmodbus.local` trong dnsmasq VÀ
+       Reverse Proxy trên lighttpd (cổng 80) để gõ thẳng `http://modbus.local` (không cần :8098)
+       vào thẳng giao diện NXChieu Modbus Studio Pro.
+    3. Tối ưu hóa cho dự án không có Wi-Fi hoặc Wi-Fi chập chờn:
+       - Đảm bảo `network.wan.defaultroute='1'` để cắm dây LAN/WAN hoặc SIM 4G là có mạng ngay cả khi không có Wi-Fi.
+       - Gỡ khóa cứng `wireless.sta.bssid` để Repeater tự chuyển vùng (roaming) giữa nhiều bộ phát.
+       - Tối ưu `mwan3` chuyển mạch nhanh (6 giây) và kẹp `TCPMSS` + `tcp_keepalive` chống treo kết nối.
     """
     if not os.path.exists("/etc/openwrt_release"):
         return
@@ -3907,14 +4089,91 @@ def ensure_router_remote_access_and_wg_watchdog():
             "iptables -C input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null; "
             "iptables -C input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null; "
             "iptables -C input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null; "
-            "iptables -C input_rule -p icmp -j ACCEPT 2>/dev/null || iptables -I input_rule -p icmp -j ACCEPT 2>/dev/null"
+            "iptables -C input_rule -p udp --dport 5353 -j ACCEPT 2>/dev/null || iptables -I input_rule -p udp --dport 5353 -j ACCEPT 2>/dev/null; "
+            "iptables -C input_rule -p icmp -j ACCEPT 2>/dev/null || iptables -I input_rule -p icmp -j ACCEPT 2>/dev/null; "
+            "iptables -t mangle -C POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || "
+            "iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null"
         )
         os.system(fw_cmds)
 
+        # 1. Tối ưu TCP Keepalive & Retries cho mạng Wi-Fi chập chờn / 4G LTE yếu
+        os.system(
+            "sysctl -w net.ipv4.tcp_keepalive_time=30 net.ipv4.tcp_keepalive_intvl=10 "
+            "net.ipv4.tcp_keepalive_probes=3 net.ipv4.tcp_retries2=8 >/dev/null 2>&1"
+        )
+
+        # 2. Đảm bảo cổng WAN dây (eth1) luôn có defaultroute=1 khi đi dự án không có Wi-Fi,
+        #    gỡ khóa cứng BSSID trên Repeater và tối ưu mwan3 failover nhanh (6s thay vì 40s)
+        os.system(
+            "uci set network.wan.defaultroute='1' 2>/dev/null; "
+            "uci commit network 2>/dev/null; "
+            "uci delete wireless.sta.bssid 2>/dev/null; "
+            "uci commit wireless 2>/dev/null; "
+            "for iface in wan wwan modem modem_1_1_2; do "
+            "  uci set mwan3.$iface.interval='3' 2>/dev/null; "
+            "  uci set mwan3.$iface.down='2' 2>/dev/null; "
+            "  uci set mwan3.$iface.up='2' 2>/dev/null; "
+            "done; "
+            "uci commit mwan3 2>/dev/null"
+        )
+
+        # 3. Cấu hình dnsmasq phân giải tên miền `modbus.local`, `modbus.lan`, `nxmodbus.local`, `nxmodbus.lan`
+        dns_changed = False
+        os.makedirs("/tmp/dnsmasq.d", exist_ok=True)
+        dns_conf_path = "/tmp/dnsmasq.d/nxmodbus-local.conf"
+        dns_conf_content = (
+            "address=/modbus.local/192.168.10.1\n"
+            "address=/modbus.lan/192.168.10.1\n"
+            "address=/nxmodbus.local/192.168.10.1\n"
+            "address=/nxmodbus.lan/192.168.10.1\n"
+        )
+        if not os.path.exists(dns_conf_path):
+            with open(dns_conf_path, "w") as df:
+                df.write(dns_conf_content)
+            dns_changed = True
+        if dns_changed:
+            os.system(
+                "uci set dhcp.@dnsmasq[0].local='/lan/' 2>/dev/null; "
+                "uci set dhcp.modbus_local=domain 2>/dev/null; "
+                "uci set dhcp.modbus_local.name='modbus.local' 2>/dev/null; "
+                "uci set dhcp.modbus_local.ip='192.168.10.1' 2>/dev/null; "
+                "uci set dhcp.modbus_lan=domain 2>/dev/null; "
+                "uci set dhcp.modbus_lan.name='modbus.lan' 2>/dev/null; "
+                "uci set dhcp.modbus_lan.ip='192.168.10.1' 2>/dev/null; "
+                "uci commit dhcp 2>/dev/null; "
+                "/etc/init.d/dnsmasq reload >/dev/null 2>&1 &"
+            )
+
+        # 4. Cấu hình lighttpd Reverse Proxy trên cổng 80 cho Host `modbus.local` / `modbus.lan`
+        #    (Gõ thẳng http://modbus.local không cần :8098 vẫn vào thẳng Modbus Studio!)
+        lighttpd_conf_dir = "/etc/lighttpd/conf.d"
+        if os.path.isdir(lighttpd_conf_dir):
+            vhost_path = os.path.join(lighttpd_conf_dir, "40-modbus.conf")
+            vhost_content = (
+                '$HTTP["host"] =~ "^(modbus|nxmodbus)(\\.(local|lan))?(:[0-9]+)?$" {\n'
+                '    fastcgi.server = ()\n'
+                '    cgi.assign = ()\n'
+                '    proxy.server = ( "" => ( ( "host" => "127.0.0.1", "port" => "8098" ) ) )\n'
+                '}\n'
+            )
+            need_lighttpd_reload = True
+            if os.path.exists(vhost_path):
+                try:
+                    with open(vhost_path, "r") as vf:
+                        if vf.read() == vhost_content:
+                            need_lighttpd_reload = False
+                except Exception:
+                    pass
+            if need_lighttpd_reload:
+                with open(vhost_path, "w") as vf:
+                    vf.write(vhost_content)
+                os.system("/etc/init.d/lighttpd restart >/dev/null 2>&1 &")
+
+        # 5. Hotplug tự động khôi phục nhanh WireGuard & FRP khi đổi mạng WAN/WWAN/4G
         hotplug_path = "/etc/hotplug.d/iface/99-nxmodbus-wg-fast-reconnect"
-        if os.path.isdir("/etc/hotplug.d/iface") and not os.path.exists(hotplug_path):
+        if os.path.isdir("/etc/hotplug.d/iface"):
             hotplug_script = """#!/bin/sh
-# Auto-flush stale UDP conntrack & fast-reconnect WireGuard on WAN IP change (Static <-> DHCP)
+# Auto-flush stale UDP conntrack & fast-reconnect WireGuard + FRP on WAN/WWAN/4G change
 [ "$ACTION" = "ifup" ] || [ "$ACTION" = "update" ] || exit 0
 case "$INTERFACE" in
     wan|wan6|wwan|modem*)
@@ -3931,17 +4190,20 @@ iptables -C input_rule -p tcp --dport 22 -j ACCEPT 2>/dev/null || iptables -I in
 iptables -C input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null
 iptables -C input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null
 iptables -C input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null
+iptables -C input_rule -p udp --dport 5353 -j ACCEPT 2>/dev/null || iptables -I input_rule -p udp --dport 5353 -j ACCEPT 2>/dev/null
 iptables -C input_rule -p icmp -j ACCEPT 2>/dev/null || iptables -I input_rule -p icmp -j ACCEPT 2>/dev/null
 """
             with open(hotplug_path, "w") as hf:
                 hf.write(hotplug_script)
             os.chmod(hotplug_path, 0o755)
     except Exception as e:
-        print(f"[!] WireGuard/Firewall setup warning: {e}")
+        print(f"[!] WireGuard/Firewall/mDNS setup warning: {e}")
 
 
 def main():
     ensure_router_remote_access_and_wg_watchdog()
+    start_mdns_responder()
+    start_flaky_wifi_guardian()
     state.load_persistent_config()
 
     if ch348_hub is not None:
