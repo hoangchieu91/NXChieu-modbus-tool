@@ -30,9 +30,145 @@ let firstPortSyncDone = false;
 let savedTabsHydrated = false;
 let toastTimer = null;
 
-// Mobile Native App State
+// Mobile Native App & Progressive Disclosure State
 let isMobileCardView = (typeof window !== 'undefined' && window.innerWidth <= 820);
-let isMobileConfigCollapsed = false;
+let isMobileConfigCollapsed = (typeof window !== 'undefined' && window.innerWidth <= 820);
+let isHeaderDetailsOpen = false;
+let isTabExtraToolsOpen = false;
+let isPollAdvancedOpen = false;
+let isSdHeaderToolsOpen = false;
+let isSdInspectorAdvancedOpen = false;
+let isQbPresetsOpen = false;
+
+let activeSubTabs = {
+  scanner: "range",
+  gateway: "multi",
+  datalog: "cfg",
+  aidoc: "schema",
+  sdInsp: "visual"
+};
+
+const UI_STATE_STORAGE_KEY = "nxmodbus_ui_state_v33";
+let isRestoringUiState = false;
+
+function saveUiStateToStorage() {
+  if (isRestoringUiState) return;
+  try {
+    const serializedTabs = (sessionTabs || []).map(t => ({
+      id: t.id,
+      name: t.name,
+      port: t.port,
+      baud: t.baud,
+      parity: t.parity || "N",
+      stopbits: t.stopbits || 1,
+      slave_id: t.slave_id,
+      fn_code: t.fn_code,
+      start_addr: t.start_addr,
+      count: t.count,
+      disabled_addrs: Array.isArray(t.disabled_addrs) ? t.disabled_addrs : Array.from(parseAddrRangeSet(t.disabled_addrs)),
+      only_tagged: Boolean(t.only_tagged),
+      format: t.format || "uint16",
+      scan_ms: t.scan_ms || 1000,
+      tags: t.tags || {},
+      units: t.units || {},
+      scales: t.scales || {},
+      selectedIndex: t.selectedIndex || 0
+    }));
+    const payload = {
+      currentView: currentView || "poll",
+      activeTabId: activeTabId || (serializedTabs[0] && serializedTabs[0].id) || "tab_1",
+      currentProfileName: currentProfileName || "NXChieu_MultiPort_Profile",
+      sessionTabs: serializedTabs,
+      sdStudioSelectedFilename: typeof sdStudioSelectedFilename !== 'undefined' ? sdStudioSelectedFilename : "",
+      sdStudioActiveTabIdx: typeof sdStudioActiveTabIdx !== 'undefined' ? sdStudioActiveTabIdx : 0,
+      activeSubTabs: activeSubTabs,
+      isHeaderDetailsOpen: Boolean(isHeaderDetailsOpen),
+      isTabExtraToolsOpen: Boolean(isTabExtraToolsOpen),
+      isPollAdvancedOpen: Boolean(isPollAdvancedOpen),
+      isSdHeaderToolsOpen: Boolean(isSdHeaderToolsOpen),
+      isSdInspectorAdvancedOpen: Boolean(isSdInspectorAdvancedOpen),
+      isMobileConfigCollapsed: Boolean(isMobileConfigCollapsed),
+      isMobileCardView: Boolean(isMobileCardView)
+    };
+    localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (e) {}
+}
+
+function restoreUiStateFromStorage() {
+  isRestoringUiState = true;
+  try {
+    const raw = localStorage.getItem(UI_STATE_STORAGE_KEY);
+    if (raw) {
+      const st = JSON.parse(raw);
+      if (st.currentProfileName) currentProfileName = st.currentProfileName;
+      if (Array.isArray(st.sessionTabs) && st.sessionTabs.length > 0) {
+        sessionTabs = st.sessionTabs.map((t, idx) => ({
+          id: t.id || `tab_${idx + 1}`,
+          name: t.name || `Phiên Đo ${idx + 1}`,
+          port: t.port || globalSerial.port,
+          baud: parseInt(t.baud) || 9600,
+          parity: (t.parity || "N").toUpperCase(),
+          stopbits: parseInt(t.stopbits) || 1,
+          slave_id: parseInt(t.slave_id) || 1,
+          fn_code: parseInt(t.fn_code) || 3,
+          start_addr: parseInt(t.start_addr) || 0,
+          count: Math.max(1, Math.min(250, parseInt(t.count) || 10)),
+          disabled_addrs: Array.isArray(t.disabled_addrs) ? t.disabled_addrs : [],
+          only_tagged: Boolean(t.only_tagged),
+          format: t.format || "uint16",
+          scan_ms: parseInt(t.scan_ms) || 1000,
+          isPolling: false,
+          timer: null,
+          values: [],
+          rawHexs: [],
+          lastPollState: "idle",
+          lastError: "",
+          blockErrors: [],
+          tags: t.tags || {},
+          units: t.units || {},
+          scales: t.scales || {},
+          selectedIndex: parseInt(t.selectedIndex) || 0
+        }));
+        savedTabsHydrated = true;
+      }
+      if (st.activeTabId && sessionTabs.some(x => x.id === st.activeTabId)) {
+        activeTabId = st.activeTabId;
+      } else if (sessionTabs[0]) {
+        activeTabId = sessionTabs[0].id;
+      }
+      if (typeof sdStudioSelectedFilename !== 'undefined' && st.sdStudioSelectedFilename) {
+        sdStudioSelectedFilename = st.sdStudioSelectedFilename;
+      }
+      if (typeof sdStudioActiveTabIdx !== 'undefined' && typeof st.sdStudioActiveTabIdx === 'number') {
+        sdStudioActiveTabIdx = st.sdStudioActiveTabIdx;
+      }
+      if (st.activeSubTabs && typeof st.activeSubTabs === 'object') {
+        activeSubTabs = { ...activeSubTabs, ...st.activeSubTabs };
+      }
+      if (typeof st.isHeaderDetailsOpen === 'boolean') toggleHeaderDetails(st.isHeaderDetailsOpen);
+      if (typeof st.isTabExtraToolsOpen === 'boolean') toggleTabExtraTools(st.isTabExtraToolsOpen);
+      if (typeof st.isPollAdvancedOpen === 'boolean') togglePollAdvancedDetails(st.isPollAdvancedOpen);
+      if (typeof st.isSdHeaderToolsOpen === 'boolean') toggleSdStudioHeaderTools(st.isSdHeaderToolsOpen);
+      if (typeof st.isSdInspectorAdvancedOpen === 'boolean') toggleSdInspectorAdvanced(st.isSdInspectorAdvancedOpen);
+      if (typeof st.isMobileConfigCollapsed === 'boolean') {
+        isMobileConfigCollapsed = !st.isMobileConfigCollapsed;
+        toggleMobileConfigCollapse();
+      }
+      if (st.currentView) {
+        currentView = st.currentView;
+      }
+    }
+
+    // URL hash takes priority if present (#poll, #profiles, #scanner, #trend, #gateway, #datalog, #aidoc, #system)
+    const hashView = (window.location.hash || '').replace(/^#/, '').trim();
+    const validViews = new Set(['poll', 'profiles', 'scanner', 'trend', 'gateway', 'datalog', 'aidoc', 'system']);
+    if (validViews.has(hashView)) {
+      currentView = hashView;
+    }
+  } catch (e) {} finally {
+    isRestoringUiState = false;
+  }
+}
 
 function showToast(msg) {
   const b = document.getElementById('toastBanner');
@@ -44,7 +180,66 @@ function showToast(msg) {
   toastTimer = setTimeout(() => b.classList.remove('show'), 3800);
 }
 
-// ==================== MOBILE NATIVE APP NAVIGATION & HELPERS ====================
+// ==================== PROGRESSIVE DISCLOSURE & MOBILE NAVIGATION HELPERS ====================
+function toggleHeaderDetails(forceState) {
+  const bar = document.getElementById('headerDetailsBar');
+  const arr = document.getElementById('icoHeaderDetailsArrow');
+  isHeaderDetailsOpen = (typeof forceState === 'boolean') ? forceState : !isHeaderDetailsOpen;
+  if (bar) bar.classList.toggle('open', isHeaderDetailsOpen);
+  if (arr) arr.textContent = isHeaderDetailsOpen ? '▴' : '▾';
+  saveUiStateToStorage();
+}
+
+function toggleTabExtraTools(forceState) {
+  const box = document.getElementById('tabExtraToolsBox');
+  const arr = document.getElementById('icoTabToolsArrow');
+  isTabExtraToolsOpen = (typeof forceState === 'boolean') ? forceState : !isTabExtraToolsOpen;
+  if (box) box.classList.toggle('open', isTabExtraToolsOpen);
+  if (arr) arr.textContent = isTabExtraToolsOpen ? '▴' : '▾';
+  saveUiStateToStorage();
+}
+
+function togglePollAdvancedDetails(forceState) {
+  const sec = document.getElementById('pollAdvancedSection');
+  const arr = document.getElementById('icoPollAdvArrow');
+  isPollAdvancedOpen = (typeof forceState === 'boolean') ? forceState : !isPollAdvancedOpen;
+  if (sec) sec.classList.toggle('open', isPollAdvancedOpen);
+  if (arr) arr.textContent = isPollAdvancedOpen ? '▴' : '▾';
+  saveUiStateToStorage();
+}
+
+function toggleSdStudioHeaderTools(forceState) {
+  const sec = document.getElementById('sdStudioHeaderToolsDrawer');
+  const arr = document.getElementById('icoSdHeaderToolsArrow');
+  isSdHeaderToolsOpen = (typeof forceState === 'boolean') ? forceState : !isSdHeaderToolsOpen;
+  if (sec) sec.classList.toggle('open', isSdHeaderToolsOpen);
+  if (arr) arr.textContent = isSdHeaderToolsOpen ? '▴' : '▾';
+  saveUiStateToStorage();
+}
+
+function toggleSdInspectorAdvanced(forceState) {
+  const sec = document.getElementById('sdInspectorAdvancedDrawer');
+  const arr = document.getElementById('icoSdInspAdvArrow');
+  const btn = document.getElementById('btnToggleSdInspectorAdvanced');
+  isSdInspectorAdvancedOpen = (typeof forceState === 'boolean') ? forceState : !isSdInspectorAdvancedOpen;
+  if (sec) sec.classList.toggle('open', isSdInspectorAdvancedOpen);
+  if (arr) arr.textContent = isSdInspectorAdvancedOpen ? '▴' : '▾';
+  if (btn) {
+    btn.innerHTML = isSdInspectorAdvancedOpen
+      ? '🔬 Thu Gọn Phân Tích Phụ <span id="icoSdInspAdvArrow">▴</span>'
+      : '🔬 Mở Rộng Phân Tích Khối Lệnh, Ma Trận &amp; JSON Gốc <span id="icoSdInspAdvArrow">▾</span>';
+  }
+  saveUiStateToStorage();
+}
+
+function toggleQuickBuilderPresets(forceState) {
+  const sec = document.getElementById('qbPresetsDrawer');
+  const arr = document.getElementById('icoQbPresetsArrow');
+  isQbPresetsOpen = (typeof forceState === 'boolean') ? forceState : !isQbPresetsOpen;
+  if (sec) sec.classList.toggle('open', isQbPresetsOpen);
+  if (arr) arr.textContent = isQbPresetsOpen ? '▴' : '▾';
+}
+
 function toggleMobileSidebar(forceState) {
   const sb = document.querySelector('aside.sidebar');
   const bd = document.getElementById('sidebarBackdrop');
@@ -54,17 +249,20 @@ function toggleMobileSidebar(forceState) {
   if (bd) bd.classList.toggle('open', nextState);
 }
 
-function toggleMobileConfigCollapse() {
+function toggleMobileConfigCollapse(forceState) {
   const toolbar = document.getElementById('pollConfigToolbar');
+  const advSec = document.getElementById('pollAdvancedSection');
   const btn = document.getElementById('btnMobileToggleCfg');
   if (!toolbar) return;
-  isMobileConfigCollapsed = !isMobileConfigCollapsed;
+  isMobileConfigCollapsed = (typeof forceState === 'boolean') ? forceState : !isMobileConfigCollapsed;
   toolbar.classList.toggle('mobile-collapsed', isMobileConfigCollapsed);
+  if (advSec) advSec.classList.toggle('mobile-collapsed', isMobileConfigCollapsed);
   if (btn) {
     btn.innerHTML = isMobileConfigCollapsed
-      ? '⚙️ Mở Cấu Hình Cổng & Địa Chỉ ▾'
-      : '⚙️ Thu Gọn Cấu Hình ▴';
+      ? '⚙️ Mở Cấu Hình ▾'
+      : '⚙️ Thu Gọn ▴';
   }
+  saveUiStateToStorage();
 }
 
 function toggleMobileCardMode(forceCard) {
@@ -80,6 +278,7 @@ function toggleMobileCardMode(forceCard) {
     btn.className = isMobileCardView ? 'btn btn-primary' : 'btn btn-outline';
   }
   renderTable();
+  saveUiStateToStorage();
 }
 
 // ==================== SERIAL PORT & USB RESCAN ====================
@@ -314,18 +513,23 @@ async function saveSerialConfigModal() {
 }
 
 // ==================== VIEW & SUB-TAB SWITCHERS ====================
-function showView(viewId) {
-  currentView = viewId;
+function showView(viewId, skipHashUpdate) {
+  currentView = viewId || 'poll';
   toggleMobileSidebar(false);
+
+  if (!skipHashUpdate && typeof window !== 'undefined' && window.history && window.history.replaceState) {
+    window.history.replaceState(null, '', '#' + currentView);
+  }
+  saveUiStateToStorage();
 
   document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
   const pollView = document.getElementById('view-poll');
   if (pollView) {
-    if (viewId === 'poll') {
+    if (currentView === 'poll') {
       pollView.style.display = 'flex';
     } else {
       pollView.style.display = 'none';
-      const target = document.getElementById(`view-${viewId}`);
+      const target = document.getElementById(`view-${currentView}`);
       if (target) target.classList.add('active');
     }
   }
@@ -333,31 +537,40 @@ function showView(viewId) {
   document.querySelectorAll('.sidebar .nav-btn').forEach(b => {
     b.classList.remove('active');
     const oc = b.getAttribute('onclick') || '';
-    if (oc.includes(`'${viewId}'`)) b.classList.add('active');
+    if (oc.includes(`'${currentView}'`)) b.classList.add('active');
   });
 
   document.querySelectorAll('.mobile-bottom-nav .mob-nav-item').forEach(b => {
     const targetV = b.getAttribute('data-view');
-    b.classList.toggle('active', targetV === viewId);
+    b.classList.toggle('active', targetV === currentView);
   });
 
-  if (viewId === 'scanner' && typeof renderScannerGrid === 'function') renderScannerGrid();
-  if (viewId === 'datalog' && typeof loadSessions === 'function') loadSessions();
-  if (viewId === 'trend' && typeof initTrendCanvas === 'function') initTrendCanvas();
-  if (viewId === 'aidoc' && typeof renderAiTemplatePreview === 'function') renderAiTemplatePreview(0);
-  if (viewId === 'profiles' && typeof loadSdProfileStudio === 'function') loadSdProfileStudio(false);
+  if (currentView === 'scanner' && typeof renderScannerGrid === 'function') renderScannerGrid();
+  if (currentView === 'datalog' && typeof loadSessions === 'function') loadSessions();
+  if (currentView === 'trend' && typeof initTrendCanvas === 'function') initTrendCanvas();
+  if (currentView === 'aidoc' && typeof renderAiTemplatePreview === 'function') renderAiTemplatePreview(0);
+  if (currentView === 'profiles' && typeof loadSdProfileStudio === 'function') loadSdProfileStudio(false);
 }
 
 function switchSdInspectorTab(tabKey) {
+  activeSubTabs.sdInsp = tabKey;
   ['visual', 'matrix', 'json'].forEach(k => {
     const b = document.getElementById(`btnSdInspTab_${k}`);
     const p = document.getElementById(`sdInspPane_${k}`);
     if (b) b.classList.toggle('active', k === tabKey);
-    if (p) p.classList.toggle('active', k === tabKey);
+    if (p) {
+      if (k === 'visual') {
+        p.style.display = 'none';
+      } else {
+        p.classList.toggle('active', k === tabKey);
+      }
+    }
   });
+  saveUiStateToStorage();
 }
 
 function switchScannerTab(tabKey) {
+  activeSubTabs.scanner = tabKey;
   ['range', 'autobaud', 'special', 'regmap'].forEach(k => {
     const b = document.getElementById(`btnScanTab_${k}`);
     const p = document.getElementById(`scanPane_${k}`);
@@ -366,18 +579,22 @@ function switchScannerTab(tabKey) {
   });
   const shared = document.getElementById('sharedDeviceScanResults');
   if (shared) shared.style.display = (tabKey === 'regmap') ? 'none' : 'block';
+  saveUiStateToStorage();
 }
 
 function switchGatewayTab(tabKey) {
+  activeSubTabs.gateway = tabKey;
   ['multi', 'smart', 'com2com', 'ctrl', 'net'].forEach(k => {
     const b = document.getElementById(`btnGwTab_${k}`);
     const p = document.getElementById(`gwPane_${k}`);
     if (b) b.classList.toggle('active', k === tabKey);
     if (p) p.classList.toggle('active', k === tabKey);
   });
+  saveUiStateToStorage();
 }
 
 function switchAiDocTab(tabKey) {
+  activeSubTabs.aidoc = tabKey;
   ['schema', 'templates', 'prompt', 'api'].forEach(k => {
     const b = document.getElementById(`btnAiTab_${k}`);
     const p = document.getElementById(`aiPane_${k}`);
@@ -385,9 +602,11 @@ function switchAiDocTab(tabKey) {
     if (p) p.classList.toggle('active', k === tabKey);
   });
   if (tabKey === 'templates' && typeof renderAiTemplatePreview === 'function') renderAiTemplatePreview(0);
+  saveUiStateToStorage();
 }
 
 function switchDatalogTab(tabKey) {
+  activeSubTabs.datalog = tabKey;
   ['cfg', 'files'].forEach(k => {
     const b = document.getElementById(`btnLogTab_${k}`);
     const p = document.getElementById(`logPane_${k}`);
@@ -395,6 +614,7 @@ function switchDatalogTab(tabKey) {
     if (p) p.classList.toggle('active', k === tabKey);
   });
   if (tabKey === 'files' && typeof loadSessions === 'function') loadSessions();
+  saveUiStateToStorage();
 }
 
 // ==================== SMART ADDRESS SKIPPING & SUB-BLOCK HELPERS ====================
@@ -791,6 +1011,46 @@ function selectSessionTab(tabId) {
   renderTabs();
   const t = getActiveTab();
   updateHeaderSerialBadge(t.port, t.baud, t.parity || 'N', t.stopbits || 1);
+  saveUiStateToStorage();
+}
+
+function duplicateActiveSessionTab() {
+  const src = getActiveTab();
+  if (!src) return;
+  const newId = `tab_${Date.now()}`;
+  const clone = {
+    id: newId,
+    name: `${src.name} (Bản sao)`,
+    port: src.port,
+    baud: src.baud,
+    parity: src.parity || "N",
+    stopbits: src.stopbits || 1,
+    slave_id: src.slave_id,
+    fn_code: src.fn_code,
+    start_addr: src.start_addr,
+    count: src.count,
+    disabled_addrs: Array.isArray(src.disabled_addrs) ? [...src.disabled_addrs] : Array.from(parseAddrRangeSet(src.disabled_addrs)),
+    only_tagged: Boolean(src.only_tagged),
+    format: src.format || "uint16",
+    scan_ms: src.scan_ms || 1000,
+    isPolling: false,
+    timer: null,
+    values: [],
+    rawHexs: [],
+    lastPollState: "idle",
+    lastError: "",
+    blockErrors: [],
+    tags: { ...(src.tags || {}) },
+    units: { ...(src.units || {}) },
+    scales: { ...(src.scales || {}) },
+    selectedIndex: 0
+  };
+  const idx = sessionTabs.findIndex(t => t.id === src.id);
+  sessionTabs.splice(idx >= 0 ? idx + 1 : sessionTabs.length, 0, clone);
+  activeTabId = newId;
+  renderTabs();
+  saveUiStateToStorage();
+  showToast(`Đã nhân bản Tab '${src.name}'!`);
 }
 
 function addNewSessionTab() {
@@ -824,6 +1084,7 @@ function addNewSessionTab() {
   });
   activeTabId = newId;
   renderTabs();
+  saveUiStateToStorage();
 }
 
 function closeSessionTab(tabId, ev) {
@@ -837,6 +1098,7 @@ function closeSessionTab(tabId, ev) {
     activeTabId = sessionTabs[0].id;
   }
   renderTabs();
+  saveUiStateToStorage();
 }
 
 function renameSessionTab(tabId) {
@@ -846,6 +1108,7 @@ function renameSessionTab(tabId) {
   if (newName && newName.trim()) {
     tab.name = newName.trim();
     renderTabs();
+    saveUiStateToStorage();
   }
 }
 
@@ -889,10 +1152,24 @@ function syncToolbarWithActiveTab() {
     badgeSub.title = `Các khối lệnh thực tế gửi xuống RS485: [${rangeDesc || 'Không có'}]`;
   }
 
+  const advBadge = document.getElementById('badgePollAdvSummary');
+  if (advBadge) {
+    advBadge.className = subInfo.skippedTotal > 0 ? 'badge badge-amber' : 'badge badge-cyan';
+    advBadge.textContent = subInfo.skippedTotal > 0
+      ? `${subInfo.blocks.length} khối • Né ${subInfo.skippedTotal}`
+      : `${subInfo.blocks.length} khối`;
+  }
+
   // Mobile quick summary badge
   const mobSum = document.getElementById('lblMobileQuickTabSummary');
   if (mobSum) {
-    mobSum.textContent = `${shortPortLabel(t.port)} • ${t.baud} 8${t.parity || 'N'}${t.stopbits || 1} • ID ${t.slave_id} • Addr ${t.start_addr}..${t.start_addr + t.count - 1}`;
+    mobSum.textContent = `${shortPortLabel(t.port)} • ${t.baud} 8${t.parity || 'N'}${t.stopbits || 1} • ID:${t.slave_id} • Addr:${t.start_addr}..${t.start_addr + t.count - 1}`;
+  }
+
+  const mobPollBtn = document.getElementById('btnMobileQuickPoll');
+  if (mobPollBtn) {
+    mobPollBtn.className = t.isPolling ? "btn btn-rose" : "btn btn-emerald";
+    mobPollBtn.textContent = t.isPolling ? "⏹ Dừng" : "▶ Chạy";
   }
 
   const pollBtn = document.getElementById('btnPollToggle');
@@ -919,6 +1196,7 @@ function updateActiveTabCfg(key, val) {
   syncToolbarWithActiveTab();
   renderTable();
   updateInspector();
+  saveUiStateToStorage();
 }
 
 // ==================== DATA FORMATTERS ====================
@@ -1018,7 +1296,10 @@ function renderTable() {
       <td style="color: #94a3b8;">${rawHex}</td>
       <td>${statusHtml}</td>
       <td>
-        <button class="btn btn-outline" style="padding: 2px 6px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0}); event.stopPropagation();">Ghi</button>
+        <div style="display: flex; gap: 4px; align-items: center;">
+          <button class="btn btn-outline" style="padding: 2px 6px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0}); event.stopPropagation();" title="Ghi giá trị thanh ghi ${addrDec}">Ghi</button>
+          <button class="btn btn-outline" style="padding: 2px 5px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)" title="Mở chi tiết Point Inspector (sửa Tên Tag, Đơn vị, Hệ số & xem ma trận kiểu dữ liệu)">🔍</button>
+        </div>
       </td>
     `;
     tbody.appendChild(tr);
@@ -1026,7 +1307,7 @@ function renderTable() {
     // Build Native Mobile Card HTML
     if (cardsBox) {
       cardItemsHtml.push(`
-        <div class="mobile-reg-card ${isDisabled ? 'is-disabled' : ''} ${i === t.selectedIndex ? 'selected' : ''}" onclick="selectRow(${i}, true)">
+        <div class="mobile-reg-card ${isDisabled ? 'is-disabled' : ''} ${i === t.selectedIndex ? 'selected' : ''}" onclick="selectRow(${i}, false)">
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
             <div style="display: flex; align-items: center; gap: 6px;">
               <input type="checkbox" ${!isDisabled ? 'checked' : ''} onclick="toggleAddrDisabled(${addrDec}, event)" style="width: 17px; height: 17px; accent-color: var(--emerald); cursor: pointer;">
@@ -1045,12 +1326,15 @@ function renderTable() {
             </div>
           </div>
           <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.07); padding-top: 6px; margin-top: 2px;">
-            <span style="font-family: monospace;">RAW: ${rawHex} • Hệ số: ×${scale}</span>
-            <div style="display: flex; gap: 6px;" onclick="event.stopPropagation();">
-              <button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px;" onclick="toggleAddrDisabled(${addrDec}, event)">
-                ${isDisabled ? '☑ Mở Đọc' : '🚫 Cấm Đọc'}
+            <span style="font-family: monospace;">RAW: ${rawHex} • ×${scale}</span>
+            <div style="display: flex; gap: 5px;" onclick="event.stopPropagation();">
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)">
+                🔍 Chi Tiết
               </button>
-              <button class="btn btn-primary" style="padding: 3px 10px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0})">
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="toggleAddrDisabled(${addrDec}, event)">
+                ${isDisabled ? '☑ Mở' : '🚫 Khóa'}
+              </button>
+              <button class="btn btn-primary" style="padding: 3px 9px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0})">
                 ✏️ Ghi
               </button>
             </div>
@@ -1070,15 +1354,21 @@ function renderTable() {
   }
 }
 
-function selectRow(idx, openInspectorOnMobile) {
+function selectRow(idx, openInspectorNow) {
   const t = getActiveTab();
   t.selectedIndex = idx;
   renderTable();
   updateInspector();
-  if (openInspectorOnMobile && window.innerWidth <= 820) {
+  if (openInspectorNow) {
     const insp = document.getElementById('pointInspector');
     if (insp) insp.classList.remove('collapsed');
   }
+  saveUiStateToStorage();
+}
+
+function openInspectorForRow(idx, ev) {
+  if (ev) ev.stopPropagation();
+  selectRow(idx, true);
 }
 
 // ==================== POINT INSPECTOR ====================

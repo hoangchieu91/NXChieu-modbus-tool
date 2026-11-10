@@ -23,7 +23,7 @@
   <input type="file" id="inpImportJsonFile" accept=".json,.nxmodbus" style="display: none;" onchange="handleImportJsonFile(event)">
   <input type="file" id="inpImportSdStudioBatch" accept=".json,.nxmodbus" multiple style="display: none;" onchange="handleSdStudioBatchImport(event)">
 
-  <!-- TOP HEADER -->
+  <!-- TOP HEADER (PROGRESSIVE DISCLOSURE: PRIMARY BAR + EXPANDABLE HARDWARE TELEMETRY) -->
   <header>
     <div class="brand">
       <button class="btn-mobile-menu" onclick="toggleMobileSidebar()" title="Mở Menu Điều Hướng">☰</button>
@@ -31,28 +31,38 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
       </div>
       <div class="brand-title">NXChieu <span>Modbus Studio</span> Pro</div>
-      <span class="badge badge-cyan">v3.3 Smart-Skip &amp; SD</span>
+      <span class="badge badge-cyan brand-version-badge">v3.3 Smart-Skip &amp; SD</span>
     </div>
-    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-      <div id="headerComStrip" class="com-led-strip" title="Trạng thái thời gian thực 8 cổng COM (Xanh: Đang truyền nhận • Tím: Đang mở Gateway • Nhấn để chọn/đặt tên cổng)"></div>
-      <span id="badgeCh348" class="badge badge-emerald" style="display: none; cursor: pointer;" onclick="showView('gateway')" title="Bộ mở rộng USB sang 8 cổng RS485/COM chạy độc lập song song">
-        🐙 CH348L: 8 COM
-      </span>
+    <div class="header-primary-actions">
       <span id="badgePort" class="badge badge-cyan" style="cursor: pointer;" onclick="openSerialConfigModal()" title="Nhấn để đổi Cổng Serial, Đặt tên gợi nhớ (Alias), Tốc độ Baudrate & Parity">
         <span class="pulse-dot"></span><span id="txtBadgePort">COM 1 • 9600 8N1</span> ▾
       </span>
       <button id="btnHeaderReloadUsb" class="badge badge-slate" style="cursor: pointer; background: rgba(6,182,212,0.12); color: var(--cyan); border-color: rgba(6,182,212,0.35);" onclick="triggerUsbRescan(false)" title="Quét nóng lại toàn bộ thiết bị USB-to-COM / Bộ 8 cổng vừa cắm thêm">
-        <span id="icoReloadUsb">🔄</span> Quét USB
+        <span id="icoReloadUsb">🔄</span> <span class="hide-xs">Quét USB</span>
       </button>
-      <span id="badgeLatency" class="badge badge-emerald" title="Độ trễ vòng phản hồi Modbus">Độ trễ: -- ms</span>
-      <span id="badgeBatt" class="badge badge-emerald" style="cursor: pointer;" onclick="showView('system')" title="Pin dự phòng Router GL-XE300">Pin: --%</span>
-      <span id="badgeTemp" class="badge badge-cyan" style="cursor: pointer;" onclick="showView('system')" title="Nhiệt độ thiết bị">Nhiệt: --°C</span>
-      <span id="badgeRam" class="badge badge-slate" style="cursor: pointer;" onclick="showView('system')" title="RAM trống khả dụng">RAM trống: -- MB</span>
-      <span id="badgeFlash" class="badge badge-purple" style="cursor: pointer;" onclick="showView('system')" title="Bộ nhớ Flash NAND trống (/overlay)">Flash trống: -- MB</span>
-      <span id="badgeSd" class="badge badge-emerald" style="cursor: pointer;" onclick="showView('datalog')" title="Dung lượng thẻ nhớ MicroSD trống">SD: -- GB</span>
-      <span id="badgeGateway" class="badge badge-amber" style="cursor: pointer;" onclick="showView('gateway')">Gateway: TẮT</span>
+      <button id="btnHeaderQuickProfile" class="badge badge-emerald" style="cursor: pointer; font-weight: 700;" onclick="openQuickProfileBuilderModal()" title="Tự tạo / Khai báo hồ sơ nhanh để test ngay">
+        ➕ Hồ Sơ Nhanh
+      </button>
+      <button id="btnToggleHeaderDetails" class="badge badge-slate" style="cursor: pointer; color: #e2e8f0; border-color: var(--border-light);" onclick="toggleHeaderDetails()" title="Mở rộng / Thu gọn thanh thông số phần cứng Router (8-COM LED, Pin, Nhiệt độ, RAM, Flash, Thẻ SD, Gateway)">
+        📊 <span class="hide-xs">Phần Cứng</span> <span id="icoHeaderDetailsArrow">▾</span>
+      </button>
     </div>
   </header>
+
+  <!-- SECONDARY HARDWARE TELEMETRY DRAWER (EXPANDABLE ON DEMAND) -->
+  <div id="headerDetailsBar" class="header-details-bar">
+    <div id="headerComStrip" class="com-led-strip" title="Trạng thái thời gian thực 8 cổng COM (Xanh: Đang truyền nhận • Tím: Đang mở Gateway • Nhấn để chọn/đặt tên cổng)"></div>
+    <span id="badgeCh348" class="badge badge-emerald" style="display: none; cursor: pointer;" onclick="showView('gateway')" title="Bộ mở rộng USB sang 8 cổng RS485/COM chạy độc lập song song">
+      🐙 CH348L: 8 COM
+    </span>
+    <span id="badgeLatency" class="badge badge-emerald" title="Độ trễ vòng phản hồi Modbus">Độ trễ: -- ms</span>
+    <span id="badgeBatt" class="badge badge-emerald" style="cursor: pointer;" onclick="showView('system')" title="Pin dự phòng Router GL-XE300">Pin: --%</span>
+    <span id="badgeTemp" class="badge badge-cyan" style="cursor: pointer;" onclick="showView('system')" title="Nhiệt độ thiết bị">Nhiệt: --°C</span>
+    <span id="badgeRam" class="badge badge-slate" style="cursor: pointer;" onclick="showView('system')" title="RAM trống khả dụng">RAM trống: -- MB</span>
+    <span id="badgeFlash" class="badge badge-purple" style="cursor: pointer;" onclick="showView('system')" title="Bộ nhớ Flash NAND trống (/overlay)">Flash trống: -- MB</span>
+    <span id="badgeSd" class="badge badge-emerald" style="cursor: pointer;" onclick="showView('datalog')" title="Dung lượng thẻ nhớ MicroSD trống">SD: -- GB</span>
+    <span id="badgeGateway" class="badge badge-amber" style="cursor: pointer;" onclick="showView('gateway')">Gateway: TẮT</span>
+  </div>
 
   <!-- APP BODY -->
   <div class="app-body">
@@ -109,67 +119,76 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               +Tab
             </button>
+            <button class="btn-add-tab" onclick="duplicateActiveSessionTab()" title="Nhân bản Tab đang mở">
+              📋 Nhân Bản Tab
+            </button>
           </div>
           <div class="tab-actions-right">
-            <button class="btn-add-tab" style="background: linear-gradient(135deg, rgba(16,185,129,0.28), rgba(6,182,212,0.28)); border: 1px solid var(--emerald); color: #fff; font-weight: 800; box-shadow: 0 0 10px rgba(16,185,129,0.2);" onclick="openQuickProfileBuilderModal()" title="Tự tạo / Khai báo hồ sơ nhanh để test ngay lập tức (Hỗ trợ 1-Click mẫu thiết bị & né thanh ghi cấm đọc)">
-              ➕ Khai Hồ Sơ Nhanh
-            </button>
-            <select id="selQuickSdProfile" style="max-width: 195px; padding: 4px 7px; font-size: 11px; border-color: rgba(16,185,129,0.45); color: var(--emerald); font-weight: 600;" onchange="quickLoadSdProfile(this.value)" title="Chọn để mở nhanh cấu hình JSON đã lưu bền vững trong Thẻ nhớ SD">
+            <select id="selQuickSdProfile" style="max-width: 185px; padding: 4px 7px; font-size: 11px; border-color: rgba(16,185,129,0.45); color: var(--emerald); font-weight: 600;" onchange="quickLoadSdProfile(this.value)" title="Chọn để mở nhanh cấu hình JSON đã lưu bền vững trong Thẻ nhớ SD">
               <option value="">💳 Hồ Sơ Thẻ SD (Mở nhanh)...</option>
             </select>
+            <button class="btn-add-tab" style="background: linear-gradient(135deg, rgba(16,185,129,0.28), rgba(6,182,212,0.28)); border: 1px solid var(--emerald); color: #fff; font-weight: 800;" onclick="openQuickProfileBuilderModal()" title="Tự tạo / Khai báo hồ sơ nhanh để test ngay lập tức (Hỗ trợ 1-Click mẫu thiết bị & né thanh ghi cấm đọc)">
+              ➕ Khai Hồ Sơ Nhanh
+            </button>
             <button class="btn-add-tab" style="border-color: rgba(16,185,129,0.5); color: var(--emerald);" onclick="saveCurrentProfileToSd()" title="Lưu bền vững cấu hình đang mở (các Tab, Tag, Thanh ghi cấm đọc) vào Thẻ nhớ SD">
               💾 Lưu SD
-            </button>
-            <button class="btn-add-tab" style="border-color: rgba(56,189,248,0.45); color: #38bdf8;" onclick="showView('profiles')" title="Mở Trình Quản Lý & Giải Phẫu Khoa Học Hồ Sơ Thẻ Nhớ SD (/mnt/sda1/modbus_data/profiles)">
-              📂 Kho SD
             </button>
             <button class="btn-add-tab" id="btnPollAllTabs" style="border-color: rgba(6,182,212,0.45); color: var(--cyan);" onclick="toggleAllTabsPolling()" title="Chạy hoặc dừng đồng loạt tất cả các Tab Polling">
               ▶ Chạy Tất Cả
             </button>
-            <button class="btn-add-tab" id="btnSpawn8Tabs" style="border-color: rgba(16,185,129,0.35); color: var(--emerald);" onclick="spawn8ComTabs()" title="Tạo nhanh 8 Tab tương ứng 8 cổng COM 1 → COM 8">
-              ⚡ 8 Tab
+            <button class="btn-add-tab" id="btnToggleTabTools" style="border-color: var(--border-light); color: #e2e8f0;" onclick="toggleTabExtraTools()" title="Mở rộng thêm công cụ quản lý Hồ sơ & Tab (Kho SD, Mở 8 Tab, Nhập/Xuất JSON)">
+              🛠️ Tiện Ích <span id="icoTabToolsArrow">▾</span>
             </button>
-            <button class="btn-add-tab" style="border-color: rgba(168,85,247,0.45); color: #c084fc;" onclick="document.getElementById('inpImportJsonFile').click()" title="Nạp file JSON theo dõi (.json) và tự động lưu vào Thẻ nhớ SD">
-              📥 Nhập JSON
-            </button>
-            <button class="btn-add-tab" style="border-color: rgba(245,158,11,0.45); color: var(--amber);" onclick="exportMonitoringProfileJson()" title="Tải cấu hình hiện tại ra file .json về máy tính">
-              📤 Xuất JSON
-            </button>
+            <div id="tabExtraToolsBox" class="tab-extra-tools-box">
+              <button class="btn-add-tab" style="border-color: rgba(56,189,248,0.45); color: #38bdf8;" onclick="showView('profiles')" title="Mở Trình Quản Lý & Giải Phẫu Khoa Học Hồ Sơ Thẻ Nhớ SD (/mnt/sda1/modbus_data/profiles)">
+                📂 Kho SD
+              </button>
+              <button class="btn-add-tab" id="btnSpawn8Tabs" style="border-color: rgba(16,185,129,0.35); color: var(--emerald);" onclick="spawn8ComTabs()" title="Tạo nhanh 8 Tab tương ứng 8 cổng COM 1 → COM 8">
+                ⚡ 8 Tab
+              </button>
+              <button class="btn-add-tab" style="border-color: rgba(168,85,247,0.45); color: #c084fc;" onclick="document.getElementById('inpImportJsonFile').click()" title="Nạp file JSON theo dõi (.json) và tự động lưu vào Thẻ nhớ SD">
+                📥 Nhập JSON
+              </button>
+              <button class="btn-add-tab" style="border-color: rgba(245,158,11,0.45); color: var(--amber);" onclick="exportMonitoringProfileJson()" title="Tải cấu hình hiện tại ra file .json về máy tính">
+                📤 Xuất JSON
+              </button>
+            </div>
           </div>
         </div>
 
         <!-- MOBILE QUICK SUMMARY & CONFIG COLLAPSE BAR -->
         <div class="mobile-cfg-toggle-bar">
-          <div style="display: flex; align-items: center; gap: 6px; min-width: 0;">
-            <button id="btnMobileToggleCfg" class="btn btn-outline" style="padding: 4px 9px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.4);" onclick="toggleMobileConfigCollapse()">
-              ⚙️ Thu Gọn Cấu Hình ▴
+          <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;">
+            <button id="btnMobileToggleCfg" class="btn btn-outline" style="padding: 4px 8px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.4); flex-shrink: 0;" onclick="toggleMobileConfigCollapse()">
+              ⚙️ Mở Cấu Hình ▾
             </button>
             <span id="lblMobileQuickTabSummary" style="font-size: 11px; font-family: monospace; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">COM 1 • 9600 8N1</span>
           </div>
           <div style="display: flex; align-items: center; gap: 5px; flex-shrink: 0;">
-            <button class="btn btn-emerald" style="padding: 4px 9px; font-size: 11px;" onclick="openQuickProfileBuilderModal()">➕ Khai Nhanh</button>
+            <button id="btnMobileQuickPoll" class="btn btn-emerald" style="padding: 4px 9px; font-size: 11px;" onclick="togglePolling()">▶ Chạy</button>
+            <button class="btn btn-outline" style="padding: 4px 8px; font-size: 11px; color: var(--cyan);" onclick="pollOnce()" title="Đọc 1 lần">↻</button>
           </div>
         </div>
 
-        <!-- ACTION TOOLBAR -->
+        <!-- PRIMARY ACTION TOOLBAR (CLEAN SINGLE ROW BY DEFAULT) -->
         <div class="toolbar" id="pollConfigToolbar">
           <div class="toolbar-group">
-            <div class="field-box">
+            <div class="field-box" style="min-width: 190px; max-width: 280px;">
               <label>Cổng Serial</label>
-              <select id="selPort" onchange="onToolbarSerialChange()">
+              <select id="selPort" onchange="onToolbarSerialChange()" style="width: 100%; text-overflow: ellipsis;">
                 <option value="/dev/ttyUSB1">/dev/ttyUSB1 (USB to RS485 Ngoài)</option>
                 <option value="/dev/ttyUSB0">/dev/ttyUSB0 (MCU Router Onboard)</option>
               </select>
             </div>
             <div class="field-box">
-              <label>Tốc Độ (Baudrate)</label>
+              <label>Tốc Độ (Baud)</label>
               <select id="selBaud" onchange="onToolbarSerialChange()">
                 <option value="300">300 bps</option>
                 <option value="600">600 bps</option>
                 <option value="1200">1200 bps</option>
                 <option value="2400">2400 bps</option>
                 <option value="4800">4800 bps</option>
-                <option value="9600" selected>9600 bps (Chuẩn)</option>
+                <option value="9600" selected>9600 bps</option>
                 <option value="14400">14400 bps</option>
                 <option value="19200">19200 bps</option>
                 <option value="28800">28800 bps</option>
@@ -185,55 +204,16 @@
               </select>
             </div>
             <div class="field-box">
-              <label>Khung Truyền</label>
-              <select id="selFraming" onchange="onToolbarSerialChange()">
-                <option value="N-1" selected>8N1 (None, 1 Stop)</option>
-                <option value="E-1">8E1 (Even, 1 Stop)</option>
-                <option value="O-1">8O1 (Odd, 1 Stop)</option>
-                <option value="N-2">8N2 (None, 2 Stop)</option>
-              </select>
-            </div>
-            <div class="field-box">
               <label>Slave ID</label>
-              <input type="number" id="inpSlave" value="1" min="1" max="247" style="width: 60px;" onchange="updateActiveTabCfg('slave_id', parseInt(this.value))">
-            </div>
-            <div class="field-box">
-              <label>Vùng Nhớ</label>
-              <select id="selFn" onchange="updateActiveTabCfg('fn_code', parseInt(this.value))">
-                <option value="3" selected>4x Holding (FC03)</option>
-                <option value="4">3x Input Regs (FC04)</option>
-                <option value="1">0x Coils (FC01)</option>
-                <option value="2">1x Discrete Inputs (FC02)</option>
-              </select>
+              <input type="number" id="inpSlave" value="1" min="1" max="247" style="width: 58px;" onchange="updateActiveTabCfg('slave_id', parseInt(this.value))">
             </div>
             <div class="field-box">
               <label>Địa Chỉ Đầu</label>
-              <input type="number" id="inpStartAddr" value="0" min="0" max="65535" style="width: 75px;" onchange="updateActiveTabCfg('start_addr', parseInt(this.value))">
+              <input type="number" id="inpStartAddr" value="0" min="0" max="65535" style="width: 72px;" onchange="updateActiveTabCfg('start_addr', parseInt(this.value))">
             </div>
             <div class="field-box">
               <label>Số Lượng</label>
-              <input type="number" id="inpCount" value="10" min="1" max="250" style="width: 65px;" onchange="updateActiveTabCfg('count', parseInt(this.value) || 1)">
-            </div>
-            <div class="field-box">
-              <label>Kiểu Hiển Thị</label>
-              <select id="selFormat" onchange="updateActiveTabCfg('format', this.value)">
-                <option value="uint16" selected>UInt16 (0 .. 65535)</option>
-                <option value="int16">Int16 (-32768 .. 32767)</option>
-                <option value="hex">Hex 16-bit (0x...)</option>
-                <option value="binary">Binary (16-bit)</option>
-                <option value="float_abcd">Float32 ABCD (Big Endian)</option>
-                <option value="float_cdab">Float32 CDAB (Modicon Swap)</option>
-              </select>
-            </div>
-            <div class="field-box">
-              <label>Chu Kỳ Quét</label>
-              <select id="selScanRate" onchange="updateActiveTabCfg('scan_ms', parseInt(this.value))">
-                <option value="200">200 ms</option>
-                <option value="500">500 ms</option>
-                <option value="1000" selected>1000 ms (1s)</option>
-                <option value="2000">2000 ms (2s)</option>
-                <option value="5000">5000 ms (5s)</option>
-              </select>
+              <input type="number" id="inpCount" value="10" min="1" max="250" style="width: 62px;" onchange="updateActiveTabCfg('count', parseInt(this.value) || 1)">
             </div>
           </div>
 
@@ -250,44 +230,97 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
               Ghi Giá Trị
             </button>
-            <button class="btn btn-outline" onclick="toggleInspector()" title="Bật/Tắt Point Inspector">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-              Inspector
-            </button>
             <button id="btnToggleCardTableMode" class="btn btn-outline" onclick="toggleMobileCardMode()" title="Chuyển đổi giữa chế độ Bảng (Desktop) và Thẻ Mobile Native (Điện thoại)">
               📱 Xem Thẻ Mobile
+            </button>
+            <button id="btnTogglePollAdvanced" class="btn btn-outline" style="border-color: rgba(245,158,11,0.45); color: var(--amber);" onclick="togglePollAdvancedDetails()" title="Mở rộng cấu hình phụ (Khung truyền 8N1/8E1, Vùng nhớ FC, Kiểu hiển thị, Chu kỳ quét) và thanh Né Ô Cấm Đọc (0x02)">
+              ⚙️ Chi Tiết &amp; Né Ô Cấm <span id="badgePollAdvSummary" class="badge badge-cyan" style="padding: 1px 5px; font-size: 10px;">1 khối</span> <span id="icoPollAdvArrow">▾</span>
             </button>
           </div>
         </div>
 
-        <!-- SMART SKIP FORBIDDEN REGISTERS & CONTIGUOUS SUB-BLOCK BAR -->
-        <div class="skip-bar">
-          <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 280px; flex-wrap: wrap;">
-            <span style="color: var(--amber); font-weight: 700; white-space: nowrap;" title="Các địa chỉ thanh ghi bị cấm đọc ở giữa sẽ được tách khối tự động — tuyệt đối KHÔNG gửi lệnh Modbus chạm vào các địa chỉ này">🚫 Cấm Đọc (Né Lỗi 0x02):</span>
-            <input type="text" id="inpDisabledAddrs" style="flex: 1; min-width: 180px; max-width: 360px; font-family: monospace; font-size: 11px; padding: 4px 8px; border-color: rgba(245,158,11,0.4);" placeholder="VD: 3-5, 8-10, 12 (Hoặc bỏ tích ô Đọc dưới bảng)" onchange="onDisabledAddrsInputChange(this.value)">
-            <span id="badgeSubBlocksInfo" class="badge badge-cyan" title="Hệ thống tự động chia nhỏ thành các khối thanh ghi liên tiếp hợp lệ để không bao giờ gọi vào thanh ghi bị khóa">📦 1 khối lệnh</span>
+        <!-- SECONDARY / EXPANDABLE POLL CONFIG & SMART SKIP BAR (PROGRESSIVE DISCLOSURE) -->
+        <div id="pollAdvancedSection" class="poll-advanced-section">
+          <div class="poll-secondary-toolbar">
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <div class="field-box">
+                <label>Khung Truyền</label>
+                <select id="selFraming" onchange="onToolbarSerialChange()">
+                  <option value="N-1" selected>8N1 (None, 1 Stop)</option>
+                  <option value="E-1">8E1 (Even, 1 Stop)</option>
+                  <option value="O-1">8O1 (Odd, 1 Stop)</option>
+                  <option value="N-2">8N2 (None, 2 Stop)</option>
+                </select>
+              </div>
+              <div class="field-box">
+                <label>Vùng Nhớ (Function)</label>
+                <select id="selFn" onchange="updateActiveTabCfg('fn_code', parseInt(this.value))">
+                  <option value="3" selected>4x Holding (FC03)</option>
+                  <option value="4">3x Input Regs (FC04)</option>
+                  <option value="1">0x Coils (FC01)</option>
+                  <option value="2">1x Discrete Inputs (FC02)</option>
+                </select>
+              </div>
+              <div class="field-box">
+                <label>Kiểu Hiển Thị</label>
+                <select id="selFormat" onchange="updateActiveTabCfg('format', this.value)">
+                  <option value="uint16" selected>UInt16 (0 .. 65535)</option>
+                  <option value="int16">Int16 (-32768 .. 32767)</option>
+                  <option value="hex">Hex 16-bit (0x...)</option>
+                  <option value="binary">Binary (16-bit)</option>
+                  <option value="float_abcd">Float32 ABCD (Big Endian)</option>
+                  <option value="float_cdab">Float32 CDAB (Modicon Swap)</option>
+                </select>
+              </div>
+              <div class="field-box">
+                <label>Chu Kỳ Quét</label>
+                <select id="selScanRate" onchange="updateActiveTabCfg('scan_ms', parseInt(this.value))">
+                  <option value="200">200 ms</option>
+                  <option value="500">500 ms</option>
+                  <option value="1000" selected>1000 ms (1s)</option>
+                  <option value="2000">2000 ms (2s)</option>
+                  <option value="5000">5000 ms (5s)</option>
+                </select>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <button class="btn btn-outline" onclick="toggleInspector()" title="Mở/Đóng khung Point Inspector bên phải">
+                🔍 Mở Point Inspector
+              </button>
+              <button class="btn btn-outline" onclick="toggleTrafficDrawer()" title="Mở/Đóng khung Raw Hex Communication Traffic bên dưới">
+                📡 Mở Nhật Ký Gói Tin Hex
+              </button>
+            </div>
           </div>
-          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-            <label style="display: inline-flex; align-items: center; gap: 4px; color: var(--emerald); font-size: 11px; font-weight: 600; cursor: pointer;" title="Chỉ gửi lệnh đọc các thanh ghi đã được đặt Tên Tag, tự động bỏ qua mọi thanh ghi trống ở giữa">
-              <input type="checkbox" id="chkOnlyTagged" onchange="toggleOnlyTaggedMode(this.checked)">
-              Chỉ đọc ô có Tag
-            </label>
-            <label style="display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 11px; cursor: pointer;" title="Ẩn các dòng đang bị đánh dấu Cấm Đọc khỏi bảng để bảng gọn gàng">
-              <input type="checkbox" id="chkHideDisabled" onchange="renderTable()">
-              Ẩn dòng Cấm Đọc
-            </label>
-            <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--amber); border-color: rgba(245,158,11,0.4);" onclick="disableUntaggedInActiveTab()" title="Tự động điền toàn bộ các địa chỉ chưa có tên Tag vào danh sách Cấm Đọc">
-              🚫 Khóa Ô Trống Tag
-            </button>
-            <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="enableAllInActiveTab()" title="Bật đọc lại toàn bộ các thanh ghi trong Tab này">
-              ☑ Bật Tất Cả
-            </button>
-            <button class="btn btn-outline" id="btnAutoMaskExc" style="padding: 3px 8px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.4);" onclick="autoMaskForbiddenRegisters()" title="Dò quét thực tế trên thiết bị để phát hiện và tự động khóa các thanh ghi trả về lỗi Exception 0x02">
-              🔍 Tự Dò Ô Cấm
-            </button>
-            <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #c084fc; border-color: rgba(168,85,247,0.45);" onclick="mergeSameSlaveTabs()" title="Gộp các Tab rời rạc của cùng 1 thiết bị (cùng Cổng COM + Slave ID + Vùng nhớ) thành 1 bảng duy nhất và tự động khóa các thanh ghi trống ở giữa!">
-              🧩 Gộp Tab Cùng Thiết Bị
-            </button>
+
+          <div class="skip-bar" id="pollSkipBar">
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 240px; flex-wrap: wrap;">
+              <span style="color: var(--amber); font-weight: 700; white-space: nowrap;" title="Các địa chỉ thanh ghi bị cấm đọc ở giữa sẽ được tách khối tự động — tuyệt đối KHÔNG gửi lệnh Modbus chạm vào các địa chỉ này">🚫 Cấm Đọc (Né Lỗi 0x02):</span>
+              <input type="text" id="inpDisabledAddrs" style="flex: 1; min-width: 160px; max-width: 360px; font-family: monospace; font-size: 11px; padding: 4px 8px; border-color: rgba(245,158,11,0.4);" placeholder="VD: 3-5, 8-10, 12 (Hoặc bỏ tích ô Đọc dưới bảng)" onchange="onDisabledAddrsInputChange(this.value)">
+              <span id="badgeSubBlocksInfo" class="badge badge-cyan" title="Hệ thống tự động chia nhỏ thành các khối thanh ghi liên tiếp hợp lệ để không bao giờ gọi vào thanh ghi bị khóa">📦 1 khối lệnh</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <label style="display: inline-flex; align-items: center; gap: 4px; color: var(--emerald); font-size: 11px; font-weight: 600; cursor: pointer;" title="Chỉ gửi lệnh đọc các thanh ghi đã được đặt Tên Tag, tự động bỏ qua mọi thanh ghi trống ở giữa">
+                <input type="checkbox" id="chkOnlyTagged" onchange="toggleOnlyTaggedMode(this.checked)">
+                Chỉ đọc ô có Tag
+              </label>
+              <label style="display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 11px; cursor: pointer;" title="Ẩn các dòng đang bị đánh dấu Cấm Đọc khỏi bảng để bảng gọn gàng">
+                <input type="checkbox" id="chkHideDisabled" onchange="renderTable()">
+                Ẩn dòng Cấm Đọc
+              </label>
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--amber); border-color: rgba(245,158,11,0.4);" onclick="disableUntaggedInActiveTab()" title="Tự động điền toàn bộ các địa chỉ chưa có tên Tag vào danh sách Cấm Đọc">
+                🚫 Khóa Ô Trống Tag
+              </button>
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="enableAllInActiveTab()" title="Bật đọc lại toàn bộ các thanh ghi trong Tab này">
+                ☑ Bật Tất Cả
+              </button>
+              <button class="btn btn-outline" id="btnAutoMaskExc" style="padding: 3px 8px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.4);" onclick="autoMaskForbiddenRegisters()" title="Dò quét thực tế trên thiết bị để phát hiện và tự động khóa các thanh ghi trả về lỗi Exception 0x02">
+                🔍 Tự Dò Ô Cấm
+              </button>
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #c084fc; border-color: rgba(168,85,247,0.45);" onclick="mergeSameSlaveTabs()" title="Gộp các Tab rời rạc của cùng 1 thiết bị (cùng Cổng COM + Slave ID + Vùng nhớ) thành 1 bảng duy nhất và tự động khóa các thanh ghi trống ở giữa!">
+                🧩 Gộp Tab Cùng Thiết Bị
+              </button>
+            </div>
           </div>
         </div>
 
@@ -309,7 +342,7 @@
                   <th style="width: 65px;">Hệ Số</th>
                   <th style="width: 85px;">Raw Hex</th>
                   <th style="width: 110px;">Trạng Thái</th>
-                  <th style="width: 70px;">Thao Tác</th>
+                  <th style="width: 95px;">Thao Tác</th>
                 </tr>
               </thead>
               <tbody id="tblRegisters">
@@ -318,8 +351,8 @@
             </table>
           </div>
 
-          <!-- RIGHT DRAWER: POINT INSPECTOR -->
-          <div class="inspector-drawer" id="pointInspector">
+          <!-- RIGHT DRAWER: POINT INSPECTOR (COLLAPSED BY DEFAULT SO MAIN TABLE IS NEVER COVERED) -->
+          <div class="inspector-drawer collapsed" id="pointInspector">
             <div class="inspector-header">
               <span id="inspTitle">Point Inspector #40001</span>
               <span style="cursor: pointer; opacity: 0.7;" onclick="toggleInspector()">✕</span>
@@ -380,20 +413,20 @@
           </div>
         </div>
 
-        <!-- BOTTOM DRAWER: COMMUNICATION TRAFFIC HEX LOG -->
-        <div class="traffic-drawer" id="trafficDrawer">
+        <!-- BOTTOM DRAWER: COMMUNICATION TRAFFIC HEX LOG (MINIMIZED BY DEFAULT) -->
+        <div class="traffic-drawer minimized" id="trafficDrawer">
           <div class="traffic-header" onclick="toggleTrafficDrawer()">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="color: var(--cyan); font-weight: 700;">RAW COMMUNICATION TRAFFIC</span>
-              <span id="trafficCountBadge" class="badge badge-slate">0 Gói Tin</span>
-              <span style="font-size: 11px; color: var(--text-muted);">(Nhấn để Mở rộng / Thu gọn)</span>
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden;">
+              <span style="color: var(--cyan); font-weight: 700; white-space: nowrap;">📡 RAW TRAFFIC</span>
+              <span id="trafficCountBadge" class="badge badge-slate" style="flex-shrink: 0;">0 Gói</span>
+              <span class="traffic-hint-label" style="font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">(Nhấn để Mở rộng / Thu gọn)</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 10px;" onclick="event.stopPropagation()">
-              <label style="font-size: 11px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer;">
+            <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;" onclick="event.stopPropagation()">
+              <label style="font-size: 11px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap;">
                 <input type="checkbox" id="chkAutoScroll" checked> Tự Cuộn
               </label>
-              <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px;" onclick="clearTrafficLog()">Xóa Log</button>
-              <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px;" onclick="copyTrafficLog()">Sao Chép</button>
+              <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px;" onclick="clearTrafficLog()">Xóa</button>
+              <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px;" onclick="copyTrafficLog()">Copy</button>
             </div>
           </div>
           <div class="traffic-body" id="trafficLogList">
@@ -1332,99 +1365,113 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
         </div>
       </div>
 
-      <!-- VIEW 8: SCIENTIFIC SD CARD PROFILE STUDIO & INSPECTOR -->
+      <!-- VIEW 8: SCIENTIFIC SD CARD PROFILE STUDIO & INSPECTOR (PROGRESSIVE DISCLOSURE + FULL CRUD) -->
       <div id="view-profiles" class="view-panel">
-        <!-- TOP KPI & IMPORT/EXPORT BAR -->
-        <div class="panel-card" style="padding: 14px 18px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-            <div>
-              <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                <span style="font-size: 16px; font-weight: 800; color: #fff;">💳 Kho Hồ Sơ Cấu Hình Thẻ Nhớ SD — Giải Phẫu Tường Minh &amp; Khoa Học</span>
-                <span class="badge badge-emerald" id="sdStudioPathBadge">/mnt/sda1/modbus_data/profiles</span>
-                <span class="badge badge-cyan" id="sdStudioCountBadge">0 Hồ Sơ</span>
-              </div>
-              <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-                Lưu trữ bền vững trên thẻ nhớ MicroSD • Soi chi tiết sơ đồ cổng COM, các khối lệnh liên tiếp (Contiguous Sub-Blocks), vùng địa chỉ cấm đọc (<code>disabled_addrs</code>) và chỉnh sửa trực tiếp từng Tag/Thanh ghi hoặc mã JSON gốc.
-              </div>
+        <!-- TOP PRIMARY CRUD BAR + EXPANDABLE DROPZONE/TOOLS -->
+        <div class="panel-card" style="padding: 12px 16px; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0;">
+              <span style="font-size: 15px; font-weight: 800; color: #fff;">💳 Quản Lý &amp; Soạn Thảo Hồ Sơ Thẻ Nhớ SD</span>
+              <span class="badge badge-cyan" id="sdStudioCountBadge">0 Hồ Sơ</span>
             </div>
 
-            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-              <button class="btn btn-emerald" style="font-weight: 800; box-shadow: 0 0 12px rgba(16,185,129,0.3);" onclick="openQuickProfileBuilderModal()" title="Tự tạo hồ sơ mới trực tiếp trên giao diện Web (không cần viết file JSON tay)">
-                ➕ Tự Tạo Hồ Sơ Mới Nhanh
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+              <button class="btn btn-emerald" style="font-weight: 800;" onclick="openQuickProfileBuilderModal('custom1')" title="Tạo hồ sơ mới (hỗ trợ mẫu 1-Click hoặc tự khai báo nhiều Tab)">
+                ➕ Thêm Hồ Sơ Mới
               </button>
-              <button class="btn btn-primary" onclick="document.getElementById('inpImportSdStudioBatch').click()" title="Chọn 1 hoặc nhiều file .json từ máy tính để nạp thẳng vào kho Thẻ nhớ SD">
-                📥 Import Hồ Sơ (.JSON / Nhiều File)
+              <button class="btn btn-primary" onclick="saveActiveWorkspaceFromSdStudio()" title="Lưu toàn bộ các Tab đang mở trên Bảng Dữ Liệu (Poll) thành hồ sơ trong Thẻ nhớ SD">
+                💾 Lưu Phiên Đang Mở
               </button>
-              <button class="btn btn-emerald" onclick="saveActiveWorkspaceFromSdStudio()" title="Lưu toàn bộ các Tab đang mở trên Bảng Dữ Liệu (Poll) thành hồ sơ trong Thẻ nhớ SD">
-                💾 Lưu Phiên Đang Mở Vào SD
+              <button class="btn btn-outline" style="color: #38bdf8; border-color: rgba(56,189,248,0.45);" onclick="document.getElementById('inpImportSdStudioBatch').click()" title="Chọn 1 hoặc nhiều file .json từ máy tính để nạp thẳng vào kho Thẻ nhớ SD">
+                📥 Import .JSON
               </button>
-              <button class="btn btn-outline" style="color: var(--amber); border-color: rgba(245,158,11,0.45);" onclick="exportAllSdProfilesBundle()" title="Đóng gói và tải toàn bộ các hồ sơ trong Thẻ nhớ SD về máy tính thành 1 file Backup duy nhất">
-                📦 Xuất Toàn Bộ Kho SD (Bundle)
+              <button class="btn btn-outline" id="btnToggleSdStudioHeaderTools" onclick="toggleSdStudioHeaderTools()" title="Mở rộng tiện ích phụ (Kéo thả file, Xuất Bundle Backup, Đường dẫn thư mục SD)">
+                🛠️ Tiện Ích Kho SD <span id="icoSdHeaderToolsArrow">▾</span>
               </button>
-              <button class="btn btn-outline" onclick="loadSdProfileStudio(true)">
-                🔄 Làm Mới Kho SD
-              </button>
+            </div>
+          </div>
+
+          <!-- SECONDARY EXPANDABLE TOOLS & DROPZONE -->
+          <div id="sdStudioHeaderToolsDrawer" class="collapsible-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1);">
+              <div style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span>Thư mục lưu trữ bền vững: <code id="sdStudioPathBadge" style="color: var(--emerald);">/mnt/sda1/modbus_data/profiles</code></span>
+                <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--cyan); cursor: pointer;">
+                  <input type="checkbox" id="chkSdImportAutoActivate">
+                  Tự nạp chạy lên Bảng Đo ngay khi Import file
+                </label>
+              </div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px; color: var(--amber); border-color: rgba(245,158,11,0.45);" onclick="exportAllSdProfilesBundle()">
+                  📦 Xuất Toàn Bộ Kho SD (Bundle)
+                </button>
+                <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px;" onclick="loadSdProfileStudio(true)">
+                  🔄 Làm Mới Kho SD
+                </button>
+              </div>
+            </div>
+            <div id="sdStudioDropZone" class="sd-dropzone" style="margin-top: 6px;"
+                 onclick="document.getElementById('inpImportSdStudioBatch').click()"
+                 ondragover="event.preventDefault(); this.classList.add('dragover');"
+                 ondragleave="this.classList.remove('dragover');"
+                 ondrop="handleSdStudioFileDrop(event)">
+              📥 <b>Kéo thả 1 hoặc nhiều file <code>.json</code> vào đây</b> (hoặc nhấn để chọn file từ máy tính) để nạp vào Thẻ nhớ SD
             </div>
           </div>
         </div>
 
         <!-- MASTER - DETAIL SCIENTIFIC SPLIT LAYOUT -->
         <div class="sd-studio-layout">
-          <!-- LEFT COLUMN: SD PROFILE LIBRARY CARDS & DRAG-AND-DROP IMPORT -->
-          <div class="panel-card" style="padding: 14px; gap: 12px;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 13px; font-weight: 700; color: var(--cyan);">📂 Danh Sách Hồ Sơ Trên Thẻ SD</span>
-              <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--emerald); cursor: pointer;" title="Nếu bật, khi Import file JSON sẽ đồng thời nạp luôn vào Bảng Dữ Liệu (Poll)">
-                <input type="checkbox" id="chkSdImportAutoActivate">
-                Nạp chạy ngay khi Import
-              </label>
+          <!-- LEFT COLUMN: SD PROFILE LIBRARY CARDS (PRIMARY INFO + EXPANDABLE DETAILS) -->
+          <div class="panel-card" style="padding: 12px; gap: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+              <span style="font-size: 13px; font-weight: 700; color: var(--cyan);">📂 Danh Sách Hồ Sơ SD</span>
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--emerald); border-color: rgba(16,185,129,0.4);" onclick="createNewBlankSdProfile()">
+                ➕ Tạo Trống
+              </button>
             </div>
 
-            <input type="text" id="inpSdStudioSearch" placeholder="🔍 Tìm tên hồ sơ, file .json, cổng COM..." oninput="renderSdStudioProfileCards()">
+            <input type="text" id="inpSdStudioSearch" placeholder="🔍 Tìm tên hồ sơ, cổng COM..." oninput="renderSdStudioProfileCards()">
 
-            <div id="sdStudioDropZone" class="sd-dropzone"
-                 onclick="document.getElementById('inpImportSdStudioBatch').click()"
-                 ondragover="event.preventDefault(); this.classList.add('dragover');"
-                 ondragleave="this.classList.remove('dragover');"
-                 ondrop="handleSdStudioFileDrop(event)">
-              📥 <b>Kéo thả 1 hoặc nhiều file <code>.json</code> vào đây</b> (hoặc nhấn để chọn file từ PC) để nạp vào Thẻ nhớ SD
-            </div>
-
-            <div id="sdStudioProfileList" style="display: flex; flex-direction: column; gap: 10px; max-height: 64vh; overflow-y: auto; padding-right: 2px;">
+            <div id="sdStudioProfileList" style="display: flex; flex-direction: column; gap: 8px; max-height: 68vh; overflow-y: auto; padding-right: 2px;">
               <div style="text-align: center; color: var(--text-muted); padding: 20px; font-size: 12px;">Đang tải danh sách hồ sơ từ Thẻ nhớ SD...</div>
             </div>
           </div>
 
-          <!-- RIGHT COLUMN: SCIENTIFIC PROFILE INSPECTOR & LIVE EDITOR -->
-          <div class="panel-card" style="padding: 16px; gap: 14px;" id="sdStudioDetailCard">
-            <!-- SELECTED PROFILE HEADER -->
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
-              <div>
-                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                  <span style="font-size: 16px; font-weight: 800; color: #fff;" id="lblSdInspectTitle">Chọn một hồ sơ bên trái để giải phẫu</span>
-                  <span class="badge badge-emerald" id="badgeSdInspectActive" style="display: none;">ĐANG CHẠY TRÊN POLL</span>
-                  <span class="badge badge-slate" id="badgeSdInspectMeta">--</span>
+          <!-- RIGHT COLUMN: PROFILE EDITOR & SCIENTIFIC INSPECTOR -->
+          <div class="panel-card" style="padding: 14px; gap: 12px;" id="sdStudioDetailCard">
+            <!-- SELECTED PROFILE HEADER (PRIMARY CRUD CONTROLS) -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+              <div style="min-width: 0; flex: 1;">
+                <div style="display: flex; align-items: center; gap: 7px; flex-wrap: wrap;">
+                  <span style="font-size: 15px; font-weight: 800; color: #fff; word-break: break-word;" id="lblSdInspectTitle">Chọn một hồ sơ để xem &amp; chỉnh sửa</span>
+                  <span class="badge badge-emerald" id="badgeSdInspectActive" style="display: none;">ĐANG CHẠY</span>
+                  <span class="badge badge-amber" id="badgeSdUnsaved" style="display: none;">● Chưa lưu thay đổi</span>
                 </div>
-                <div style="font-size: 11px; color: var(--cyan); font-family: monospace; margin-top: 4px;" id="lblSdInspectFilepath">
-                  /mnt/sda1/modbus_data/profiles/...
+                <div style="font-size: 11px; color: var(--text-muted); font-family: monospace; margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; word-break: break-all; overflow-wrap: anywhere;">
+                  <span id="lblSdInspectFilepath" style="color: var(--cyan); word-break: break-all;">/mnt/sda1/modbus_data/profiles/...</span>
+                  <span id="badgeSdInspectMeta">--</span>
                 </div>
               </div>
 
-              <div style="display: flex; gap: 7px; flex-wrap: wrap;">
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
                 <button class="btn btn-emerald" id="btnSdInspectActivate" onclick="activateSelectedSdProfile()" title="Nạp hồ sơ này vào Bảng Dữ Liệu (Poll) và bắt đầu làm việc ngay">
-                  ⚡ Nạp Vào Bảng Đo (Poll)
+                  ⚡ Mở Chạy Poll
                 </button>
-                <button class="btn btn-primary" id="btnSdInspectSaveEdits" onclick="saveSelectedSdProfileChanges()" title="Lưu mọi thay đổi (Đọc/Cấm đọc, Tên Tag, Đơn vị, Hệ số hoặc JSON) xuống lại file trên Thẻ nhớ SD">
-                  💾 Lưu Thay Đổi Vào SD
+                <button class="btn btn-primary" id="btnSdInspectSaveEdits" onclick="saveSelectedSdProfileChanges()" title="Lưu mọi thay đổi (Tab, Cổng COM, Đọc/Cấm đọc, Tên Tag, Đơn vị, Hệ số) xuống lại Thẻ nhớ SD">
+                  💾 Lưu Vào SD
+                </button>
+                <button class="btn btn-outline" style="color: var(--cyan); border-color: rgba(6,182,212,0.4);" onclick="openSelectedSdProfileInQuickBuilder()" title="Mở hồ sơ này trong Form Sửa Nhanh để thêm/bớt/sửa đồng loạt các Tab">
+                  ⚡ Sửa Nhanh (Form)
                 </button>
                 <button class="btn btn-outline" onclick="renameSelectedSdProfile()" title="Đổi tên hồ sơ này trên Thẻ nhớ SD">
-                  ✏️ Đổi Tên
+                  🏷️ Đổi Tên
                 </button>
                 <button class="btn btn-outline" onclick="cloneSelectedSdProfile()" title="Nhân bản hồ sơ này thành 1 bản sao mới trên Thẻ nhớ SD">
                   📋 Nhân Bản
                 </button>
                 <button class="btn btn-outline" style="color: var(--amber); border-color: rgba(245,158,11,0.45);" onclick="downloadSelectedSdProfile()" title="Tải file .json của hồ sơ đang xem về máy tính">
-                  📤 Xuất File .JSON
+                  ⬇ Xuất .JSON
                 </button>
                 <button class="btn btn-outline" style="color: var(--rose);" onclick="deleteSelectedSdProfile()" title="Xóa hồ sơ này khỏi Thẻ nhớ SD">
                   🗑️ Xóa
@@ -1432,136 +1479,167 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
               </div>
             </div>
 
-            <!-- SUMMARY KPI CARDS OF SELECTED PROFILE -->
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
-              <div style="background: rgba(15,23,42,0.65); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;">
-                <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Số Tab Thiết Bị</div>
-                <div style="font-size: 20px; font-weight: 800; color: var(--cyan); font-family: monospace; margin-top: 2px;" id="kpiSdTabs">0</div>
-                <div style="font-size: 11px; color: var(--text-muted);" id="kpiSdPorts">Cổng: --</div>
-              </div>
-              <div style="background: rgba(15,23,42,0.65); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;">
-                <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Thanh Ghi Hợp Lệ (Đọc)</div>
-                <div style="font-size: 20px; font-weight: 800; color: var(--emerald); font-family: monospace; margin-top: 2px;" id="kpiSdEnabled">0</div>
-                <div style="font-size: 11px; color: var(--text-muted);" id="kpiSdTagged">0 điểm có tên Tag</div>
-              </div>
-              <div style="background: rgba(15,23,42,0.65); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;">
-                <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Thanh Ghi Cấm Đọc (Né)</div>
-                <div style="font-size: 20px; font-weight: 800; color: var(--amber); font-family: monospace; margin-top: 2px;" id="kpiSdDisabled">0</div>
-                <div style="font-size: 11px; color: var(--text-muted);">Chống lỗi Exception 0x02</div>
-              </div>
-              <div style="background: rgba(15,23,42,0.65); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;">
-                <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Tổng Khối Lệnh RTU</div>
-                <div style="font-size: 20px; font-weight: 800; color: #c084fc; font-family: monospace; margin-top: 2px;" id="kpiSdSubBlocks">0</div>
-                <div style="font-size: 11px; color: var(--text-muted);">Contiguous Sub-Blocks</div>
-              </div>
-            </div>
-
-            <!-- SUB-TABS INSIDE INSPECTOR: VISUAL BREAKDOWN vs OVERVIEW MATRIX vs RAW JSON -->
-            <div class="subtab-bar">
-              <button id="btnSdInspTab_visual" class="subtab-btn active" onclick="switchSdInspectorTab('visual')">
-                🔬 Giải Phẫu Từng Tab, Khối Lệnh &amp; Bảng Thanh Ghi
-              </button>
-              <button id="btnSdInspTab_matrix" class="subtab-btn" onclick="switchSdInspectorTab('matrix')">
-                📊 Bảng Tổng Hợp Toàn Bộ Các Tab &amp; Cổng COM
-              </button>
-              <button id="btnSdInspTab_json" class="subtab-btn" onclick="switchSdInspectorTab('json')">
-                📝 Mã Nguồn JSON &amp; Chỉnh Sửa Trực Tiếp
-              </button>
-            </div>
-
-            <!-- PANE 1: VISUAL TAB & REGISTER INSPECTOR -->
-            <div id="sdInspPane_visual" class="subtab-pane active">
-              <!-- PORT ALIASES BAR -->
-              <div id="sdInspectAliasesBox" style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;"></div>
-
-              <!-- TAB SELECTOR CHIPS -->
-              <div style="display: flex; flex-direction: column; gap: 6px;">
-                <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Chọn Tab Thiết Bị Trong Hồ Sơ Để Xem &amp; Chỉnh Sửa Thanh Ghi:</div>
-                <div id="sdInspectTabChips" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
-              </div>
-
-              <!-- SELECTED TAB ARCHITECTURE & SUB-BLOCK DIAGRAM -->
-              <div id="sdInspectActiveTabSummary" style="background: rgba(15,23,42,0.8); border: 1px solid rgba(6,182,212,0.3); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;">
-                <div style="color: var(--text-muted); font-size: 12px;">Hãy chọn một hồ sơ bên trái.</div>
-              </div>
-
-              <!-- FILTER & REGISTER TABLE OF SELECTED TAB IN PROFILE -->
-              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                  <span style="font-size: 12px; font-weight: 700; color: #fff;">Bảng Thanh Ghi Trong Tab Này:</span>
-                  <select id="selSdInspRegFilter" style="padding: 4px 8px; font-size: 11px;" onchange="renderSdInspectorRegisterTable()">
-                    <option value="all">Hiển thị tất cả thanh ghi (Đọc + Cấm đọc)</option>
-                    <option value="tagged">Chỉ hiện thanh ghi đã gắn Tên Tag</option>
-                    <option value="enabled">Chỉ hiện thanh ghi Được Đọc (☑)</option>
-                    <option value="disabled">Chỉ hiện thanh ghi Cấm Đọc (🚫)</option>
-                  </select>
-                  <input type="text" id="inpSdInspRegSearch" placeholder="🔍 Lọc theo địa chỉ, HEX, tên Tag..." style="padding: 4px 8px; font-size: 11px; width: 220px;" oninput="renderSdInspectorRegisterTable()">
-                </div>
-                <div style="display: flex; gap: 6px;">
-                  <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--amber); border-color: rgba(245,158,11,0.4);" onclick="sdInspectorMaskUntaggedInTab()" title="Tự động đánh dấu Cấm Đọc cho toàn bộ các thanh ghi chưa có tên Tag trong Tab này">
-                    🚫 Khóa Ô Trống Tag
+            <!-- PRIMARY CONTENT: TAB CHIPS + ACTIVE TAB CONFIG + REGISTER TABLE -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Danh Sách Nhánh / Thiết Bị (Tab) Trong Hồ Sơ:</span>
+                <div style="display: flex; gap: 5px; flex-wrap: wrap;">
+                  <button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px; color: var(--emerald); border-color: rgba(16,185,129,0.45);" onclick="sdInspectorAddNewTab()">
+                    ➕ Thêm Tab
                   </button>
-                  <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="sdInspectorEnableAllInTab()" title="Bật đọc tất cả thanh ghi trong Tab này">
-                    ☑ Bật Tất Cả
+                  <button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px; color: var(--cyan);" onclick="sdInspectorCloneActiveTab()">
+                    📋 Nhân Bản Tab
+                  </button>
+                  <button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px; color: var(--rose);" onclick="sdInspectorDeleteActiveTab()">
+                    🗑️ Xóa Tab
                   </button>
                 </div>
               </div>
-
-              <div style="max-height: 440px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 55px; text-align: center;">Đọc</th>
-                      <th style="width: 42px;">#</th>
-                      <th style="width: 82px;">Địa Chỉ DEC</th>
-                      <th style="width: 72px;">HEX</th>
-                      <th style="width: 82px;">PLC Addr</th>
-                      <th style="min-width: 190px;">Tên Gợi Nhớ (Alias / Tag)</th>
-                      <th style="width: 75px;">Đơn Vị</th>
-                      <th style="width: 80px;">Hệ Số Scale</th>
-                      <th style="width: 135px;">Trạng Thái / Khối Lệnh</th>
-                    </tr>
-                  </thead>
-                  <tbody id="tblSdInspectorRegisters">
-                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Chưa chọn hồ sơ.</td></tr>
-                  </tbody>
-                </table>
-              </div>
+              <div id="sdInspectTabChips" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
             </div>
 
-            <!-- PANE 2: ALL TABS & SUB-BLOCKS MATRIX -->
-            <div id="sdInspPane_matrix" class="subtab-pane">
-              <div style="max-height: 560px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 38px;">#</th>
-                      <th>Tên Tab Thiết Bị</th>
-                      <th>Cổng COM &amp; Khung</th>
-                      <th>Slave &amp; FC</th>
-                      <th>Dải Địa Chỉ</th>
-                      <th>Tổng / Có Tag / Né</th>
-                      <th>Sơ Đồ Tách Khối Lệnh Hợp Lệ (Contiguous Sub-Blocks)</th>
-                    </tr>
-                  </thead>
-                  <tbody id="tblSdInspectorAllTabsMatrix">
-                    <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">Chưa chọn hồ sơ.</td></tr>
-                  </tbody>
-                </table>
-              </div>
+            <!-- ACTIVE TAB PRIMARY PARAMETER EDITOR -->
+            <div id="sdInspectActiveTabSummary" style="background: rgba(15,23,42,0.8); border: 1px solid rgba(6,182,212,0.3); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+              <div style="color: var(--text-muted); font-size: 12px;">Hãy chọn một hồ sơ bên trái.</div>
             </div>
 
-            <!-- PANE 3: RAW JSON EDITOR -->
-            <div id="sdInspPane_json" class="subtab-pane">
-              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-                <span style="font-size: 12px; color: var(--text-muted);">Bạn có thể chỉnh sửa trực tiếp cấu trúc JSON của hồ sơ này và nhấn <b>💾 Lưu JSON Vào Thẻ SD</b>:</span>
-                <div style="display: flex; gap: 8px;">
-                  <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px;" onclick="formatSdInspectorJson()">✨ Làm Đẹp JSON (Format)</button>
-                  <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px;" onclick="copySdInspectorJson()">📋 Sao Chép JSON</button>
-                  <button class="btn btn-emerald" style="padding: 4px 12px; font-size: 11px;" onclick="saveSdInspectorRawJson()">💾 Lưu JSON Vào Thẻ SD</button>
+            <!-- PROGRESSIVE DISCLOSURE TOGGLE FOR SECONDARY / ADVANCED PROFILE DETAILS -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; background: rgba(6,182,212,0.06); border: 1px dashed rgba(6,182,212,0.3); border-radius: 8px; padding: 7px 12px;">
+              <div style="font-size: 11px; color: #cbd5e1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span>🔬 <b>Chi Tiết Phụ &amp; Giải Phẫu Chuyên Sâu:</b></span>
+                <span id="lblSdCompactKpiSummary" style="color: var(--cyan); font-family: monospace;">--</span>
+              </div>
+              <button class="btn btn-outline" id="btnToggleSdInspectorAdvanced" style="padding: 4px 10px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.45);" onclick="toggleSdInspectorAdvanced()">
+                🔬 Mở Rộng Phân Tích Khối Lệnh, Ma Trận &amp; JSON Gốc <span id="icoSdInspAdvArrow">▾</span>
+              </button>
+            </div>
+
+            <!-- SECONDARY EXPANDABLE SECTION: KPI CARDS, PORT ALIASES, SUB-BLOCKS FLOW, MATRIX & RAW JSON -->
+            <div id="sdInspectorAdvancedDrawer" class="collapsible-section">
+              <div style="display: flex; flex-direction: column; gap: 12px; padding: 10px; background: rgba(2,6,23,0.55); border: 1px solid var(--border); border-radius: 10px;">
+                <!-- SUMMARY KPI CARDS OF SELECTED PROFILE -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">
+                  <div style="background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;">
+                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Số Tab Thiết Bị</div>
+                    <div style="font-size: 18px; font-weight: 800; color: var(--cyan); font-family: monospace;" id="kpiSdTabs">0</div>
+                    <div style="font-size: 10px; color: var(--text-muted);" id="kpiSdPorts">Cổng: --</div>
+                  </div>
+                  <div style="background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;">
+                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Thanh Ghi Đọc</div>
+                    <div style="font-size: 18px; font-weight: 800; color: var(--emerald); font-family: monospace;" id="kpiSdEnabled">0</div>
+                    <div style="font-size: 10px; color: var(--text-muted);" id="kpiSdTagged">0 điểm có Tag</div>
+                  </div>
+                  <div style="background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;">
+                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Thanh Ghi Cấm Đọc</div>
+                    <div style="font-size: 18px; font-weight: 800; color: var(--amber); font-family: monospace;" id="kpiSdDisabled">0</div>
+                    <div style="font-size: 10px; color: var(--text-muted);">Né Exception 0x02</div>
+                  </div>
+                  <div style="background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;">
+                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Tổng Khối Lệnh RTU</div>
+                    <div style="font-size: 18px; font-weight: 800; color: #c084fc; font-family: monospace;" id="kpiSdSubBlocks">0</div>
+                    <div style="font-size: 10px; color: var(--text-muted);">Contiguous Sub-Blocks</div>
+                  </div>
+                </div>
+
+                <!-- PORT ALIASES BAR -->
+                <div id="sdInspectAliasesBox" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;"></div>
+
+                <!-- SUB-BLOCKS VISUAL FLOW OF ACTIVE TAB -->
+                <div id="sdInspectSubBlocksDetailBox" style="display: flex; flex-direction: column; gap: 6px; background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;"></div>
+
+                <!-- SUB-TABS FOR ALL-TABS MATRIX vs RAW JSON EDITOR -->
+                <div class="subtab-bar" style="padding-bottom: 6px;">
+                  <button id="btnSdInspTab_visual" class="subtab-btn active" onclick="switchSdInspectorTab('visual')">
+                    🔬 Ẩn Bảng Phụ
+                  </button>
+                  <button id="btnSdInspTab_matrix" class="subtab-btn" onclick="switchSdInspectorTab('matrix')">
+                    📊 Ma Trận Tổng Hợp Tất Cả Các Tab
+                  </button>
+                  <button id="btnSdInspTab_json" class="subtab-btn" onclick="switchSdInspectorTab('json')">
+                    📝 Chỉnh Sửa Mã Nguồn JSON Gốc
+                  </button>
+                </div>
+
+                <div id="sdInspPane_visual" class="subtab-pane active" style="display: none;"></div>
+
+                <!-- PANE 2: ALL TABS & SUB-BLOCKS MATRIX -->
+                <div id="sdInspPane_matrix" class="subtab-pane">
+                  <div style="max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; max-width: 100%;">
+                    <table class="data-table">
+                      <thead>
+                        <tr>
+                          <th style="width: 38px;">#</th>
+                          <th>Tên Tab Thiết Bị</th>
+                          <th>Cổng COM &amp; Khung</th>
+                          <th>Slave &amp; FC</th>
+                          <th>Dải Địa Chỉ</th>
+                          <th>Tổng / Có Tag / Né</th>
+                          <th>Sơ Đồ Tách Khối Lệnh Hợp Lệ (Contiguous Sub-Blocks)</th>
+                        </tr>
+                      </thead>
+                      <tbody id="tblSdInspectorAllTabsMatrix">
+                        <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">Chưa chọn hồ sơ.</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- PANE 3: RAW JSON EDITOR -->
+                <div id="sdInspPane_json" class="subtab-pane">
+                  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <span style="font-size: 12px; color: var(--text-muted);">Chỉnh sửa trực tiếp cấu trúc JSON của hồ sơ và nhấn <b>💾 Lưu JSON Vào Thẻ SD</b>:</span>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                      <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px;" onclick="formatSdInspectorJson()">✨ Format JSON</button>
+                      <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px;" onclick="copySdInspectorJson()">📋 Copy JSON</button>
+                      <button class="btn btn-emerald" style="padding: 4px 12px; font-size: 11px;" onclick="saveSdInspectorRawJson()">💾 Lưu JSON Vào Thẻ SD</button>
+                    </div>
+                  </div>
+                  <textarea id="txtSdInspectorRawJson" rows="16" style="width: 100%; background: #030712; color: #a7f3d0; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; line-height: 1.5; resize: vertical;"></textarea>
                 </div>
               </div>
-              <textarea id="txtSdInspectorRawJson" rows="22" style="width: 100%; background: #030712; color: #a7f3d0; border: 1px solid var(--border-light); border-radius: 8px; padding: 12px; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; line-height: 1.5; resize: vertical;"></textarea>
+            </div>
+
+            <!-- PRIMARY REGISTER & TAG TABLE OF SELECTED TAB (ALWAYS VISIBLE) -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span style="font-size: 12px; font-weight: 700; color: #fff;">📋 Bảng Thanh Ghi &amp; Tên Tag Của Tab Đang Chọn:</span>
+                <select id="selSdInspRegFilter" style="padding: 4px 8px; font-size: 11px;" onchange="renderSdInspectorRegisterTable()">
+                  <option value="all">Hiển thị tất cả (Đọc + Cấm đọc)</option>
+                  <option value="tagged">Chỉ hiện ô đã có Tên Tag</option>
+                  <option value="enabled">Chỉ hiện ô Được Đọc (☑)</option>
+                  <option value="disabled">Chỉ hiện ô Cấm Đọc (🚫)</option>
+                </select>
+                <input type="text" id="inpSdInspRegSearch" placeholder="🔍 Lọc địa chỉ, HEX, tên Tag..." style="padding: 4px 8px; font-size: 11px; width: 190px; max-width: 100%;" oninput="renderSdInspectorRegisterTable()">
+              </div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--amber); border-color: rgba(245,158,11,0.4);" onclick="sdInspectorMaskUntaggedInTab()" title="Tự động đánh dấu Cấm Đọc cho toàn bộ các thanh ghi chưa có tên Tag trong Tab này">
+                  🚫 Khóa Ô Trống Tag
+                </button>
+                <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="sdInspectorEnableAllInTab()" title="Bật đọc tất cả thanh ghi trong Tab này">
+                  ☑ Bật Tất Cả
+                </button>
+              </div>
+            </div>
+
+            <div style="max-height: 460px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; max-width: 100%;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th style="width: 50px; text-align: center;">Đọc</th>
+                    <th style="width: 38px;">#</th>
+                    <th style="width: 76px;">Địa Chỉ DEC</th>
+                    <th style="width: 68px;">HEX</th>
+                    <th style="width: 76px;">PLC Addr</th>
+                    <th style="min-width: 170px;">Tên Gợi Nhớ (Alias / Tag)</th>
+                    <th style="width: 72px;">Đơn Vị</th>
+                    <th style="width: 76px;">Hệ Số Scale</th>
+                    <th style="width: 130px;">Khối Lệnh</th>
+                  </tr>
+                </thead>
+                <tbody id="tblSdInspectorRegisters">
+                  <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Chưa chọn hồ sơ.</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -1697,17 +1775,35 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
     <div class="modal-box" style="width: 960px; max-width: 96vw; max-height: 92dvh;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-          <span style="font-size: 15px; font-weight: 800; color: #fff;">➕ Tự Tạo &amp; Khai Báo Hồ Sơ Nhanh (Test Nhanh Hiện Trường &amp; Lưu Thẻ SD)</span>
+          <span style="font-size: 14px; font-weight: 800; color: #fff;" id="lblQbModalTitle">➕ Tạo &amp; Chỉnh Sửa Hồ Sơ Nhanh</span>
           <span class="badge badge-emerald" id="badgeQbTabCount">1 Tab Thiết Bị</span>
         </div>
         <span style="cursor: pointer; font-size: 16px;" onclick="closeQuickProfileBuilderModal()">✕</span>
       </div>
-      <div class="modal-body" style="gap: 12px;">
-        <!-- 1-CLICK FIELD PRESETS -->
-        <div style="background: rgba(6,182,212,0.07); border: 1px solid rgba(6,182,212,0.28); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+      <div class="modal-body" style="gap: 10px;">
+        <!-- PROFILE NAME & PRIMARY ACTIONS -->
+        <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; background: rgba(15,23,42,0.75); border: 1px solid var(--border); padding: 10px 12px; border-radius: 10px;">
+          <div class="field-box" style="flex: 1; min-width: 190px;">
+            <label>Tên Hồ Sơ (Lưu thành file .json trong Thẻ nhớ SD)</label>
+            <input type="text" id="inpQbProfileName" value="Test_Nhanh_Hien_Truong" placeholder="VD: Tu_Dien_MSB_Tang_1" style="font-weight: 700; color: var(--cyan); font-size: 13px;">
+          </div>
+          <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--emerald); font-weight: 600; cursor: pointer; padding-bottom: 5px;">
+            <input type="checkbox" id="chkQbAutoStartPoll" checked style="width: 15px; height: 15px; accent-color: var(--emerald);">
+            Tự chạy Polling ngay
+          </label>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button class="btn btn-primary" style="padding: 5px 10px; font-size: 11px;" onclick="addQuickBuilderTabRow()">➕ Thêm Tab</button>
+            <button class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.4);" onclick="toggleQuickBuilderPresets()">
+              ⚡ Mẫu Thiết Bị &amp; Nạp Tab <span id="icoQbPresetsArrow">▾</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 1-CLICK FIELD PRESETS (COLLAPSIBLE PROGRESSIVE DISCLOSURE) -->
+        <div id="qbPresetsDrawer" class="collapsible-section" style="background: rgba(6,182,212,0.07); border: 1px solid rgba(6,182,212,0.28); border-radius: 10px; padding: 10px 12px; flex-direction: column; gap: 8px;">
           <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
-            <span style="font-size: 11px; font-weight: 700; color: var(--cyan); text-transform: uppercase;">⚡ Mẫu Khai Nhanh 1-Click (Chọn để điền sẵn thông số chuẩn hoặc tự chỉnh sửa bên dưới):</span>
-            <button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px; color: #38bdf8;" onclick="loadCurrentWorkspaceIntoQuickBuilder()">📥 Nạp Các Tab Đang Mở Vào Đây Để Sửa</button>
+            <span style="font-size: 11px; font-weight: 700; color: var(--cyan); text-transform: uppercase;">⚡ Chọn Mẫu Khai Nhanh 1-Click:</span>
+            <button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px; color: #38bdf8;" onclick="loadCurrentWorkspaceIntoQuickBuilder()">📥 Nạp Các Tab Đang Mở Trên Poll Vào Đây</button>
           </div>
           <div style="display: flex; gap: 6px; flex-wrap: wrap;">
             <button class="btn btn-emerald" style="padding: 5px 10px; font-size: 11px;" onclick="applyQuickBuilderPreset('custom1')">🎯 1 Thiết Bị Test Nhanh</button>
@@ -1719,33 +1815,20 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
           </div>
         </div>
 
-        <!-- PROFILE NAME & OPTIONS -->
-        <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; background: rgba(15,23,42,0.65); border: 1px solid var(--border); padding: 10px 12px; border-radius: 10px;">
-          <div class="field-box" style="flex: 1; min-width: 220px;">
-            <label>Tên Hồ Sơ (Tự động lưu thành file .json trong Thẻ nhớ SD)</label>
-            <input type="text" id="inpQbProfileName" value="Test_Nhanh_Hien_Truong" placeholder="VD: Tu_Dien_MSB_Tang_1" style="font-weight: 700; color: var(--cyan); font-size: 13px;">
-          </div>
-          <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--emerald); font-weight: 600; cursor: pointer; padding-bottom: 6px;">
-            <input type="checkbox" id="chkQbAutoStartPoll" checked style="width: 16px; height: 16px; accent-color: var(--emerald);">
-            Tự động bấm Chạy Polling ngay khi tạo xong
-          </label>
-          <button class="btn btn-primary" onclick="addQuickBuilderTabRow()">➕ Thêm Nhánh / Thiết Bị</button>
-        </div>
-
         <!-- DYNAMIC TABS LIST -->
         <div id="qbTabsListContainer" style="display: flex; flex-direction: column; gap: 10px;"></div>
       </div>
-      <div class="modal-footer" style="justify-content: space-between;">
+      <div class="modal-footer qb-modal-footer" style="justify-content: space-between;">
         <button class="btn btn-outline" onclick="closeQuickProfileBuilderModal()">Đóng</button>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
           <button class="btn btn-outline" style="color: var(--cyan); border-color: rgba(6,182,212,0.4);" onclick="submitQuickProfileBuilder('run_temp')" title="Chỉ mở trên Bảng Dữ Liệu để test tức thì, không ghi file vào thẻ SD">
-            ⚡ Mở Test Tạm (Không Lưu SD)
+            ⚡ Test Tạm
           </button>
-          <button class="btn btn-primary" onclick="submitQuickProfileBuilder('save_and_inspect')" title="Lưu vào Thẻ nhớ SD và mở màn hình Giải Phẫu Khoa Học">
-            💾 Lưu Vào Kho SD &amp; Giải Phẫu
+          <button class="btn btn-primary" onclick="submitQuickProfileBuilder('save_and_inspect')" title="Lưu vào Thẻ nhớ SD và mở trong Kho Hồ Sơ SD">
+            💾 Lưu Vào Kho SD
           </button>
-          <button class="btn btn-emerald" style="font-weight: 800; padding: 7px 16px;" onclick="submitQuickProfileBuilder('save_and_run')">
-            🚀 Tạo, Lưu Thẻ SD &amp; Mở Chạy Test Ngay
+          <button class="btn btn-emerald" style="font-weight: 800;" onclick="submitQuickProfileBuilder('save_and_run')">
+            🚀 Lưu SD &amp; Mở Chạy Ngay
           </button>
         </div>
       </div>

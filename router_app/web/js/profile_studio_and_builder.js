@@ -480,7 +480,7 @@ function renderQuickBuilderTabsList() {
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1.6fr; gap: 8px;">
+        <div class="qb-bottom-meta-grid">
           <div class="field-box">
             <label style="color: var(--amber);">🚫 Địa Chỉ Cấm Đọc Ở Giữa (Tự động tách khối né Exception 0x02)</label>
             <input type="text" value="${(row.disabled_addrs || '').replace(/"/g, '&quot;')}" placeholder="VD: 3-5, 8-10, 12 (Để trống nếu đọc hết)"
@@ -674,6 +674,7 @@ function hydrateTabsFromProfileArray(arr) {
     }
   });
   renderTabs();
+  if (typeof saveUiStateToStorage === 'function') saveUiStateToStorage();
 }
 
 function buildCurrentProfileExportObject(customName) {
@@ -869,6 +870,34 @@ async function loadSdProfileStudio(forceReloadSelected = false) {
   } catch (e) {}
 }
 
+let sdProfileExpandedCards = new Set();
+let sdProfileHasUnsavedChanges = false;
+
+function setSdProfileUnsavedState(unsaved) {
+  sdProfileHasUnsavedChanges = Boolean(unsaved);
+  const badge = document.getElementById('badgeSdUnsaved');
+  if (badge) badge.style.display = sdProfileHasUnsavedChanges ? 'inline-flex' : 'none';
+}
+
+function toggleSdProfileCardDetail(fn, ev) {
+  if (ev) ev.stopPropagation();
+  if (sdProfileExpandedCards.has(fn)) {
+    sdProfileExpandedCards.delete(fn);
+  } else {
+    sdProfileExpandedCards.add(fn);
+  }
+  renderSdStudioProfileCards();
+}
+
+async function editSdProfileCard(fn, ev) {
+  if (ev) ev.stopPropagation();
+  await inspectSdProfileFile(fn, 0);
+  const detailCard = document.getElementById('sdStudioDetailCard');
+  if (detailCard && window.innerWidth <= 1180) {
+    detailCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
 function renderSdStudioProfileCards() {
   const box = document.getElementById('sdStudioProfileList');
   if (!box) return;
@@ -890,8 +919,10 @@ function renderSdStudioProfileCards() {
     const fn = p.filename || p.file;
     const isSel = fn === sdStudioSelectedFilename;
     const isAct = Boolean(p.is_active);
+    const isExp = sdProfileExpandedCards.has(fn);
     const tagCnt = p.tagged_total !== undefined ? `${p.tagged_total} Tag` : `${p.total_registers || 0} Ô`;
-    const skipHtml = p.disabled_total ? `<span class="badge badge-amber" style="font-size: 10px;">🚫 Né ${p.disabled_total} ô</span>` : '';
+    const skipHtml = p.disabled_total ? `<span class="badge badge-amber" style="font-size: 10px;">🚫 Né ${p.disabled_total}</span>` : '';
+    const safePn = (p.profile_name || fn).replace(/'/g, "\\'");
     return `
       <div class="sd-profile-card ${isSel ? 'selected' : ''} ${isAct ? 'active-running' : ''}" onclick="inspectSdProfileFile('${fn}')">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 6px;">
@@ -900,20 +931,31 @@ function renderSdStudioProfileCards() {
           </div>
           ${isAct ? '<span class="badge badge-emerald" style="font-size: 9px; flex-shrink: 0;">ĐANG CHẠY</span>' : ''}
         </div>
-        <div style="font-family: monospace; font-size: 11px; color: var(--cyan); word-break: break-all;">
-          📄 ${fn}
-        </div>
-        <div style="display: flex; gap: 5px; flex-wrap: wrap; align-items: center;">
+        <div style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
           <span class="badge badge-cyan" style="font-size: 10px;">${p.tabs_count} Tab</span>
           <span class="badge badge-emerald" style="font-size: 10px;">🏷️ ${tagCnt}</span>
           ${skipHtml}
           <span class="badge badge-slate" style="font-size: 10px;">🔌 ${p.ports_summary || '--'}</span>
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 6px; margin-top: 2px;">
-          <span>${p.size_kb} KB • ${p.updated_at}</span>
-          <div style="display: flex; gap: 4px;" onclick="event.stopPropagation();">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 4px; flex-wrap: wrap; border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 6px; margin-top: 2px;" onclick="event.stopPropagation();">
+          <div style="display: flex; gap: 3px; flex-wrap: wrap;">
             <button class="btn btn-emerald" style="padding: 2px 7px; font-size: 10px;" onclick="loadSdProfileFile('${fn}')" title="Nạp hồ sơ này vào Bảng Dữ Liệu (Poll) và chạy ngay">⚡ Mở Chạy</button>
-            <a href="/api/profile/download?file=${encodeURIComponent(fn)}" class="btn btn-outline" style="padding: 2px 6px; font-size: 10px; text-decoration: none;" title="Xuất file .json này về máy tính">⬇</a>
+            <button class="btn btn-outline" style="padding: 2px 6px; font-size: 10px; color: var(--cyan); border-color: rgba(6,182,212,0.4);" onclick="editSdProfileCard('${fn}', event)" title="Chỉnh sửa hồ sơ này">✏️ Sửa</button>
+            <button class="btn btn-outline" style="padding: 2px 6px; font-size: 10px;" onclick="cloneSdProfileByFile('${fn}', '${safePn}', event)" title="Nhân bản hồ sơ này">📋</button>
+            <button class="btn btn-outline" style="padding: 2px 6px; font-size: 10px; color: var(--rose);" onclick="deleteSdProfileByFile('${fn}', event)" title="Xóa hồ sơ này">🗑️</button>
+          </div>
+          <button class="btn btn-outline" style="padding: 2px 6px; font-size: 10px; color: #cbd5e1;" onclick="toggleSdProfileCardDetail('${fn}', event)" title="Mở rộng / thu gọn thông tin chi tiết file">
+            ${isExp ? '▴ Thu gọn' : '▾ Chi tiết'}
+          </button>
+        </div>
+        <div class="sd-card-extra ${isExp ? 'open' : ''}" onclick="event.stopPropagation();">
+          <div style="font-family: monospace; color: var(--cyan); word-break: break-all;">📄 ${fn}</div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 3px;">
+            <span>Dung lượng: <b>${p.size_kb} KB</b> • Lưu: ${p.updated_at}</span>
+          </div>
+          <div style="display: flex; gap: 5px; margin-top: 4px; flex-wrap: wrap;">
+            <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; color: var(--emerald);" onclick="openSdProfileInQuickBuilder('${fn}', event)">⚡ Sửa Nhanh (Form)</button>
+            <a href="/api/profile/download?file=${encodeURIComponent(fn)}" class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; text-decoration: none;">⬇ Tải File .JSON</a>
           </div>
         </div>
       </div>
@@ -934,7 +976,9 @@ async function inspectSdProfileFile(fname, tabIdx = 0) {
     }
     sdStudioCurrentDetail = data;
     sdStudioActiveTabIdx = Math.max(0, Math.min(tabIdx, ((data.profile?.polling_tabs || []).length || 1) - 1));
+    setSdProfileUnsavedState(false);
     renderSdInspectorFullView();
+    if (typeof saveUiStateToStorage === 'function') saveUiStateToStorage();
   } catch (e) {
     alert("Lỗi khi tải chi tiết hồ sơ SD: " + e);
   }
@@ -1015,6 +1059,11 @@ function renderSdInspectorFullView() {
   document.getElementById('badgeSdInspectMeta').textContent = `${d.size_kb || '--'} KB • Lưu lúc: ${d.updated_at || '--'}`;
   document.getElementById('lblSdInspectFilepath').textContent = d.path || `/mnt/sda1/modbus_data/profiles/${d.filename}`;
 
+  const compactSummary = document.getElementById('lblSdCompactKpiSummary');
+  if (compactSummary) {
+    compactSummary.innerHTML = `<span class="badge badge-cyan">${computedTabs.length} Tab</span> <span class="badge badge-emerald">☑ Đọc ${totEn}/${totRegs}</span> <span class="badge badge-amber">🚫 Né ${totDis}</span> <span class="badge badge-cyan">📦 ${totSub} Khối</span>`;
+  }
+
   document.getElementById('kpiSdTabs').textContent = computedTabs.length;
   document.getElementById('kpiSdPorts').textContent = `Cổng: ${portsSet.join(', ') || '--'}`;
   document.getElementById('kpiSdEnabled').textContent = `${totEn} / ${totRegs}`;
@@ -1043,11 +1092,7 @@ function renderSdInspectorFullView() {
         <span class="badge badge-emerald" style="font-size: 9px; padding: 1px 5px;">${ct.tagged_count} Tag</span>
         ${ct.disabled_count > 0 ? `<span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">🚫 Né ${ct.disabled_count}</span>` : ''}
       </div>
-    `).join('') + `
-      <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px; border-color: rgba(16,185,129,0.4); color: var(--emerald);" onclick="sdInspectorAddNewTab()" title="Thêm 1 Tab thiết bị mới vào hồ sơ này">
-        ➕ Thêm Tab Mới
-      </button>
-    `;
+    `).join('');
   }
 
   renderSdInspectorActiveTabSummary(computedTabs[sdStudioActiveTabIdx]);
@@ -1121,40 +1166,42 @@ function buildVisualSubBlocksHtml(ct) {
 function selectSdInspectorTab(idx) {
   sdStudioActiveTabIdx = idx;
   renderSdInspectorFullView();
+  if (typeof saveUiStateToStorage === 'function') saveUiStateToStorage();
 }
 
 function renderSdInspectorActiveTabSummary(ct) {
   const box = document.getElementById('sdInspectActiveTabSummary');
   if (!box) return;
   if (!ct) {
-    box.innerHTML = `<div style="color: var(--text-muted); font-size: 12px;">Không có Tab nào trong hồ sơ. Nhấn <b>➕ Thêm Tab Mới</b> để tạo Tab thiết bị.</div>`;
+    box.innerHTML = `<div style="color: var(--text-muted); font-size: 12px;">Không có Tab nào trong hồ sơ. Nhấn <b>➕ Thêm Tab</b> để tạo Tab thiết bị.</div>`;
     return;
   }
   const blkHtml = buildVisualSubBlocksHtml(ct);
+  const subDetailBox = document.getElementById('sdInspectSubBlocksDetailBox');
+  if (subDetailBox) {
+    subDetailBox.innerHTML = blkHtml;
+  }
+
   const portList = (availablePortsCache && availablePortsCache.length > 0)
     ? availablePortsCache
     : Array.from({ length: 8 }, (_, i) => ({ id: `/dev/ttyCH${i}`, label: `COM ${i + 1} (/dev/ttyCH${i})` }));
   const portOpts = portList.map(p => `<option value="${p.id}" ${p.id === ct.port ? 'selected' : ''}>${p.label}</option>`).join('');
   const baudOpts = STANDARD_BAUDS.map(b => `<option value="${b}" ${Number(b) === Number(ct.baud) ? 'selected' : ''}>${b} bps</option>`).join('');
   const curFraming = `${ct.parity || 'N'}-${ct.stopbits || 1}`;
-  const tabsLen = (sdStudioCurrentDetail?.profile?.polling_tabs || []).length;
 
   box.innerHTML = `
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-        <span class="badge badge-cyan" style="font-size: 12px;">⚙️ Cấu Hình Nhanh Tab #${ct.index + 1}: ${ct.name}</span>
-        <span style="font-size: 11px; color: var(--text-muted);">
-          Tách thành <b style="color: var(--emerald);">${ct.sub_blocks_count} khối lệnh RTU</b> • Né <b style="color: var(--amber);">${ct.disabled_count} địa chỉ cấm đọc</b>
-        </span>
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+      <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0;">
+        <span class="badge badge-cyan" style="font-size: 11px;">⚙️ Tab #${ct.index + 1}</span>
+        <strong style="font-size: 12px; color: #fff; word-break: break-word;">${ct.name}</strong>
+        <span class="badge badge-emerald" style="font-size: 10px;">📦 ${ct.sub_blocks_count} khối lệnh RTU</span>
+        ${ct.disabled_count > 0 ? `<span class="badge badge-amber" style="font-size: 10px;">🚫 Né ${ct.disabled_count} ô cấm</span>` : ''}
       </div>
-      <div style="display: flex; gap: 6px; align-items: center;">
-        <button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px; color: var(--emerald);" onclick="sdInspectorAddNewTab()">➕ Thêm Tab Mới</button>
-        ${tabsLen > 1 ? `<button class="btn btn-outline" style="padding: 3px 9px; font-size: 11px; color: var(--rose);" onclick="sdInspectorDeleteActiveTab()">🗑️ Xóa Tab Này</button>` : ''}
-      </div>
+      <span style="font-size: 11px; color: var(--text-muted);">Chỉnh sửa trực tiếp — nhấn <b>💾 Lưu Vào SD</b> để ghi bền vững</span>
     </div>
 
-    <!-- INLINE TAB PARAMETER EDITOR -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 7px; background: rgba(2,6,23,0.45); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 8px 10px;">
+    <!-- INLINE TAB PARAMETER EDITOR (PRIMARY CONTENT) -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 6px; background: rgba(2,6,23,0.45); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 8px 10px;">
       <div class="field-box">
         <label>Tên Tab Thiết Bị</label>
         <input type="text" value="${(ct.name || '').replace(/"/g, '&quot;')}" onchange="sdInspectorUpdateTabField('name', this.value)" style="padding: 4px 7px; font-size: 12px;">
@@ -1204,15 +1251,6 @@ function renderSdInspectorActiveTabSummary(ct) {
                style="padding: 4px 7px; font-size: 12px; font-family: monospace; color: #fde68a; border-color: rgba(245,158,11,0.35);">
       </div>
     </div>
-
-    <div style="display: flex; flex-direction: column; gap: 5px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 9px 12px;">
-      <div style="font-size: 11px; color: var(--text-muted); font-weight: 600;">
-        ⚡ Luồng Tách Khối Lệnh Thực Tế (Smart Contiguous Sub-Blocks) — Đảm bảo không bao giờ gọi vào địa chỉ cấm đọc ở giữa:
-      </div>
-      <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
-        ${blkHtml}
-      </div>
-    </div>
   `;
 }
 
@@ -1232,6 +1270,7 @@ function sdInspectorUpdateTabField(field, val) {
   } else {
     rawTab[field] = val;
   }
+  setSdProfileUnsavedState(true);
   renderSdInspectorFullView();
 }
 
@@ -1262,8 +1301,24 @@ function sdInspectorAddNewTab() {
     scales: {}
   });
   sdStudioActiveTabIdx = tabs.length - 1;
+  setSdProfileUnsavedState(true);
   renderSdInspectorFullView();
-  showToast(`Đã thêm Tab #${nextIdx}. Nhấn '💾 Lưu Thay Đổi Vào SD' để lưu bền vững!`);
+  showToast(`Đã thêm Tab #${nextIdx}. Nhấn '💾 Lưu Vào SD' để lưu bền vững!`);
+}
+
+function sdInspectorCloneActiveTab() {
+  if (!sdStudioCurrentDetail || !sdStudioCurrentDetail.profile) return;
+  const tabs = sdStudioCurrentDetail.profile.polling_tabs || [];
+  const src = tabs[sdStudioActiveTabIdx];
+  if (!src) return;
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = `tab_${tabs.length + 1}_${Date.now().toString().slice(-3)}`;
+  copy.name = `${src.name || 'Kênh'} (Bản sao)`;
+  tabs.splice(sdStudioActiveTabIdx + 1, 0, copy);
+  sdStudioActiveTabIdx = sdStudioActiveTabIdx + 1;
+  setSdProfileUnsavedState(true);
+  renderSdInspectorFullView();
+  showToast(`📋 Đã nhân bản Tab '${copy.name}'. Nhấn '💾 Lưu Vào SD' để ghi lại!`);
 }
 
 function sdInspectorDeleteActiveTab() {
@@ -1275,8 +1330,9 @@ function sdInspectorDeleteActiveTab() {
   }
   tabs.splice(sdStudioActiveTabIdx, 1);
   sdStudioActiveTabIdx = Math.max(0, sdStudioActiveTabIdx - 1);
+  setSdProfileUnsavedState(true);
   renderSdInspectorFullView();
-  showToast("Đã xóa Tab khỏi hồ sơ. Nhấn '💾 Lưu Thay Đổi Vào SD' để ghi lại!");
+  showToast("Đã xóa Tab khỏi hồ sơ. Nhấn '💾 Lưu Vào SD' để ghi lại!");
 }
 
 function renderSdInspectorRegisterTable() {
@@ -1372,6 +1428,7 @@ function sdInspectorToggleAddr(addr, enabled) {
   if (enabled) set.delete(addr);
   else set.add(addr);
   rawTab.disabled_addrs = [...set].sort((a, b) => a - b);
+  setSdProfileUnsavedState(true);
   renderSdInspectorFullView();
 }
 
@@ -1389,6 +1446,7 @@ function sdInspectorUpdatePointMeta(offsetIdx, absAddr, field, val) {
   } else {
     mapObj[String(offsetIdx)] = val;
   }
+  setSdProfileUnsavedState(true);
   renderSdInspectorFullView();
 }
 
@@ -1405,8 +1463,9 @@ function sdInspectorMaskUntaggedInTab() {
   }
   rawTab.disabled_addrs = [...set].sort((a, b) => a - b);
   rawTab.only_tagged = false;
+  setSdProfileUnsavedState(true);
   renderSdInspectorFullView();
-  showToast(`Đã đánh dấu Cấm Đọc ${set.size} thanh ghi trống Tag trong Tab #${sdStudioActiveTabIdx + 1}. Nhấn '💾 Lưu Thay Đổi Vào SD' để ghi bền vững!`);
+  showToast(`Đã đánh dấu Cấm Đọc ${set.size} thanh ghi trống Tag trong Tab #${sdStudioActiveTabIdx + 1}. Nhấn '💾 Lưu Vào SD' để ghi bền vững!`);
 }
 
 function sdInspectorEnableAllInTab() {
@@ -1415,6 +1474,7 @@ function sdInspectorEnableAllInTab() {
   if (!rawTab) return;
   rawTab.disabled_addrs = [];
   rawTab.only_tagged = false;
+  setSdProfileUnsavedState(true);
   renderSdInspectorFullView();
   showToast(`Đã bật đọc tất cả thanh ghi trong Tab #${sdStudioActiveTabIdx + 1}.`);
 }
@@ -1432,6 +1492,7 @@ async function saveSelectedSdProfileChanges() {
     });
     const data = await res.json();
     if (data.success) {
+      setSdProfileUnsavedState(false);
       if (data.saved_profiles) syncSdProfilesDropdown(data.saved_profiles, sdStudioCurrentDetail.filename);
       await inspectSdProfileFile(sdStudioCurrentDetail.filename, sdStudioActiveTabIdx);
       showToast(`Đã lưu cập nhật hồ sơ '${sdStudioCurrentDetail.profile.profile_name}' vào Thẻ nhớ SD!`);
@@ -1498,6 +1559,92 @@ async function saveActiveWorkspaceFromSdStudio() {
   await loadSdProfileStudio(true);
 }
 
+async function createNewBlankSdProfile() {
+  const nameInput = prompt("Nhập tên Hồ Sơ Mới để tạo trên Thẻ nhớ SD:", `Ho_So_Moi_${new Date().toISOString().slice(11,16).replace(':','')}`);
+  if (!nameInput || !nameInput.trim()) return;
+  const blankProf = {
+    schema: "nxmodbus-monitor-v3.3",
+    profile_name: nameInput.trim(),
+    created_at: new Date().toISOString(),
+    port_aliases: { "/dev/ttyCH0": "COM 1 Thiết Bị" },
+    polling_tabs: [
+      {
+        id: "tab_1",
+        name: "COM 1 • Thiết Bị #1",
+        port: "/dev/ttyCH0",
+        baud: 9600,
+        parity: "N",
+        stopbits: 1,
+        slave_id: 1,
+        fn_code: 3,
+        start_addr: 0,
+        count: 10,
+        disabled_addrs: [],
+        only_tagged: false,
+        format: "uint16",
+        scan_ms: 1000,
+        tags: { "0": "Thanh ghi 0" },
+        units: {},
+        scales: {}
+      }
+    ]
+  };
+  try {
+    const res = await fetch('/api/profile/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: blankProf.profile_name,
+        profile: blankProf
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const savedFn = (data.imported_items && data.imported_items[0]) ? data.imported_items[0].filename : '';
+      if (savedFn) sdStudioSelectedFilename = savedFn;
+      if (data.saved_profiles) syncSdProfilesDropdown(data.saved_profiles, savedFn);
+      await inspectSdProfileFile(savedFn || sdStudioSelectedFilename, 0);
+      showToast(`➕ Đã tạo hồ sơ mới '${blankProf.profile_name}' trên Thẻ nhớ SD!`);
+    } else {
+      alert("Lỗi tạo hồ sơ mới: " + (data.error || "Thất bại"));
+    }
+  } catch (e) {
+    alert("Lỗi kết nối: " + e);
+  }
+}
+
+async function openSelectedSdProfileInQuickBuilder() {
+  if (!sdStudioCurrentDetail || !sdStudioCurrentDetail.profile) return;
+  const prof = sdStudioCurrentDetail.profile;
+  const modal = document.getElementById('quickProfileBuilderModal');
+  if (modal) modal.classList.add('open');
+  const nameInp = document.getElementById('inpQbProfileName');
+  if (nameInp) nameInp.value = prof.profile_name || sdStudioSelectedFilename.replace(/\.json$/i, '');
+  const tabs = Array.isArray(prof.polling_tabs) ? prof.polling_tabs : [];
+  quickBuilderTabs = tabs.map(t => ({
+    name: t.name || "Kênh",
+    port: t.port || "/dev/ttyCH0",
+    baud: parseInt(t.baud) || 9600,
+    framing: `${(t.parity || 'N').toUpperCase()}-${parseInt(t.stopbits) || 1}`,
+    slave_id: parseInt(t.slave_id) || 1,
+    fn_code: parseInt(t.fn_code) || 3,
+    start_addr: parseInt(t.start_addr) || 0,
+    count: parseInt(t.count) || 10,
+    disabled_addrs: formatAddrRangeString(parseAddrRangeSet(t.disabled_addrs)),
+    format: t.format || "uint16",
+    scan_ms: parseInt(t.scan_ms) || 1000,
+    tags_spec: formatQuickTagsSpec(t.tags || {}, t.units || {}, t.scales || {}, parseInt(t.start_addr) || 0)
+  }));
+  if (quickBuilderTabs.length === 0) addQuickBuilderTabRow();
+  else renderQuickBuilderTabsList();
+}
+
+async function openSdProfileInQuickBuilder(fn, ev) {
+  if (ev) ev.stopPropagation();
+  await inspectSdProfileFile(fn, 0);
+  await openSelectedSdProfileInQuickBuilder();
+}
+
 async function renameSelectedSdProfile() {
   if (!sdStudioCurrentDetail || !sdStudioSelectedFilename) return;
   const curName = sdStudioCurrentDetail.profile?.profile_name || sdStudioSelectedFilename.replace(/\.json$/i, '');
@@ -1526,17 +1673,17 @@ async function renameSelectedSdProfile() {
   }
 }
 
-async function cloneSelectedSdProfile() {
-  if (!sdStudioCurrentDetail || !sdStudioSelectedFilename) return;
-  const curName = sdStudioCurrentDetail.profile?.profile_name || sdStudioSelectedFilename.replace(/\.json$/i, '');
-  const copyName = prompt("Nhập tên cho bản sao (Clone) của hồ sơ này:", `${curName}_BanSao`);
+async function cloneSdProfileByFile(fn, curName, ev) {
+  if (ev) ev.stopPropagation();
+  const baseName = curName || fn.replace(/\.json$/i, '');
+  const copyName = prompt("Nhập tên cho bản sao (Clone) của hồ sơ này:", `${baseName}_BanSao`);
   if (!copyName || !copyName.trim()) return;
   try {
     const res = await fetch('/api/profile/clone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        filename: sdStudioSelectedFilename,
+        filename: fn,
         new_profile_name: copyName.trim()
       })
     });
@@ -1554,12 +1701,25 @@ async function cloneSelectedSdProfile() {
   }
 }
 
+async function cloneSelectedSdProfile() {
+  if (!sdStudioCurrentDetail || !sdStudioSelectedFilename) return;
+  const curName = sdStudioCurrentDetail.profile?.profile_name || sdStudioSelectedFilename.replace(/\.json$/i, '');
+  await cloneSdProfileByFile(sdStudioSelectedFilename, curName);
+}
+
+async function deleteSdProfileByFile(fn, ev) {
+  if (ev) ev.stopPropagation();
+  await deleteSdProfileFile(fn);
+  if (sdStudioSelectedFilename === fn) {
+    sdStudioSelectedFilename = "";
+    sdStudioCurrentDetail = null;
+  }
+  await loadSdProfileStudio(true);
+}
+
 async function deleteSelectedSdProfile() {
   if (!sdStudioSelectedFilename) return;
-  await deleteSdProfileFile(sdStudioSelectedFilename);
-  sdStudioSelectedFilename = "";
-  sdStudioCurrentDetail = null;
-  await loadSdProfileStudio(true);
+  await deleteSdProfileByFile(sdStudioSelectedFilename);
 }
 
 async function handleSdStudioBatchImport(ev) {

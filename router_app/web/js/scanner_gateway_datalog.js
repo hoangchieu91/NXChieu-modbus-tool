@@ -1205,18 +1205,47 @@ async function updateSystemStatus() {
   } catch (err) {}
 }
 
-// ==================== INITIALIZATION ====================
+// ==================== INITIALIZATION & STATE RESTORATION ====================
 window.addEventListener('DOMContentLoaded', () => {
   initStandardSelectors();
   initMultiGatewayMatrix();
   if (typeof renderAiTemplatePreview === 'function') renderAiTemplatePreview(0);
-  if (window.innerWidth <= 820) {
-    // Default Point Inspector collapsed on mobile so data cards take full height
-    const insp = document.getElementById('pointInspector');
-    if (insp) insp.classList.add('collapsed');
-    toggleMobileCardMode(true);
+
+  // Restore saved UI state (currentView, sessionTabs, activeTabId, sdStudioSelectedFilename, disclosure states)
+  if (typeof restoreUiStateFromStorage === 'function') {
+    restoreUiStateFromStorage();
   }
+
+  // Default Point Inspector collapsed on both Desktop & Mobile so main table/cards are never covered
+  const insp = document.getElementById('pointInspector');
+  if (insp) insp.classList.add('collapsed');
+
+  if (window.innerWidth <= 820) {
+    toggleMobileCardMode(true);
+    toggleMobileConfigCollapse(isMobileConfigCollapsed);
+  } else {
+    toggleMobileCardMode(Boolean(isMobileCardView));
+  }
+
+  // Restore active sub-tabs
+  if (activeSubTabs) {
+    if (activeSubTabs.scanner) switchScannerTab(activeSubTabs.scanner);
+    if (activeSubTabs.gateway) switchGatewayTab(activeSubTabs.gateway);
+    if (activeSubTabs.datalog) switchDatalogTab(activeSubTabs.datalog);
+    if (activeSubTabs.aidoc) switchAiDocTab(activeSubTabs.aidoc);
+    if (activeSubTabs.sdInsp) switchSdInspectorTab(activeSubTabs.sdInsp);
+  }
+
   renderTabs();
+  showView(currentView || 'poll', true);
   updateSystemStatus();
   setInterval(updateSystemStatus, 4000);
+});
+
+window.addEventListener('hashchange', () => {
+  const hashView = (window.location.hash || '').replace(/^#/, '').trim();
+  const validViews = new Set(['poll', 'profiles', 'scanner', 'trend', 'gateway', 'datalog', 'aidoc', 'system']);
+  if (validViews.has(hashView) && hashView !== currentView) {
+    showView(hashView, true);
+  }
 });
