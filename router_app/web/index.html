@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="NXModbus Pro">
   <meta name="mobile-web-app-capable" content="yes">
   <title>NXChieu Modbus Studio Pro - GL.iNet Router Edition</title>
-  <link rel="stylesheet" href="/css/studio.css?v=3.3.6">
+  <link rel="stylesheet" href="/css/studio.css?v=3.3.7">
 </head>
 <body>
 
@@ -2402,46 +2402,46 @@ curl -s -X POST http://10.212.156.12:8098/api/poll/auto_mask -H "Content-Type: a
 
   <!-- MODAL: ADD / EDIT / DELETE REGISTER ON POLL TABLE (THÊM / SỬA / XÓA THANH GHI TRỰC TIẾP TRÊN BẢNG DỮ LIỆU) -->
   <div class="modal-overlay" id="registerCrudModal">
-    <div class="modal-box" style="width: 620px; max-width: 96vw;">
+    <div class="modal-box" style="width: 680px; max-width: 96vw;">
       <div class="modal-header">
-        <span id="lblRegCrudModalTitle">➕ Thêm / Sửa Thanh Ghi Trực Tiếp Trên Bảng Dữ Liệu</span>
-        <button class="btn-icon" onclick="closeRegisterCrudModal()">✕</button>
+        <span id="lblRegCrudModalTitle" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">➕ Thêm / Sửa Thanh Ghi Trực Tiếp Trên Bảng Dữ Liệu</span>
+        <button class="btn-icon" onclick="closeRegisterCrudModal()" title="Đóng hộp thoại">✕</button>
       </div>
       <div class="modal-body" style="gap: 12px;">
         <input type="hidden" id="regCrudMode" value="add">
         <input type="hidden" id="regCrudOrigAddr" value="-1">
-        <div style="display: grid; grid-template-columns: 140px 1fr 110px 110px; gap: 8px; align-items: end;">
-          <div class="control-item">
-            <label>Địa Chỉ DEC (0-based)</label>
-            <input type="number" id="regCrudAddr" value="0" min="0" max="65535" style="font-family: var(--font-mono); font-weight: 800; color: var(--cyan);">
+        <div style="display: grid; grid-template-columns: 115px minmax(180px, 1fr) 95px 95px; gap: 10px; align-items: end;">
+          <div class="field-box">
+            <label>Địa Chỉ DEC</label>
+            <input type="number" id="regCrudAddr" value="0" min="0" max="65535" style="font-family: monospace; font-weight: 800; color: var(--cyan);" onkeydown="if(event.key==='Enter'){event.preventDefault();saveRegisterCrudModal();}">
           </div>
-          <div class="control-item">
+          <div class="field-box">
             <label>Tên Gợi Nhớ (Alias / Tag)</label>
-            <input type="text" id="regCrudTag" placeholder="VD: RL1_STATE (0=OFF,1=ON,2=Toggle)">
+            <input type="text" id="regCrudTag" placeholder="VD: RL1_STATE (0=OFF,1=ON,2=Toggle)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveRegisterCrudModal();}">
           </div>
-          <div class="control-item">
+          <div class="field-box">
             <label>Đơn Vị Đo</label>
-            <input type="text" id="regCrudUnit" placeholder="°C, bar, Hz...">
+            <input type="text" id="regCrudUnit" placeholder="°C, bar, Hz..." onkeydown="if(event.key==='Enter'){event.preventDefault();saveRegisterCrudModal();}">
           </div>
-          <div class="control-item">
+          <div class="field-box">
             <label>Hệ Số (Scale)</label>
-            <input type="number" id="regCrudScale" value="1" step="any">
+            <input type="number" id="regCrudScale" value="1" step="any" onkeydown="if(event.key==='Enter'){event.preventDefault();saveRegisterCrudModal();}">
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <div class="control-item">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end;">
+          <div class="field-box">
             <label>Chế Độ Đọc &amp; Bảo Vệ Ghi Mềm</label>
-            <div style="display: flex; gap: 10px; align-items: center; background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;">
-              <label style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--emerald); cursor: pointer; text-transform: none;">
-                <input type="checkbox" id="regCrudReadEnabled" checked style="accent-color: var(--emerald);"> ☑ Cho phép Đọc
+            <div style="display: flex; gap: 14px; align-items: center; background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; min-height: 32px; flex-wrap: nowrap;">
+              <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--emerald); cursor: pointer; text-transform: none; white-space: nowrap;">
+                <input type="checkbox" id="regCrudReadEnabled" checked style="width: 14px; height: 14px; accent-color: var(--emerald);"> Cho phép Đọc
               </label>
-              <label style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--amber); cursor: pointer; text-transform: none;">
-                <input type="checkbox" id="regCrudWriteLocked" style="accent-color: var(--amber);"> 🔒 Cấm Ghi Mềm (Chỉ Đọc)
+              <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--amber); cursor: pointer; text-transform: none; white-space: nowrap;">
+                <input type="checkbox" id="regCrudWriteLocked" style="width: 14px; height: 14px; accent-color: var(--amber);"> 🔒 Cấm Ghi Mềm
               </label>
             </div>
           </div>
-          <div class="control-item">
+          <div class="field-box">
             <label>Kiểu Nút Điều Khiển Nhanh (Cột Action)</label>
             <select id="regCrudCtrlType" onchange="onRegCrudCtrlTypeChange()">
               <option value="auto">✨ Tự động nhận diện theo Tag</option>
@@ -2454,23 +2454,23 @@ curl -s -X POST http://10.212.156.12:8098/api/poll/auto_mask -H "Content-Type: a
           </div>
         </div>
 
-        <div id="regCrudOptionsBox" class="control-item" style="display: none;">
-          <label>Danh Sách Trạng Thái / Nút Chế Độ (Cú pháp: 0=OFF, 1=ON, 2=Toggle hoặc 0=Off, 1=Master, 2=Routed)</label>
-          <input type="text" id="regCrudCtrlOptions" placeholder="0=OFF, 1=ON, 2=Toggle">
+        <div id="regCrudOptionsBox" class="field-box" style="display: none;">
+          <label>Danh Sách Trạng Thái / Nút Chế Độ (Cú pháp: 0=OFF, 1=ON, 2=Toggle — Nhấn Enter để lưu)</label>
+          <input type="text" id="regCrudCtrlOptions" placeholder="0=OFF, 1=ON, 2=Toggle" onkeydown="if(event.key==='Enter'){event.preventDefault();saveRegisterCrudModal();}">
         </div>
 
-        <div id="regCrudAutoDisableGapWrap" style="background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--text-main);">
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-            <input type="checkbox" id="regCrudDisableGap" checked style="accent-color: var(--cyan);">
-            <span>Nếu Địa chỉ mới nằm ngoài phạm vi hiện tại, tự động mở rộng bảng và <b>🚫 Cấm đọc (Né lỗi 0x02)</b> các địa chỉ trống ở giữa</span>
+        <div id="regCrudAutoDisableGapWrap" style="background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 6px; padding: 8px 10px; font-size: 11.5px; color: var(--text);">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="regCrudDisableGap" checked style="width: 15px; height: 15px; accent-color: var(--cyan); flex-shrink: 0;">
+            <span>Nếu Địa chỉ mới nằm ngoài phạm vi hiện tại, tự động mở rộng bảng và <b style="color: var(--amber);">🚫 Cấm đọc (Né lỗi 0x02)</b> các địa chỉ trống ở giữa</span>
           </label>
         </div>
       </div>
       <div class="modal-footer" style="justify-content: space-between;">
-        <button id="btnRegCrudDelete" class="btn btn-danger" style="display: none;" onclick="deleteRegisterFromCrudModal()">🗑️ Xóa Thanh Ghi Này</button>
+        <button id="btnRegCrudDelete" class="btn btn-rose" style="display: none;" onclick="deleteRegisterFromCrudModal()">🗑️ Xóa Thanh Ghi Này</button>
         <div style="display: flex; gap: 8px; margin-left: auto;">
           <button class="btn btn-outline" onclick="closeRegisterCrudModal()">Hủy</button>
-          <button class="btn btn-emerald" onclick="saveRegisterCrudModal()">💾 Lưu Thanh Ghi</button>
+          <button class="btn btn-emerald" onclick="saveRegisterCrudModal()">💾 Lưu Thanh Ghi (Enter)</button>
         </div>
       </div>
     </div>

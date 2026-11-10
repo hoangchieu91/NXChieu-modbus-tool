@@ -184,8 +184,13 @@ aside.sidebar.desktop-collapsed { width: 0 !important; padding-left: 0 !importan
 /* Action Toolbar */
 .toolbar { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 8px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; flex-shrink: 0; }
 .toolbar-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.field-box { display: flex; flex-direction: column; gap: 3px; }
-.field-box label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+.field-box, .control-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field-box label, .control-item > label { font-size: 10.5px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.field-box input, .field-box select, .control-item > input, .control-item > select { width: 100%; min-width: 0; }
+.btn-icon { background: rgba(15, 23, 42, 0.85); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; transition: all 0.15s; flex-shrink: 0; }
+.btn-icon:hover { color: #fff; border-color: var(--rose); background: rgba(244, 63, 94, 0.25); }
+.btn-danger { background: linear-gradient(135deg, #f43f5e, #e11d48); color: #fff; }
+.btn-danger:hover { filter: brightness(1.1); }
 select, input { background: var(--bg-input); border: 1px solid var(--border); color: #fff; border-radius: 6px; padding: 5px 8px; font-size: 12px; outline: none; transition: border-color 0.15s; }
 select:focus, input:focus { border-color: var(--cyan); box-shadow: 0 0 6px var(--cyan-glow); }
 
@@ -574,6 +579,12 @@ footer { padding: 5px 16px; background: #050912; border-top: 1px solid var(--bor
   .qb-modal-footer .btn {
     padding: 6px 10px;
     font-size: 11px;
+  }
+  #registerCrudModal .modal-body > div {
+    grid-template-columns: 1fr !important;
+  }
+  #profileVersionModal .modal-body > div > div {
+    grid-template-columns: 1fr !important;
   }
   /* Point Inspector turns into a Native Mobile Bottom Sheet */
   .inspector-drawer {

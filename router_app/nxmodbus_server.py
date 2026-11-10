@@ -218,7 +218,7 @@ def discover_serial_ports():
     if "ttyUSB1" in dev_entries:
         ordered_ttys.append("ttyUSB1")
     for p in dev_entries:
-        if (p.startswith("ttyUSB") or p.startswith("ttyACM")) and p not in ("ttyUSB0", "ttyUSB1"):
+        if (p.startswith("ttyUSB") or p.startswith("ttyACM") or p.startswith("ttyCH")) and p not in ("ttyUSB0", "ttyUSB1"):
             ordered_ttys.append(p)
 
     ext_tcp_seq = 5009
@@ -297,7 +297,16 @@ def discover_serial_ports():
         except Exception:
             pass
 
-    return ports
+    return ports if ports else [{
+        "id": "/dev/ttyUSB0",
+        "label": "/dev/ttyUSB0 (Chờ cắm cáp USB-RS485 / CH348)",
+        "short_label": "ttyUSB0",
+        "alias": "",
+        "default_tcp_port": 5000,
+        "chip": "USB-RS485",
+        "is_ch348": False,
+        "is_external": True
+    }]
 
 
 # ==================== STORAGE, SD CARD PROFILES & DATABASE ====================
