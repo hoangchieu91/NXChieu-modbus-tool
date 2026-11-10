@@ -422,6 +422,37 @@ def get_network_interfaces():
                     "single_gw_endpoint": f"{ip}:{primary_gw_port}",
                     "web_endpoint": f"http://{ip}:{PORT_WEB}"
                 })
+
+        # Bổ sung Đường hầm Dự phòng FRP TCP Reverse Tunnel & Tailscale Gateway (nếu frpc đang chạy)
+        ps_out = os.popen("ps 2>/dev/null").read()
+        frpc_up = "/mnt/sda1/frp/frpc" in ps_out or "frpc" in ps_out
+        if frpc_up or os.path.exists("/mnt/sda1/frp/frpc"):
+            ifaces.append({
+                "device": "frpc-tcp",
+                "status": "UP" if frpc_up else "DOWN",
+                "ip": "10.25.7.116",
+                "cidr": "nxchieu.duckdns.org:7000 (TCP)",
+                "type": "frp_tunnel",
+                "label": "Đường Hầm Dự Phòng FRP TCP (Server .116)",
+                "description": "Xuyên mọi NAT/4G/Firewall chặn UDP (Web :18098 • SSH :6026 • Admin :18080 • Modbus :15000)",
+                "badge_color": "emerald" if frpc_up else "slate",
+                "gw_endpoint": "10.25.7.116:15000",
+                "single_gw_endpoint": "10.25.7.116:15000",
+                "web_endpoint": "http://10.25.7.116:18098"
+            })
+            ifaces.append({
+                "device": "tailscale-gw",
+                "status": "UP" if frpc_up else "DOWN",
+                "ip": "100.84.84.15",
+                "cidr": "100.84.84.15/32 (Tailscale Mesh)",
+                "type": "tailscale",
+                "label": "Mạng Mesh Tailscale (Qua Gateway .116)",
+                "description": "Truy cập từ mọi PC/iPhone/iPad bật Tailscale mà không tốn RAM trên Router (Web :18098 • SSH :6026)",
+                "badge_color": "cyan" if frpc_up else "slate",
+                "gw_endpoint": "100.84.84.15:15000",
+                "single_gw_endpoint": "100.84.84.15:15000",
+                "web_endpoint": "http://100.84.84.15:18098"
+            })
     except Exception:
         pass
     return ifaces

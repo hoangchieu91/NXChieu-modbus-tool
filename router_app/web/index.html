@@ -1525,6 +1525,114 @@
             </div>
           </div>
         </div>
+
+        <!-- PANEL MỚI: MA TRẬN ĐA ĐƯỜNG HẦM DỰ PHÒNG & FRONTEND QUẢN TRỊ TẬP TRUNG -->
+        <div class="panel-card">
+          <div class="panel-card-title">
+            <div>
+              <span>🌐 Ma Trận Đa Đường Hầm Kết Nối Từ Xa &amp; Trung Tâm Quản Trị VPN Tập Trung (Multi-Tunnel NOC)</span>
+              <div style="font-size: 11px; color: var(--text-muted); font-weight: 400; margin-top: 2px;">
+                Danh sách toàn bộ các đường hầm truy cập vào Router GL-XE300 và các trang Frontend quản lý VPN/Tunnel đang chạy trên Server trung tâm <code>10.25.7.116</code> (<code>100.84.84.15</code>)
+              </div>
+            </div>
+          </div>
+
+          <div style="font-size: 12px; font-weight: 700; color: var(--cyan); margin-bottom: 8px;">1. Năm Đường Hầm Kết Nối Vào Router GL-XE300 (Chính &amp; Dự Phòng Tự Động)</div>
+          <div class="table-wrap" style="max-height: none; margin-bottom: 16px;">
+            <table class="data-table" style="font-size: 12px;">
+              <thead>
+                <tr>
+                  <th>Đường Hầm / Kênh</th>
+                  <th>Giao Thức</th>
+                  <th>Web Studio (:8098)</th>
+                  <th>Web Admin (:80)</th>
+                  <th>SSH Terminal (:22)</th>
+                  <th>Modbus TCP (:5000)</th>
+                  <th>Đặc Điểm &amp; Vai Trò Dự Phòng</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><b style="color:#c084fc;">1. WireGuard VPN (Chính)</b></td>
+                  <td><span class="badge badge-purple">UDP :51820</span></td>
+                  <td><a href="http://10.212.156.12:8098" target="_blank" style="color:var(--cyan);">http://10.212.156.12:8098</a></td>
+                  <td><a href="http://10.212.156.12" target="_blank" style="color:var(--cyan);">http://10.212.156.12</a></td>
+                  <td><code>root@10.212.156.12:22</code></td>
+                  <td><code>10.212.156.12:5000..5008</code></td>
+                  <td>Độ trễ thấp nhất, có Hotplug tự bắt tay lại <code>&lt;3s</code> khi đổi WAN</td>
+                </tr>
+                <tr>
+                  <td><b style="color:var(--emerald);">2. FRP Reverse TCP Tunnel</b></td>
+                  <td><span class="badge badge-emerald">TCP :7000</span></td>
+                  <td><a href="http://10.25.7.116:18098" target="_blank" style="color:var(--emerald);">http://10.25.7.116:18098</a></td>
+                  <td><a href="http://10.25.7.116:18080" target="_blank" style="color:var(--emerald);">http://10.25.7.116:18080</a></td>
+                  <td><code>root@10.25.7.116 -p 6026</code></td>
+                  <td><code>10.25.7.116:15000</code></td>
+                  <td><b>Xuyên mọi NAT/4G/Tường lửa chặn UDP</b> (dịch vụ <code>/etc/init.d/frpc</code>)</td>
+                </tr>
+                <tr>
+                  <td><b style="color:var(--cyan);">3. Tailscale Mesh Gateway</b></td>
+                  <td><span class="badge badge-cyan">Tailscale</span></td>
+                  <td><a href="http://100.84.84.15:18098" target="_blank" style="color:var(--cyan);">http://100.84.84.15:18098</a></td>
+                  <td><a href="http://100.84.84.15:18080" target="_blank" style="color:var(--cyan);">http://100.84.84.15:18080</a></td>
+                  <td><code>root@100.84.84.15 -p 6026</code></td>
+                  <td><code>100.84.84.15:15000</code></td>
+                  <td>Vào từ mọi PC/iPhone/iPad bật Tailscale qua node <code>memos</code> (<b>0 MB RAM</b> trên Router)</td>
+                </tr>
+                <tr>
+                  <td><b style="color:var(--amber);">4. GL.iNet GoodCloud (rtty)</b></td>
+                  <td><span class="badge badge-amber">HTTPS :443</span></td>
+                  <td colspan="3"><a href="https://www.goodcloud.xyz" target="_blank" style="color:var(--amber);">https://www.goodcloud.xyz</a> (Device ID: <code>hyb099e</code>)</td>
+                  <td>--</td>
+                  <td>Cloud chính hãng GL.iNet đi qua cổng HTTPS 443 chuẩn quốc tế</td>
+                </tr>
+                <tr>
+                  <td><b>5. WAN Nội Bộ / LAN Trực Tiếp</b></td>
+                  <td><span class="badge badge-slate">LAN/WAN</span></td>
+                  <td><a href="http://10.25.7.177:8098" target="_blank" style="color:#cbd5e1;">http://10.25.7.177:8098</a><br><a href="http://192.168.10.1:8098" target="_blank" style="color:#94a3b8;">http://192.168.10.1:8098</a></td>
+                  <td><a href="http://10.25.7.177" target="_blank" style="color:#cbd5e1;">http://10.25.7.177</a><br><a href="http://192.168.10.1" target="_blank" style="color:#94a3b8;">http://192.168.10.1</a></td>
+                  <td><code>root@10.25.7.177:22</code><br><code>root@192.168.10.1:22</code></td>
+                  <td><code>10.25.7.177:5000</code><br><code>192.168.10.1:5000</code></td>
+                  <td>Truy cập trực tiếp cùng lớp mạng văn phòng hoặc Wi-Fi nội bộ của Router</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="font-size: 12px; font-weight: 700; color: var(--emerald); margin-bottom: 8px;">2. Các Trang Frontend Quản Lý Toàn Bộ Đường Hầm Đang Có Của Bạn (Server 10.25.7.116 / Tailscale 100.84.84.15)</div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px;">
+            <a href="http://10.25.7.116:51822" target="_blank" class="hw-card" style="text-decoration:none; display:block; border-color:rgba(192,132,252,0.4);">
+              <div style="font-size:13px; font-weight:800; color:#c084fc;">🛡️ WireGuard Pro Control Center v3.0</div>
+              <div style="font-size:11px; color:#cbd5e1; margin-top:4px;"><code>http://10.25.7.116:51822</code> • Tailscale: <code>100.84.84.15:51822</code></div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Quản lý 33+ trạm WireGuard, phân quyền RBAC ACL, cấp Pass tạm thời &amp; kiểm tra cổng dịch vụ.</div>
+            </a>
+            <a href="http://10.25.7.116:7500" target="_blank" class="hw-card" style="text-decoration:none; display:block; border-color:rgba(16,185,129,0.4);">
+              <div style="font-size:13px; font-weight:800; color:var(--emerald);">🚀 FRP Reverse Proxy Dashboard (frps)</div>
+              <div style="font-size:11px; color:#cbd5e1; margin-top:4px;"><code>http://10.25.7.116:7500</code> • Tailscale: <code>100.84.84.15:7500</code></div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Quản lý các đường hầm TCP xuyên NAT: <code>gl_xe300_*</code>, <code>gl_axt1800_ssh</code>, <code>pi5_ssh</code>, <code>proj31_ssh</code>...</div>
+            </a>
+            <a href="http://10.25.7.116:51821" target="_blank" class="hw-card" style="text-decoration:none; display:block; border-color:rgba(56,189,248,0.4);">
+              <div style="font-size:13px; font-weight:800; color:var(--cyan);">⚡ WireGuard Easy Web UI (wg-easy)</div>
+              <div style="font-size:11px; color:#cbd5e1; margin-top:4px;"><code>http://10.25.7.116:51821</code> • Tailscale: <code>100.84.84.15:51821</code></div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Tạo nhanh QR Code, tải file cấu hình <code>.conf</code> và xem băng thông trực tiếp các Peer WireGuard.</div>
+            </a>
+            <a href="http://10.25.7.116:8097" target="_blank" class="hw-card" style="text-decoration:none; display:block; border-color:rgba(245,158,11,0.4);">
+              <div style="font-size:13px; font-weight:800; color:var(--amber);">🔐 OpenVPN Monitor &amp; Profile Manager</div>
+              <div style="font-size:11px; color:#cbd5e1; margin-top:4px;">Monitor: <code>:8097</code> • Tạo file <code>.ovpn</code>: <code>http://10.25.7.116:8095</code></div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Theo dõi các kết nối OpenVPN (<code>server</code> &amp; <code>server-tap</code>) và cấp phát chứng chỉ OpenVPN.</div>
+            </a>
+            <a href="https://login.tailscale.com/admin/machines" target="_blank" class="hw-card" style="text-decoration:none; display:block; border-color:rgba(56,189,248,0.4);">
+              <div style="font-size:13px; font-weight:800; color:#38bdf8;">🕸️ Tailscale Mesh Admin Console</div>
+              <div style="font-size:11px; color:#cbd5e1; margin-top:4px;">Server <code>memos</code>: <code>100.84.84.15</code> • <code>gl-axt1800</code>: <code>100.72.47.98</code></div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Quản lý 25+ thiết bị trong mạng Tailscale của bạn (PC, MacBook, iPhone, iPad, HomeAssistant...).</div>
+            </a>
+            <a href="http://10.25.7.116:3001" target="_blank" class="hw-card" style="text-decoration:none; display:block; border-color:rgba(16,185,129,0.4);">
+              <div style="font-size:13px; font-weight:800; color:#34d399;">📡 Uptime Kuma &amp; Personal-OS (:8089)</div>
+              <div style="font-size:11px; color:#cbd5e1; margin-top:4px;">Uptime Kuma: <code>:3001</code> • Personal-OS Hub: <code>:8089</code></div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Giám sát trạng thái sống/chết 24/7 và cảnh báo tự động cho toàn bộ Server &amp; Gateway.</div>
+            </a>
+          </div>
+        </div>
       </div>
 
       <!-- VIEW 7: AI SPECIFICATION & JSON MONITORING PROFILE DOCUMENTATION -->

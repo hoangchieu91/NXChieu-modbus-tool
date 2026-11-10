@@ -1,0 +1,37 @@
+serverAddr = "nxchieu.duckdns.org"
+serverPort = 7000
+loginFailExit = false
+
+auth.method = "token"
+auth.token = "Admin@12345"
+
+transport.heartbeatInterval = 20
+transport.heartbeatTimeout = 60
+
+[[proxies]]
+name = "gl_xe300_ssh"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 22
+remotePort = 6026
+
+[[proxies]]
+name = "gl_xe300_modbus_web"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8098
+remotePort = 18098
+
+[[proxies]]
+name = "gl_xe300_admin"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 80
+remotePort = 18080
+
+[[proxies]]
+name = "gl_xe300_modbus_tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 5000
+remotePort = 15000

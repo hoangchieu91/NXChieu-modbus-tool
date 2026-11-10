@@ -35,11 +35,13 @@ def main():
     host = detect_reachable_router()
     print(f"[*] Target Router IP: {host} (WireGuard primary: 10.212.156.12 / LAN: 192.168.10.1)")
 
-    mkdir_cmd = "mkdir -p /etc/nxmodbus/web/css /etc/nxmodbus/web/js"
+    mkdir_cmd = "mkdir -p /etc/nxmodbus/web/css /etc/nxmodbus/web/js /mnt/sda1/frp"
     subprocess.run([PLINK, "-batch", "-hostkey", HOSTKEY, "-l", "root", "-pw", PASS, host, mkdir_cmd], check=True)
 
     files = [
         ("router_app/nxmodbus.init", "/etc/init.d/nxmodbus"),
+        ("router_app/frpc.init", "/etc/init.d/frpc"),
+        ("router_app/frpc.toml", "/mnt/sda1/frp/frpc.toml"),
         ("router_app/ch348_driver.py", "/etc/nxmodbus/ch348_driver.py"),
         ("router_app/sd_profile_manager.py", "/etc/nxmodbus/sd_profile_manager.py"),
         ("router_app/nxmodbus_server.py", "/etc/nxmodbus/nxmodbus_server.py"),
@@ -59,11 +61,11 @@ def main():
         print(f"Uploaded {src} -> {host}:{dst}")
 
     restart_cmd = (
-        "sed -i 's/\\r$//' /etc/init.d/nxmodbus /etc/nxmodbus/*.py && "
-        "chmod +x /etc/init.d/nxmodbus && "
-        "/etc/init.d/nxmodbus restart && "
+        "sed -i 's/\\r$//' /etc/init.d/nxmodbus /etc/init.d/frpc /mnt/sda1/frp/frpc.toml /etc/nxmodbus/*.py && "
+        "chmod +x /etc/init.d/nxmodbus /etc/init.d/frpc && "
+        "/etc/init.d/nxmodbus restart && /etc/init.d/frpc restart && "
         "sleep 5 && "
-        "ps | grep nxmodbus_server"
+        "ps | grep -E 'nxmodbus_server|frpc'"
     )
     res = subprocess.run([PLINK, "-batch", "-hostkey", HOSTKEY, "-l", "root", "-pw", PASS, host, restart_cmd], capture_output=True, text=True)
     print("Router process:\n" + res.stdout.strip())
