@@ -3858,7 +3858,59 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         self.server_port = self.server_address[1]
 
 
+def ensure_router_remote_access_and_wg_watchdog():
+    """
+    Chỉ chạy trên OpenWrt (GL-XE300):
+    1. Đảm bảo cổng SSH (22), Web Admin (80), Web Studio (8098), Modbus TCP Gateways (5000:5015) và ICMP Ping
+       luôn mở trên giao diện WireGuard (wg0: 10.212.156.12) và WAN nội bộ.
+    2. Cài đặt hotplug hook /etc/hotplug.d/iface/99-nxmodbus-wg-fast-reconnect để khi cổng WAN đổi từ
+       IP tĩnh sang DHCP (hoặc đổi mạng Wi-Fi Repeater / 4G), hệ thống lập tức xóa conntrack UDP cũ
+       và ép WireGuard bắt tay lại ngay (< 3 giây) thay vì bị treo nhiều phút.
+    """
+    if not IS_LINUX or not os.path.exists("/etc/openwrt_release"):
+        return
+    try:
+        fw_cmds = (
+            "iptables -C input_rule -i wg0 -j ACCEPT 2>/dev/null || iptables -I input_rule -i wg0 -j ACCEPT 2>/dev/null; "
+            "iptables -C input_rule -p tcp --dport 22 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 22 -j ACCEPT 2>/dev/null; "
+            "iptables -C input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null; "
+            "iptables -C input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null; "
+            "iptables -C input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null; "
+            "iptables -C input_rule -p icmp -j ACCEPT 2>/dev/null || iptables -I input_rule -p icmp -j ACCEPT 2>/dev/null"
+        )
+        os.system(fw_cmds)
+
+        hotplug_path = "/etc/hotplug.d/iface/99-nxmodbus-wg-fast-reconnect"
+        if os.path.isdir("/etc/hotplug.d/iface") and not os.path.exists(hotplug_path):
+            hotplug_script = """#!/bin/sh
+# Auto-flush stale UDP conntrack & fast-reconnect WireGuard on WAN IP change (Static <-> DHCP)
+[ "$ACTION" = "ifup" ] || [ "$ACTION" = "update" ] || exit 0
+case "$INTERFACE" in
+    wan|wan6|wwan|modem*)
+        conntrack -D -p udp --dport 51820 2>/dev/null
+        echo f > /proc/net/nf_conntrack 2>/dev/null
+        if ip link show wg0 >/dev/null 2>&1; then
+            wg set wg0 peer vsfZS7SMhjTPifk7hBu+HiDEjWLrQ4AM7kYkno0l1U8= persistent-keepalive 25 2>/dev/null
+            ubus call network.interface.wgclient up 2>/dev/null &
+        fi
+        ;;
+esac
+iptables -C input_rule -i wg0 -j ACCEPT 2>/dev/null || iptables -I input_rule -i wg0 -j ACCEPT 2>/dev/null
+iptables -C input_rule -p tcp --dport 22 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 22 -j ACCEPT 2>/dev/null
+iptables -C input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 80 -j ACCEPT 2>/dev/null
+iptables -C input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 8098 -j ACCEPT 2>/dev/null
+iptables -C input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null || iptables -I input_rule -p tcp --dport 5000:5015 -j ACCEPT 2>/dev/null
+iptables -C input_rule -p icmp -j ACCEPT 2>/dev/null || iptables -I input_rule -p icmp -j ACCEPT 2>/dev/null
+"""
+            with open(hotplug_path, "w") as hf:
+                hf.write(hotplug_script)
+            os.chmod(hotplug_path, 0o755)
+    except Exception as e:
+        print(f"[!] WireGuard/Firewall setup warning: {e}")
+
+
 def main():
+    ensure_router_remote_access_and_wg_watchdog()
     state.load_persistent_config()
 
     if ch348_hub is not None:

@@ -15,7 +15,7 @@ PSCP = r"C:\Program Files\PuTTY\pscp.exe"
 PLINK = r"C:\Program Files\PuTTY\plink.exe"
 HOSTKEY = "SHA256:/PyMgqQCfiv10iKWXs2LI29uaqLBEiZeOWYiw+CbBYQ"
 PASS = "Admin@12345"
-CANDIDATE_HOSTS = ["10.212.156.12", "192.168.10.1"]
+CANDIDATE_HOSTS = ["10.212.156.12", "10.25.7.177", "10.25.7.178", "192.168.10.1"]
 
 
 def detect_reachable_router() -> str:
@@ -23,7 +23,7 @@ def detect_reachable_router() -> str:
         return sys.argv[1].strip()
     for ip in CANDIDATE_HOSTS:
         try:
-            with socket.create_connection((ip, 22), timeout=2.5):
+            with socket.create_connection((ip, 22), timeout=2.0):
                 return ip
         except Exception:
             pass
@@ -38,6 +38,7 @@ def main():
     subprocess.run([PLINK, "-batch", "-hostkey", HOSTKEY, "-l", "root", "-pw", PASS, host, mkdir_cmd], check=True)
 
     files = [
+        ("router_app/nxmodbus.init", "/etc/init.d/nxmodbus"),
         ("router_app/ch348_driver.py", "/etc/nxmodbus/ch348_driver.py"),
         ("router_app/sd_profile_manager.py", "/etc/nxmodbus/sd_profile_manager.py"),
         ("router_app/nxmodbus_server.py", "/etc/nxmodbus/nxmodbus_server.py"),
@@ -56,7 +57,7 @@ def main():
             raise SystemExit(1)
         print(f"Uploaded {src} -> {host}:{dst}")
 
-    restart_cmd = "/etc/init.d/nxmodbus restart && sleep 3 && ps | grep nxmodbus_server"
+    restart_cmd = "chmod +x /etc/init.d/nxmodbus && /etc/init.d/nxmodbus restart && sleep 3 && ps | grep nxmodbus_server"
     res = subprocess.run([PLINK, "-batch", "-hostkey", HOSTKEY, "-l", "root", "-pw", PASS, host, restart_cmd], capture_output=True, text=True)
     print("Router process:\n" + res.stdout.strip())
 
