@@ -206,7 +206,7 @@ const DataGridView: React.FC<DataGridProps> = ({
 
       {/* --- Main Table Viewport --- */}
       <div className="flex-1 overflow-auto">
-        <table className="w-full border-collapse border border-slate-800 text-left">
+        <table className={`w-full border-collapse border border-slate-800 text-left tabular-nums ${isMultiColumnLive ? '' : 'table-fixed min-w-[1040px]'}`}>
           {/* Table Header */}
           <thead className="sticky top-0 bg-slate-900 border-b border-slate-700 text-slate-300 font-semibold z-10 shadow-sm text-xs">
             <tr>
@@ -271,7 +271,7 @@ const DataGridView: React.FC<DataGridProps> = ({
                 </>
               ) : (
                 <>
-                  <th className="px-4 py-2 border-r border-slate-800 min-w-[180px] text-amber-300 font-bold">
+                  <th className="px-4 py-2 border-r border-slate-800 w-52 text-amber-300 font-bold">
                     Value (Giá Trị) <span className="text-[10px] text-slate-400 font-normal font-sans">[Click để sửa & Enter]</span>
                   </th>
                   <th className="px-3 py-2 border-r border-slate-800 w-24 text-emerald-400">

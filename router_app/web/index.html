@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="NXModbus Pro">
   <meta name="mobile-web-app-capable" content="yes">
   <title>NXChieu Modbus Studio Pro - GL.iNet Router Edition</title>
-  <link rel="stylesheet" href="/css/studio.css?v=3.3.3">
+  <link rel="stylesheet" href="/css/studio.css?v=3.3.6">
 </head>
 <body>
 
@@ -26,12 +26,12 @@
   <!-- TOP HEADER (PROGRESSIVE DISCLOSURE: PRIMARY BAR + EXPANDABLE HARDWARE TELEMETRY) -->
   <header>
     <div class="brand">
-      <button class="btn-mobile-menu" onclick="toggleMobileSidebar()" title="Mở Menu Điều Hướng">☰</button>
+      <button id="btnToggleSidebar" class="btn-mobile-menu" onclick="toggleMobileSidebar()" title="Ẩn / Hiện Cột Menu Điều Hướng Bên Trái">☰</button>
       <div class="brand-icon">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
       </div>
       <div class="brand-title">NXChieu <span>Modbus Studio</span> Pro</div>
-      <span class="badge badge-cyan brand-version-badge">v3.3 Smart-Skip &amp; SD</span>
+      <span class="badge badge-cyan brand-version-badge">v3.3.6 Smart-Skip &amp; SD</span>
     </div>
     <div class="header-primary-actions">
       <span id="badgePort" class="badge badge-cyan" style="cursor: pointer;" onclick="openSerialConfigModal()" title="Nhấn để đổi Cổng Serial, Đặt tên gợi nhớ (Alias), Tốc độ Baudrate & Parity">
@@ -68,8 +68,11 @@
   <div class="app-body">
     <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleMobileSidebar(false)"></div>
     <!-- LEFT SIDEBAR -->
-    <aside class="sidebar">
-      <div class="sidebar-section-title">Nghiệp Vụ Studio</div>
+    <aside class="sidebar" id="leftSidebar">
+      <div class="sidebar-section-title">
+        <span>Nghiệp Vụ Studio</span>
+        <button class="btn-sidebar-collapse" onclick="toggleMobileSidebar()" title="Thu gọn cột menu bên trái để mở rộng bảng dữ liệu">◀ Thu gọn</button>
+      </div>
       <button class="nav-btn active" onclick="showView('poll')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
         Bảng Dữ Liệu (Poll)
@@ -366,23 +369,39 @@
         <div class="center-workspace">
           <div class="grid-container" id="pollGridContainer">
             <div id="mobileRegisterCards" class="mobile-cards-grid"></div>
-            <table class="data-table">
+            <table class="data-table" id="pollDataTable">
+              <colgroup>
+                <col style="width: 44px;">
+                <col style="width: 34px;">
+                <col style="width: 68px;">
+                <col style="width: 66px;">
+                <col style="width: 68px;">
+                <col style="width: 24%;">
+                <col style="width: 210px;">
+                <col style="width: 195px;">
+                <col style="width: 56px;">
+                <col style="width: 52px;">
+                <col style="width: 72px;">
+                <col style="width: 76px;">
+                <col style="width: 88px;">
+                <col style="width: 126px;">
+              </colgroup>
               <thead>
                 <tr>
-                  <th style="width: 48px; text-align: center;" title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)">Đọc</th>
-                  <th style="width: 36px;">#</th>
-                  <th style="width: 72px;">Địa Chỉ DEC</th>
-                  <th style="width: 64px;">HEX</th>
-                  <th style="width: 72px;">PLC Addr</th>
-                  <th style="min-width: 165px;">Tên Gợi Nhớ (Alias / Tag)</th>
-                  <th style="min-width: 120px;">Giá Trị &amp; Giải Mã</th>
-                  <th style="min-width: 185px;">Điều Khiển Nhanh (Action)</th>
+                  <th style="width: 44px; text-align: center;" title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)">Đọc</th>
+                  <th style="width: 34px;">#</th>
+                  <th style="width: 68px;">Địa Chỉ DEC</th>
+                  <th style="width: 66px;">HEX</th>
+                  <th style="width: 68px;">PLC Addr</th>
+                  <th>Tên Gợi Nhớ (Alias / Tag)</th>
+                  <th style="width: 210px;">Giá Trị &amp; Giải Mã</th>
+                  <th style="width: 195px;">Điều Khiển Nhanh (Action)</th>
                   <th style="width: 56px;">Đơn Vị</th>
-                  <th style="width: 56px;">Hệ Số</th>
-                  <th style="width: 74px;">Raw Hex</th>
+                  <th style="width: 52px;">Hệ Số</th>
+                  <th style="width: 72px;">Raw Hex</th>
                   <th style="width: 76px;">Cập Nhật</th>
-                  <th style="width: 90px;">Trạng Thái</th>
-                  <th style="width: 138px;">Thao Tác</th>
+                  <th style="width: 88px;">Trạng Thái</th>
+                  <th style="width: 126px;">Thao Tác</th>
                 </tr>
               </thead>
               <tbody id="tblRegisters">
@@ -391,11 +410,22 @@
             </table>
           </div>
 
-          <!-- RIGHT DRAWER: POINT INSPECTOR (COLLAPSED BY DEFAULT SO MAIN TABLE IS NEVER COVERED) -->
+          <!-- RIGHT DRAWER: POINT INSPECTOR (COLLAPSED BY DEFAULT, RESIZABLE 280px..680px) -->
           <div class="inspector-drawer collapsed" id="pointInspector">
+            <div class="inspector-resize-handle" id="inspectorResizeHandle" onmousedown="startInspectorResize(event)" title="Kéo cạnh trái để thay đổi độ rộng cột Chi Tiết (280px .. 680px)"></div>
             <div class="inspector-header">
-              <span id="inspTitle">Point Inspector #40001</span>
-              <span style="cursor: pointer; opacity: 0.7;" onclick="toggleInspector()">✕</span>
+              <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;">
+                <span id="inspTitle" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Point Inspector #40001</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                <button id="btnInspUndo" class="btn btn-outline" style="padding: 2px 7px; font-size: 10.5px; color: var(--amber); border-color: rgba(245,158,11,0.45);" onclick="undoLastInspectorChange()" title="Hoàn tác (Back / Undo) thao tác chỉnh sửa cài đặt thanh ghi gần nhất" disabled>
+                  ↩️ Back
+                </button>
+                <span class="inspector-width-pill" onclick="setInspectorWidthPreset(340)" title="Độ rộng gọn (340px)">S</span>
+                <span class="inspector-width-pill" onclick="setInspectorWidthPreset(440)" title="Độ rộng vừa (440px)">M</span>
+                <span class="inspector-width-pill" onclick="setInspectorWidthPreset(560)" title="Độ rộng lớn dễ nhìn (560px)">L</span>
+                <span style="cursor: pointer; opacity: 0.75; padding: 2px 5px; font-size: 13px;" onclick="toggleInspector()" title="Đóng cột Chi Tiết">✕</span>
+              </div>
             </div>
             <div class="inspector-body">
               <!-- Big Hero Value Box -->
@@ -428,18 +458,21 @@
 
               <!-- Quick Write Box -->
               <div class="panel-card" style="padding: 12px; gap: 8px;" id="boxInspQuickWrite">
-                <div style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Ghi Nhanh Điểm Này</div>
+                <div style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Ghi Nhanh Điểm Này (Enter để ghi)</div>
                 <div style="display: flex; gap: 8px;">
-                  <input type="number" id="inpInspWriteVal" value="0" style="flex: 1;" placeholder="Giá trị ghi...">
+                  <input type="number" id="inpInspWriteVal" value="0" style="flex: 1;" placeholder="Nhập số + nhấn Enter..." onkeydown="if(event.key==='Enter'){event.preventDefault();submitInspectorWrite();}">
                   <button class="btn btn-emerald" onclick="submitInspectorWrite()">Ghi</button>
                 </div>
               </div>
 
               <!-- Metadata Configuration -->
               <div class="panel-card" style="padding: 12px; gap: 8px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                  <span style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Cấu Hình Tên Tag &amp; Tỉ Lệ</span>
-                  <div style="display: flex; gap: 4px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                  <span style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Cấu Hình Tag &amp; Tỉ Lệ (Nhấn Enter là nhận)</span>
+                  <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    <button id="btnInspUndo2" class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; color: var(--amber); border-color: rgba(245,158,11,0.4);" onclick="undoLastInspectorChange()" title="Hoàn tác (Back) thay đổi gần nhất" disabled>
+                      ↩️ Hoàn tác
+                    </button>
                     <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; color: var(--cyan);" onclick="openRegisterCrudModal('edit')" title="Mở hộp thoại sửa toàn diện thanh ghi này">
                       ✏️ Sửa Đầy Đủ
                     </button>
@@ -449,24 +482,24 @@
                   </div>
                 </div>
                 <div class="field-box">
-                  <label>Tên Gợi Nhớ (Alias / Tag)</label>
-                  <input type="text" id="inpInspAlias" placeholder="VD: RL1_STATE (0=OFF,1=ON,2=Toggle)" onchange="savePointMeta('alias', this.value)">
+                  <label>Tên Gợi Nhớ (Alias / Tag — Nhấn Enter để lưu ngay)</label>
+                  <input type="text" id="inpInspAlias" placeholder="VD: RL1_STATE (0=OFF,1=ON,2=Toggle)" onchange="savePointMeta('alias', this.value)" onkeydown="onInspectorInputKeydown(event, 'alias', this)">
                 </div>
                 <div style="display: flex; gap: 8px;">
                   <div class="field-box" style="flex: 1;">
-                    <label>Đơn Vị Đo</label>
-                    <input type="text" id="inpInspUnit" placeholder="°C, bar, V, kW" onchange="savePointMeta('unit', this.value)">
+                    <label>Đơn Vị Đo (Enter để nhận)</label>
+                    <input type="text" id="inpInspUnit" placeholder="°C, bar, V, kW" onchange="savePointMeta('unit', this.value)" onkeydown="onInspectorInputKeydown(event, 'unit', this)">
                   </div>
                   <div class="field-box" style="flex: 1;">
                     <label>Hệ Số Nhân (Scale)</label>
-                    <input type="number" step="0.001" id="inpInspScale" value="1.0" onchange="savePointMeta('scale', parseFloat(this.value))">
+                    <input type="number" step="0.001" id="inpInspScale" value="1.0" onchange="savePointMeta('scale', parseFloat(this.value))" onkeydown="onInspectorInputKeydown(event, 'scale', this)">
                   </div>
                 </div>
               </div>
 
               <!-- Quick Control & State Decoder Configuration -->
               <div class="panel-card" style="padding: 12px; gap: 8px; border-color: rgba(6,182,212,0.3);">
-                <div style="font-size: 11px; font-weight: 700; color: var(--cyan); text-transform: uppercase;">🎛️ Điều Khiển Nhanh &amp; Giải Mã Trạng Thái</div>
+                <div style="font-size: 11px; font-weight: 700; color: var(--cyan); text-transform: uppercase;">🎛️ Điều Khiển Nhanh &amp; Giải Mã (Enter là nhận)</div>
                 <div class="field-box">
                   <label>Kiểu Nút Điều Khiển Trên Bảng &amp; Thẻ Động</label>
                   <select id="selInspCtrlType" onchange="onInspectorControlTypeChange(this.value)">
@@ -482,31 +515,31 @@
                 <div id="boxInspCtrlToggle" style="display: none; gap: 8px;">
                   <div class="field-box" style="flex: 1;">
                     <label>Giá Trị BẬT (ON)</label>
-                    <input type="number" id="inpInspCtrlOnVal" value="1" onchange="saveInspectorControlConfig()">
+                    <input type="number" id="inpInspCtrlOnVal" value="1" onchange="saveInspectorControlConfig()" onkeydown="onInspectorCtrlKeydown(event, this)">
                   </div>
                   <div class="field-box" style="flex: 1;">
                     <label>Giá Trị TẮT (OFF)</label>
-                    <input type="number" id="inpInspCtrlOffVal" value="0" onchange="saveInspectorControlConfig()">
+                    <input type="number" id="inpInspCtrlOffVal" value="0" onchange="saveInspectorControlConfig()" onkeydown="onInspectorCtrlKeydown(event, this)">
                   </div>
                 </div>
                 <div id="boxInspCtrlStepper" style="display: none; gap: 6px; flex-wrap: wrap;">
                   <div class="field-box" style="flex: 1; min-width: 65px;">
                     <label>Bước Nhảy (Step)</label>
-                    <input type="number" step="any" id="inpInspCtrlStep" value="1" onchange="saveInspectorControlConfig()">
+                    <input type="number" step="any" id="inpInspCtrlStep" value="1" onchange="saveInspectorControlConfig()" onkeydown="onInspectorCtrlKeydown(event, this)">
                   </div>
                   <div class="field-box" style="flex: 1; min-width: 65px;">
                     <label>Min</label>
-                    <input type="number" step="any" id="inpInspCtrlMin" value="0" onchange="saveInspectorControlConfig()">
+                    <input type="number" step="any" id="inpInspCtrlMin" value="0" onchange="saveInspectorControlConfig()" onkeydown="onInspectorCtrlKeydown(event, this)">
                   </div>
                   <div class="field-box" style="flex: 1; min-width: 65px;">
                     <label>Max</label>
-                    <input type="number" step="any" id="inpInspCtrlMax" value="65535" onchange="saveInspectorControlConfig()">
+                    <input type="number" step="any" id="inpInspCtrlMax" value="65535" onchange="saveInspectorControlConfig()" onkeydown="onInspectorCtrlKeydown(event, this)">
                   </div>
                 </div>
                 <div id="boxInspCtrlDropdown" style="display: none; flex-direction: column; gap: 6px;">
                   <div class="field-box">
-                    <label>Danh Sách Trạng Thái (Cú pháp: <code>0=OFF, 1=ON, 2=AUTO</code>)</label>
-                    <input type="text" id="inpInspCtrlOptions" placeholder="0=OFF, 1=ON, 2=Toggle" onchange="saveInspectorControlConfig()">
+                    <label>Danh Sách Trạng Thái (Cú pháp: <code>0=OFF, 1=ON, 2=AUTO</code> — Enter là nhận)</label>
+                    <input type="text" id="inpInspCtrlOptions" placeholder="0=OFF, 1=ON, 2=Toggle" onchange="saveInspectorControlConfig()" onkeydown="onInspectorCtrlKeydown(event, this)">
                   </div>
                 </div>
               </div>
@@ -2535,9 +2568,9 @@ curl -s -X POST http://10.212.156.12:8098/api/poll/auto_mask -H "Content-Type: a
     <div id="lblTime">2026-11-10</div>
   </footer>
 
-  <!-- MODULAR FRONTEND JAVASCRIPT (v3.3 Clean Architecture) -->
-  <script src="/js/app_core.js?v=3.3.5"></script>
-  <script src="/js/scanner_gateway_datalog.js?v=3.3.5"></script>
-  <script src="/js/profile_studio_and_builder.js?v=3.3.5"></script>
+  <!-- MODULAR FRONTEND JAVASCRIPT (v3.3.6 Clean Architecture) -->
+  <script src="/js/app_core.js?v=3.3.6"></script>
+  <script src="/js/scanner_gateway_datalog.js?v=3.3.6"></script>
+  <script src="/js/profile_studio_and_builder.js?v=3.3.6"></script>
 </body>
 </html>
