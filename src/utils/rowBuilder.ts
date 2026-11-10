@@ -1,6 +1,7 @@
 import {
   DataFormat,
   PollDefinition,
+  RegisterControlConfig,
   RegisterRow,
   SlaveConfig,
   TabSession,
@@ -14,6 +15,96 @@ import {
   modiconAddress,
   modiconTableDigit,
 } from './formatters';
+
+export function inferControlFromAlias(alias: string, fnCode: number): RegisterControlConfig | undefined {
+  if (fnCode === 2 || fnCode === 4) return undefined;
+  const tag = (alias || '').trim();
+  if (fnCode === 1) {
+    return { type: 'toggle', onValue: 1, offValue: 0 };
+  }
+  if (/BITMAP|BITMASK/i.test(tag)) {
+    return undefined;
+  }
+  const parenMatch = tag.match(/\(([^)]*=[^)]*)\)/);
+  if (parenMatch) {
+    const opts: { label: string; value: number }[] = [];
+    parenMatch[1].split(/[,;|]+/).forEach((part) => {
+      const p = part.trim();
+      if (!p || /^bit\d/i.test(p)) return;
+      const idxEq = p.indexOf('=');
+      const idxCol = p.indexOf(':');
+      const sep = idxEq >= 0 ? idxEq : idxCol;
+      if (sep > 0) {
+        const kRaw = p.slice(0, sep).trim();
+        const label = p.slice(sep + 1).trim();
+        const numMatch = kRaw.match(/(?:^|\s)(0x[0-9a-fA-F]+|-?\d+)\s*$/);
+        if (numMatch && label) {
+          const tok = numMatch[1];
+          const val = tok.startsWith('0x') || tok.startsWith('0X') ? parseInt(tok, 16) : parseInt(tok, 10);
+          if (!isNaN(val)) opts.push({ value: val, label: `${val}: ${label}` });
+        }
+      }
+    });
+    if (opts.length === 2 && opts[0].value === 0 && opts[1].value === 1 && /ON|OFF|BẬT|TẮT|ENABLE/i.test(parenMatch[1])) {
+      return { type: 'toggle', offValue: 0, onValue: 1 };
+    }
+    if (opts.length >= 2) {
+      return { type: 'dropdown', options: opts };
+    }
+  }
+  if (/^(DO_|COIL_|RL\d+_ON|OUT12V\d_ON)/i.test(tag)) {
+    return { type: 'toggle', offValue: 0, onValue: 1 };
+  }
+  if (/ghi\s*0xA55A/i.test(tag)) {
+    return {
+      type: 'dropdown',
+      options: [
+        { value: 0, label: '0: Khóa (Locked)' },
+        { value: 0xa55a, label: '42330: Mở Khóa (0xA55A)' },
+      ],
+    };
+  }
+  return undefined;
+}
+
+export function decodeRegisterStateBadge(
+  row: RegisterRow,
+  isCoil: boolean
+): { text: string; tone: 'on' | 'off' | 'enum' | 'bits' } | null {
+  if (!row.hasValue || row.rawValue === null || row.rawValue === undefined || row.disabled) return null;
+  const numVal = typeof row.rawValue === 'boolean' ? (row.rawValue ? 1 : 0) : Number(row.rawValue);
+  const ctrl = row.control;
+
+  if (isCoil || ctrl?.type === 'toggle') {
+    const onVal = ctrl?.onValue ?? 1;
+    const isOn = numVal === onVal || (isCoil && Boolean(row.rawValue));
+    return {
+      text: isOn ? `🟢 ON (${numVal})` : `⚪ OFF (${numVal})`,
+      tone: isOn ? 'on' : 'off',
+    };
+  }
+  if (ctrl?.type === 'dropdown' && ctrl.options && ctrl.options.length > 0) {
+    const hit = ctrl.options.find((o) => Number(o.value) === numVal);
+    if (hit) {
+      return {
+        text: `🟣 ${hit.label}`,
+        tone: numVal === 0 ? 'off' : 'enum',
+      };
+    }
+  }
+  if (/BITMAP|BITMASK|DIP_STATE/i.test(row.alias || '') && Number.isFinite(numVal)) {
+    const iv = numVal & 0xffff;
+    const activeBits: string[] = [];
+    for (let b = 0; b < 16; b++) {
+      if ((iv >> b) & 1) activeBits.push(`B${b}`);
+    }
+    return {
+      text: activeBits.length ? `Bits ON: ${activeBits.slice(0, 6).join(',')}` : 'All Bits OFF (0x0000)',
+      tone: activeBits.length ? 'bits' : 'off',
+    };
+  }
+  return null;
+}
 
 // HH:MM:SS.mmm shown in the grid, traffic log and chart.
 export const clockStamp = (d: Date): string =>
@@ -239,7 +330,7 @@ export function buildRowsForTab(
       hasValue: cellHasValue,
       disabled: isDisabled,
       decodedMulti,
-      control: tab.controls?.[addr],
+      control: tab.controls?.[addr] || inferControlFromAlias(alias, tab.definition.function_code),
     });
   }
 

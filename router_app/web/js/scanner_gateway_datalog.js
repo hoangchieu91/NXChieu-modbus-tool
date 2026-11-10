@@ -677,66 +677,1121 @@ async function runTcpIpSubnetSweep() {
   }
 }
 
-// ==================== REALTIME TREND CHART ====================
-function pushTrendRecord(vals) {
-  if (!vals || vals.length === 0) return;
-  trendHistory.push({
-    time: new Date().toLocaleTimeString(),
-    vals: vals.slice(0, 3)
+// ==================== SCADA DYNAMIC TELEMETRY CARDS & REALTIME MULTI-TAG TREND STUDIO ====================
+const TREND_PALETTE = [
+  '#06b6d4', '#10b981', '#f59e0b', '#a855f7', '#ec4899',
+  '#3b82f6', '#f97316', '#14b8a6', '#eab308', '#6366f1', '#84cc16', '#f43f5e'
+];
+
+let trendCanvasEventsBound = false;
+let trendHoverX = null;
+let trendDragCardIdx = null;
+let trendPausedSnapshot = null;
+
+function getWatchKey(tabId, addrDec) {
+  return `${tabId}_${addrDec}`;
+}
+
+function findMatchingTabForWatch(w) {
+  if (!w || !Array.isArray(sessionTabs)) return null;
+  let tab = sessionTabs.find(t => t.id === w.tabId);
+  if (tab && w.addr >= tab.start_addr && w.addr < tab.start_addr + tab.count) {
+    return tab;
+  }
+  // Fallback match by port + slave_id + fn_code if tabs were reloaded from profile
+  tab = sessionTabs.find(t =>
+    t.port === w.port &&
+    Number(t.slave_id) === Number(w.slave_id || 1) &&
+    Number(t.fn_code) === Number(w.fn_code || 3) &&
+    w.addr >= t.start_addr &&
+    w.addr < t.start_addr + t.count
+  );
+  if (tab) {
+    w.tabId = tab.id;
+    return tab;
+  }
+  return sessionTabs.find(t => t.id === w.tabId) || sessionTabs[0] || null;
+}
+
+function syncTrendWatchesWithSessionTabs() {
+  if (!Array.isArray(trendWatches)) trendWatches = [];
+  trendWatches.forEach(w => {
+    const tab = findMatchingTabForWatch(w);
+    if (tab) {
+      w.tabId = tab.id;
+      w.port = tab.port;
+      w.slave_id = tab.slave_id;
+      w.fn_code = tab.fn_code;
+      const idx = w.addr - tab.start_addr;
+      if (idx >= 0 && idx < tab.count) {
+        const tabTag = getPointMeta(tab.tags, idx, tab.start_addr, "");
+        const tabUnit = getPointMeta(tab.units, idx, tab.start_addr, "");
+        const tabScale = getPointMeta(tab.scales, idx, tab.start_addr, undefined);
+        if (tabTag) w.alias = tabTag;
+        if (tabUnit) w.unit = tabUnit;
+        if (tabScale !== undefined) w.scale = tabScale;
+      }
+      w.id = getWatchKey(tab.id, w.addr);
+    }
   });
-  if (trendHistory.length > 50) trendHistory.shift();
-  if (currentView === 'trend') drawTrendCanvas();
+}
+
+function createWatchItemFromTabPoint(tab, idx, colorIdx) {
+  const addrDec = tab.start_addr + idx;
+  const rawTag = getPointMeta(tab.tags, idx, tab.start_addr, "");
+  const unit = getPointMeta(tab.units, idx, tab.start_addr, "");
+  const scale = getPointMeta(tab.scales, idx, tab.start_addr, 1.0);
+  const usedColors = new Set((trendWatches || []).map(x => x.color));
+  const color = TREND_PALETTE.find(c => !usedColors.has(c)) || TREND_PALETTE[(colorIdx || trendWatches.length) % TREND_PALETTE.length];
+  return {
+    id: getWatchKey(tab.id, addrDec),
+    tabId: tab.id,
+    port: tab.port,
+    slave_id: tab.slave_id,
+    fn_code: tab.fn_code,
+    addr: addrDec,
+    alias: rawTag || `Điểm #${addrDec}`,
+    unit: unit || "",
+    scale: Number(scale) || 1.0,
+    color: color,
+    visible: true,
+    span: 1
+  };
+}
+
+function ensureDefaultTrendWatches() {
+  if (!Array.isArray(trendWatches)) trendWatches = [];
+  syncTrendWatchesWithSessionTabs();
+  if (trendWatches.length > 0) return;
+  const t = getActiveTab();
+  if (!t) return;
+
+  // Prefer registers that have a meaningful Tag name and are not disabled
+  const candidates = [];
+  for (let i = 0; i < t.count; i++) {
+    if (isRegisterDisabled(t, i)) continue;
+    const rawTag = getPointMeta(t.tags, i, t.start_addr, "");
+    if (rawTag && String(rawTag).trim()) {
+      candidates.push(i);
+    }
+  }
+  const pickedIndices = candidates.length > 0
+    ? candidates.slice(0, 8)
+    : Array.from({ length: Math.min(4, t.count) }, (_, i) => i);
+
+  pickedIndices.forEach((idx, cIdx) => {
+    const item = createWatchItemFromTabPoint(t, idx, cIdx);
+    trendWatches.push(item);
+    // Seed initial data point if value already exists
+    const raw = Array.isArray(t.values) ? t.values[idx] : undefined;
+    if (raw !== undefined && raw !== null) {
+      const nowStr = (t.lastUpdatedMap && t.lastUpdatedMap[idx]) || t.lastUpdated || new Date().toTimeString().split(' ')[0];
+      pushWatchSamplePoint(item, t, idx, raw, nowStr);
+    }
+  });
+  saveUiStateToStorage();
+}
+
+function pushWatchSamplePoint(w, tab, idx, rawVal, timeStr) {
+  if (rawVal === undefined || rawVal === null) return;
+  const scale = Number(getPointMeta(tab.scales, idx, tab.start_addr, w.scale ?? 1.0)) || 1.0;
+  let numVal = Number(rawVal);
+  if (tab.format === 'int16' && numVal > 32767) numVal -= 65536;
+  const scaledVal = numVal * scale;
+  if (!isFinite(scaledVal)) return;
+
+  if (!trendDataSeries[w.id]) trendDataSeries[w.id] = [];
+  const arr = trendDataSeries[w.id];
+  arr.push({
+    time: timeStr,
+    timeMs: Date.now(),
+    val: scaledVal,
+    raw: numVal
+  });
+  if (arr.length > 300) arr.shift();
+}
+
+function ingestPollIntoTrendStudio(tab, timeStr) {
+  if (!tab || !Array.isArray(tab.values)) return;
+  if (!Array.isArray(trendWatches) || trendWatches.length === 0) return;
+  const stamp = timeStr || new Date().toTimeString().split(' ')[0];
+  let anyUpdated = false;
+
+  trendWatches.forEach(w => {
+    const matchedTab = findMatchingTabForWatch(w);
+    if (!matchedTab || matchedTab.id !== tab.id) return;
+    const idx = w.addr - tab.start_addr;
+    if (idx < 0 || idx >= tab.count) return;
+    const raw = tab.values[idx];
+    if (raw === undefined || raw === null) return;
+    pushWatchSamplePoint(w, tab, idx, raw, stamp);
+    anyUpdated = true;
+  });
+
+  if (anyUpdated && currentView === 'trend' && !trendIsPaused) {
+    renderTrendStudioView();
+  }
+}
+
+function pushTrendRecord(vals) {
+  const t = getActiveTab();
+  if (t) ingestPollIntoTrendStudio(t);
+}
+
+function toggleTrendWatchItem(tab, idx) {
+  if (!tab) return;
+  const addrDec = tab.start_addr + idx;
+  const existingIdx = trendWatches.findIndex(w => w.tabId === tab.id && Number(w.addr) === Number(addrDec));
+  if (existingIdx >= 0) {
+    const removed = trendWatches.splice(existingIdx, 1)[0];
+    showToast(`Đã gỡ [${removed.alias}] khỏi Bảng Thẻ Động & Biểu Đồ Trend.`);
+  } else {
+    const item = createWatchItemFromTabPoint(tab, idx, trendWatches.length);
+    trendWatches.push(item);
+    const raw = Array.isArray(tab.values) ? tab.values[idx] : undefined;
+    if (raw !== undefined && raw !== null) {
+      const stamp = (tab.lastUpdatedMap && tab.lastUpdatedMap[idx]) || tab.lastUpdated || new Date().toTimeString().split(' ')[0];
+      pushWatchSamplePoint(item, tab, idx, raw, stamp);
+    }
+    showToast(`📈 Đã ghim [${item.alias}] vào Bảng Thẻ Động & Biểu Đồ Trend!`);
+  }
+  saveUiStateToStorage();
+  if (currentView === 'trend') renderTrendStudioView();
+}
+
+function autoPopulateTrendFromActiveTab() {
+  const t = getActiveTab();
+  if (!t) return;
+  let added = 0;
+  for (let i = 0; i < t.count; i++) {
+    if (isRegisterDisabled(t, i)) continue;
+    const rawTag = getPointMeta(t.tags, i, t.start_addr, "");
+    if (!rawTag || !String(rawTag).trim()) continue;
+    const addrDec = t.start_addr + i;
+    if (!trendWatches.some(w => w.tabId === t.id && Number(w.addr) === Number(addrDec))) {
+      const item = createWatchItemFromTabPoint(t, i, trendWatches.length);
+      trendWatches.push(item);
+      const raw = Array.isArray(t.values) ? t.values[i] : undefined;
+      if (raw !== undefined && raw !== null) {
+        const stamp = (t.lastUpdatedMap && t.lastUpdatedMap[i]) || t.lastUpdated || new Date().toTimeString().split(' ')[0];
+        pushWatchSamplePoint(item, t, i, raw, stamp);
+      }
+      added++;
+      if (trendWatches.length >= 16) break;
+    }
+  }
+  if (added === 0 && trendWatches.length === 0) {
+    for (let i = 0; i < Math.min(6, t.count); i++) {
+      if (isRegisterDisabled(t, i)) continue;
+      const item = createWatchItemFromTabPoint(t, i, trendWatches.length);
+      trendWatches.push(item);
+      added++;
+    }
+  }
+  saveUiStateToStorage();
+  renderTrendStudioView();
+  if (typeof renderTable === 'function') renderTable();
+  showToast(`⚡ Đã nạp ${added} Tag từ '${t.name}' lên Bảng Thẻ Động & Biểu Đồ!`);
+}
+
+function ensureTrendWatchedTabsPolling() {
+  const watchedTabIds = new Set(trendWatches.map(w => {
+    const tb = findMatchingTabForWatch(w);
+    return tb ? tb.id : w.tabId;
+  }));
+  if (watchedTabIds.size === 0 && sessionTabs[0]) {
+    watchedTabIds.add(sessionTabs[0].id);
+  }
+  let startedCount = 0;
+  const watchedTabs = sessionTabs.filter(t => watchedTabIds.has(t.id));
+  const allAlreadyPolling = watchedTabs.length > 0 && watchedTabs.every(t => t.isPolling);
+
+  if (allAlreadyPolling) {
+    watchedTabs.forEach(t => {
+      if (t.timer) clearInterval(t.timer);
+      t.timer = null;
+      t.isPolling = false;
+    });
+    renderTabs();
+    renderTrendStudioView();
+    showToast("⏹ Đã tạm dừng Polling các Tab đang theo dõi.");
+    return;
+  }
+
+  watchedTabs.forEach((t, idx) => {
+    if (!t.isPolling) {
+      t.isPolling = true;
+      startedCount++;
+      setTimeout(() => {
+        if (t.isPolling) {
+          executePoll(t);
+          t.timer = setInterval(() => executePoll(t), t.scan_ms || 1000);
+        }
+      }, idx * 45);
+    } else {
+      executePoll(t);
+    }
+  });
+  renderTabs();
+  renderTrendStudioView();
+  showToast(`▶ Đã bật Polling thời gian thực cho ${watchedTabs.length} Tab đang theo dõi!`);
+}
+
+function setTrendStudioDisplayMode(mode) {
+  trendStudioDisplayMode = mode || 'both';
+  ['both', 'cards', 'chart'].forEach(m => {
+    const btn = document.getElementById(`btnTrendMode_${m}`);
+    if (btn) btn.className = (m === trendStudioDisplayMode) ? 'btn btn-primary' : 'btn btn-outline';
+  });
+  const cardsSec = document.getElementById('trendCardsSection');
+  const chartSec = document.getElementById('trendChartSection');
+  if (cardsSec) cardsSec.style.display = (trendStudioDisplayMode === 'chart') ? 'none' : 'flex';
+  if (chartSec) chartSec.style.display = (trendStudioDisplayMode === 'cards') ? 'none' : 'flex';
+  saveUiStateToStorage();
+  if (trendStudioDisplayMode !== 'cards') {
+    setTimeout(() => drawTrendCanvas(), 20);
+  }
+}
+
+function setTrendGridColumns(colsVal) {
+  trendGridCols = colsVal || 'auto';
+  const grid = document.getElementById('trendDynamicCardsGrid');
+  if (grid) {
+    grid.className = 'scada-telemetry-grid' + (trendGridCols !== 'auto' ? ` cols-${trendGridCols}` : '');
+  }
+  const sel = document.getElementById('selTrendGridCols');
+  if (sel && sel.value !== String(trendGridCols)) sel.value = String(trendGridCols);
+  saveUiStateToStorage();
+}
+
+function setTrendWindowPoints(pts) {
+  trendWindowPoints = Math.max(15, Math.min(300, parseInt(pts) || 60));
+  const sel = document.getElementById('selTrendWindowPts');
+  if (sel) {
+    const opts = [30, 60, 120, 300];
+    if (opts.includes(trendWindowPoints)) sel.value = String(trendWindowPoints);
+  }
+  saveUiStateToStorage();
+  drawTrendCanvas();
+}
+
+function zoomTrendWindow(delta) {
+  setTrendWindowPoints((trendWindowPoints || 60) + delta);
+}
+
+function toggleTrendNormalizedScale() {
+  trendNormalizedScale = !trendNormalizedScale;
+  const btn = document.getElementById('btnTrendScaleMode');
+  if (btn) {
+    btn.className = trendNormalizedScale ? 'btn btn-primary' : 'btn btn-outline';
+    btn.innerHTML = trendNormalizedScale ? '⚖️ Thang % (0-100%)' : '⚖️ Thang Tuyệt Đối';
+  }
+  saveUiStateToStorage();
+  drawTrendCanvas();
+}
+
+function toggleTrendPause() {
+  trendIsPaused = !trendIsPaused;
+  if (trendIsPaused) {
+    trendPausedSnapshot = JSON.parse(JSON.stringify(trendDataSeries));
+  } else {
+    trendPausedSnapshot = null;
+  }
+  const btn = document.getElementById('btnTrendPause');
+  if (btn) {
+    btn.className = trendIsPaused ? 'btn btn-rose' : 'btn btn-outline';
+    btn.innerHTML = trendIsPaused ? '▶ Tiếp Tục Live' : '⏸ Tạm Dừng';
+  }
+  renderTrendStudioView();
+}
+
+function clearTrendHistoryData() {
+  trendDataSeries = {};
+  trendPausedSnapshot = null;
+  renderTrendStudioView();
+  showToast("🗑️ Đã xóa lịch sử mẫu đo trên Biểu Đồ Sóng.");
+}
+
+function exportTrendHistoryCsv() {
+  if (!Array.isArray(trendWatches) || trendWatches.length === 0) {
+    alert("Chưa có Tag nào đang được theo dõi để xuất CSV.");
+    return;
+  }
+  const headers = ['Timestamp', ...trendWatches.map(w => `"${w.alias} (Addr ${w.addr})${w.unit ? ' [' + w.unit + ']' : ''}"`)];
+  const lines = [headers.join(',')];
+
+  // Find longest series
+  let baseSeries = [];
+  trendWatches.forEach(w => {
+    const s = trendDataSeries[w.id] || [];
+    if (s.length > baseSeries.length) baseSeries = s;
+  });
+
+  if (baseSeries.length === 0) {
+    // Export current snapshot row if no time series yet
+    const nowStr = new Date().toTimeString().split(' ')[0];
+    const row = [nowStr];
+    trendWatches.forEach(w => {
+      const snap = getLiveWatchSnapshot(w);
+      row.push(snap.displayVal !== '--' ? snap.displayVal : '');
+    });
+    lines.push(row.join(','));
+  } else {
+    baseSeries.forEach((pt, idx) => {
+      const row = [pt.time];
+      trendWatches.forEach(w => {
+        const s = trendDataSeries[w.id] || [];
+        const offsetIdx = idx - (baseSeries.length - s.length);
+        row.push(offsetIdx >= 0 && s[offsetIdx] ? s[offsetIdx].val : '');
+      });
+      lines.push(row.join(','));
+    });
+  }
+
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `Trend_SCADA_${currentProfileName || 'Modbus'}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+  a.click();
+  showToast("📥 Đã xuất dữ liệu các kênh theo dõi ra file CSV!");
+}
+
+function getLiveWatchSnapshot(w) {
+  const tab = findMatchingTabForWatch(w);
+  if (!tab) {
+    return {
+      tab: null, idx: -1, raw: undefined, hasVal: false,
+      alias: w.alias || `Addr ${w.addr}`, unit: w.unit || '', scale: w.scale || 1,
+      displayVal: '--', rawHex: '--', updatedAt: '--',
+      decoded: null, quickCtrlHtml: '',
+      min: null, max: null, avg: null, samplesCount: 0
+    };
+  }
+  const idx = w.addr - tab.start_addr;
+  const inRange = (idx >= 0 && idx < tab.count);
+  const raw = (inRange && Array.isArray(tab.values)) ? tab.values[idx] : undefined;
+  const hasVal = (raw !== undefined && raw !== null);
+  const alias = (inRange ? getPointMeta(tab.tags, idx, tab.start_addr, "") : "") || w.alias || `Điểm #${w.addr}`;
+  const unit = (inRange ? getPointMeta(tab.units, idx, tab.start_addr, "") : "") || w.unit || "";
+  const scale = inRange ? getPointMeta(tab.scales, idx, tab.start_addr, w.scale ?? 1.0) : (w.scale ?? 1.0);
+  w.alias = alias;
+  w.unit = unit;
+  w.scale = scale;
+
+  const displayVal = hasVal ? formatValue(raw, tab.format, scale) : '--';
+  const rawHex = hasVal ? ("0x" + (Number(raw) & 0xFFFF).toString(16).toUpperCase().padStart(4, "0")) : '--';
+  const updatedAt = (inRange && tab.lastUpdatedMap && tab.lastUpdatedMap[idx])
+    ? tab.lastUpdatedMap[idx]
+    : (hasVal && tab.lastUpdated ? tab.lastUpdated : '--');
+  const decoded = inRange ? decodeRegisterStateInfo(tab, idx, raw) : null;
+  const quickCtrlHtml = inRange ? buildQuickControlCellHtml(tab, idx, raw, false, 'scada_card') : '';
+
+  const series = (trendIsPaused && trendPausedSnapshot ? trendPausedSnapshot[w.id] : trendDataSeries[w.id]) || [];
+  let min = null, max = null, avg = null;
+  if (series.length > 0) {
+    const vals = series.map(p => p.val);
+    min = Math.min(...vals);
+    max = Math.max(...vals);
+    avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  } else if (hasVal) {
+    const numV = parseFloat(displayVal);
+    if (!isNaN(numV)) { min = numV; max = numV; avg = numV; }
+  }
+
+  return {
+    tab, idx, raw, hasVal, alias, unit, scale,
+    displayVal, rawHex, updatedAt, decoded, quickCtrlHtml,
+    min, max, avg, samplesCount: series.length
+  };
+}
+
+function moveTrendWatchCard(index, delta, ev) {
+  if (ev) ev.stopPropagation();
+  const target = index + delta;
+  if (target < 0 || target >= trendWatches.length) return;
+  const tmp = trendWatches[index];
+  trendWatches[index] = trendWatches[target];
+  trendWatches[target] = tmp;
+  saveUiStateToStorage();
+  renderTrendStudioView();
+  if (document.getElementById('trendTagManagerModal')?.classList.contains('open')) {
+    renderTrendWatchedTableInModal();
+  }
+}
+
+function toggleTrendWatchCardSpan(index, ev) {
+  if (ev) ev.stopPropagation();
+  const w = trendWatches[index];
+  if (!w) return;
+  w.span = (w.span === 2) ? 1 : 2;
+  saveUiStateToStorage();
+  renderTrendStudioView();
+  if (document.getElementById('trendTagManagerModal')?.classList.contains('open')) {
+    renderTrendWatchedTableInModal();
+  }
+}
+
+function toggleTrendWatchVisibility(index, ev) {
+  if (ev) ev.stopPropagation();
+  const w = trendWatches[index];
+  if (!w) return;
+  w.visible = (w.visible === false) ? true : false;
+  saveUiStateToStorage();
+  renderTrendStudioView();
+  if (document.getElementById('trendTagManagerModal')?.classList.contains('open')) {
+    renderTrendWatchedTableInModal();
+  }
+}
+
+function removeTrendWatchByIndex(index, ev) {
+  if (ev) ev.stopPropagation();
+  const w = trendWatches[index];
+  if (!w) return;
+  trendWatches.splice(index, 1);
+  saveUiStateToStorage();
+  renderTrendStudioView();
+  if (typeof renderTable === 'function') renderTable();
+  if (document.getElementById('trendTagManagerModal')?.classList.contains('open')) {
+    renderTrendTagManagerPickerList();
+    renderTrendWatchedTableInModal();
+  }
+}
+
+function editTrendWatchCardPrompt(index, ev) {
+  if (ev) ev.stopPropagation();
+  const w = trendWatches[index];
+  if (!w) return;
+  const snap = getLiveWatchSnapshot(w);
+  const curSpec = `${snap.alias}:${snap.unit}:${snap.scale}`;
+  const input = prompt(
+    `Chỉnh sửa Thẻ Động & Tag (Addr ${w.addr}):\n` +
+    `Nhập theo cú pháp: Tên_Tag:Đơn_vị:Hệ_số\n` +
+    `(VD: Nhiệt độ đầu nén:°C:0.1 hoặc RL1_STATE (0=OFF,1=ON,2=Toggle)::1)`,
+    curSpec
+  );
+  if (input === null) return;
+  const parts = input.trim().split(':');
+  if (parts[0] && parts[0].trim()) {
+    w.alias = parts[0].trim();
+    if (snap.tab && snap.idx >= 0) setPointMeta(snap.tab.tags, snap.idx, snap.tab.start_addr, w.alias);
+  }
+  if (parts.length >= 2) {
+    w.unit = parts[1].trim();
+    if (snap.tab && snap.idx >= 0) setPointMeta(snap.tab.units, snap.idx, snap.tab.start_addr, w.unit);
+  }
+  if (parts.length >= 3 && !isNaN(parseFloat(parts[2]))) {
+    w.scale = parseFloat(parts[2]);
+    if (snap.tab && snap.idx >= 0) setPointMeta(snap.tab.scales, snap.idx, snap.tab.start_addr, w.scale);
+  }
+  saveUiStateToStorage();
+  renderTrendStudioView();
+  if (typeof renderTable === 'function') renderTable();
+}
+
+function onTrendCardDragStart(idx, ev) {
+  trendDragCardIdx = idx;
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move';
+    try { ev.dataTransfer.setData('text/plain', String(idx)); } catch (e) {}
+  }
+}
+
+function onTrendCardDragOver(idx, el, ev) {
+  ev.preventDefault();
+  if (el) el.classList.add('drag-over');
+}
+
+function onTrendCardDragLeave(el) {
+  if (el) el.classList.remove('drag-over');
+}
+
+function onTrendCardDrop(targetIdx, el, ev) {
+  ev.preventDefault();
+  if (el) el.classList.remove('drag-over');
+  if (trendDragCardIdx === null || trendDragCardIdx === targetIdx) return;
+  const item = trendWatches.splice(trendDragCardIdx, 1)[0];
+  trendWatches.splice(targetIdx, 0, item);
+  trendDragCardIdx = null;
+  saveUiStateToStorage();
+  renderTrendStudioView();
+}
+
+function renderTrendDynamicCardsGrid() {
+  const grid = document.getElementById('trendDynamicCardsGrid');
+  if (!grid) return;
+  grid.className = 'scada-telemetry-grid' + (trendGridCols !== 'auto' ? ` cols-${trendGridCols}` : '');
+
+  if (!Array.isArray(trendWatches) || trendWatches.length === 0) {
+    grid.innerHTML = `
+      <div style="grid-column: 1 / -1; text-align: center; padding: 26px 16px; background: rgba(2,6,23,0.65); border: 1px dashed var(--border); border-radius: 12px; color: var(--text-muted);">
+        <div style="font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 6px;">Chưa có Thẻ Động hoặc Tag nào đang được theo dõi</div>
+        <div style="font-size: 12px; margin-bottom: 12px;">Nhấn <b>➕ Thêm / Chọn Tag Theo Dõi</b> hoặc <b>⚡ Nạp Nhanh Tag Đang Mở</b> để tạo lưới thẻ động thời gian thực và vẽ đồ thị sóng.</div>
+        <div style="display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;">
+          <button class="btn btn-emerald" onclick="openTrendTagManagerModal()">➕ Chọn Tag Theo Dõi</button>
+          <button class="btn btn-primary" onclick="autoPopulateTrendFromActiveTab()">⚡ Nạp Nhanh Tag Đang Mở</button>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  grid.innerHTML = trendWatches.map((w, idx) => {
+    const snap = getLiveWatchSnapshot(w);
+    const pLbl = snap.tab ? shortPortLabel(snap.tab.port) : shortPortLabel(w.port);
+    const plcPrefix = (w.fn_code === 3) ? 40001 : (w.fn_code === 4) ? 30001 : (w.fn_code === 1) ? 1 : 10001;
+    const plcAddr = plcPrefix + Number(w.addr);
+    const hasDecimals = Math.abs((Number(snap.scale) || 1) - 1) > 1e-9;
+    const fmtStat = v => (v === null || v === undefined) ? '--' : Number(v).toFixed(hasDecimals ? 2 : 0);
+    const decodedHtml = snap.decoded
+      ? `<span class="decoded-state-pill tone-${snap.decoded.tone}" title="Trạng thái giải mã trực tiếp">${escapeHtmlStr(snap.decoded.badgeText)}</span>`
+      : '';
+
+    return `
+      <div class="scada-dyn-card ${w.span === 2 ? 'span-2' : ''}"
+           draggable="true"
+           ondragstart="onTrendCardDragStart(${idx}, event)"
+           ondragover="onTrendCardDragOver(${idx}, this, event)"
+           ondragleave="onTrendCardDragLeave(this)"
+           ondrop="onTrendCardDrop(${idx}, this, event)"
+           style="border-top: 3px solid ${w.color || '#06b6d4'};">
+        <!-- Card Header: Tag Name + Source Badge + Grid Reorder/Edit/Delete Controls -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 6px;">
+          <div style="min-width: 0; flex: 1;">
+            <div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
+              <span style="width: 9px; height: 9px; border-radius: 50%; background: ${w.color || '#06b6d4'}; display: inline-block; flex-shrink: 0;"></span>
+              <span style="font-size: 10px; font-family: monospace; color: var(--cyan); background: rgba(6,182,212,0.12); padding: 1px 5px; border-radius: 4px;">${escapeHtmlStr(pLbl)} • #${plcAddr} (Addr ${w.addr})</span>
+            </div>
+            <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-top: 4px; line-height: 1.25; word-break: break-word;" title="${escapeHtmlStr(snap.alias)}">
+              ${escapeHtmlStr(snap.alias)}
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; flex-shrink: 0;">
+            <button class="btn btn-outline" style="padding: 2px 5px; font-size: 10px;" onclick="moveTrendWatchCard(${idx}, -1, event)" title="Di chuyển thẻ sang trái / lên trên theo lưới">◀</button>
+            <button class="btn btn-outline" style="padding: 2px 5px; font-size: 10px;" onclick="moveTrendWatchCard(${idx}, 1, event)" title="Di chuyển thẻ sang phải / xuống dưới theo lưới">▶</button>
+            <button class="btn btn-outline" style="padding: 2px 5px; font-size: 10px; color: ${w.span === 2 ? 'var(--cyan)' : 'var(--text-muted)'};" onclick="toggleTrendWatchCardSpan(${idx}, event)" title="Đổi kích thước thẻ trên lưới (1 cột / 2 cột)">${w.span === 2 ? '2x' : '1x'}</button>
+            <button class="btn btn-outline" style="padding: 2px 5px; font-size: 10px;" onclick="editTrendWatchCardPrompt(${idx}, event)" title="Sửa nhanh Tên Tag, Đơn vị & Hệ số">✏️</button>
+            <button class="btn btn-outline" style="padding: 2px 5px; font-size: 10px; color: var(--rose);" onclick="removeTrendWatchByIndex(${idx}, event)" title="Gỡ thẻ này khỏi bảng theo dõi">✕</button>
+          </div>
+        </div>
+
+        <!-- Card Body: Big Realtime Value + Decoded State + Quick Control -->
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0;">
+          <div style="display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;">
+            <span class="scada-card-val" style="color: ${w.color || '#38bdf8'};">${snap.displayVal}</span>
+            ${snap.unit ? `<span style="font-size: 13px; font-weight: 800; color: #cbd5e1;">${escapeHtmlStr(snap.unit)}</span>` : ''}
+            ${decodedHtml}
+          </div>
+          <div style="flex-shrink: 0;">
+            ${snap.quickCtrlHtml}
+          </div>
+        </div>
+
+        <!-- Card Footer: Update Timestamp + Min/Max/Avg Stats -->
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 10px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 6px;">
+          <span style="font-family: monospace; color: ${snap.updatedAt !== '--' ? '#38bdf8' : '#64748b'};" title="Thời điểm cập nhật giá trị gần nhất">
+            🕒 Cập nhật: <b>${snap.updatedAt}</b>
+          </span>
+          <span style="font-family: monospace;">
+            Min: <b style="color: #cbd5e1;">${fmtStat(snap.min)}</b> • Max: <b style="color: #cbd5e1;">${fmtStat(snap.max)}</b> • TB: <b style="color: #cbd5e1;">${fmtStat(snap.avg)}</b>
+          </span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderTrendLegendBar() {
+  const bar = document.getElementById('trendLegendBar');
+  if (!bar) return;
+  if (!Array.isArray(trendWatches) || trendWatches.length === 0) {
+    bar.innerHTML = `<span style="font-size: 11px; color: var(--text-muted);">Chưa có kênh sóng nào. Nhấn <b>➕ Thêm / Chọn Tag Theo Dõi</b> để chọn thanh ghi cần vẽ đồ thị.</span>`;
+    return;
+  }
+
+  bar.innerHTML = `<span style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-right: 4px;">KÊNH ĐỒ THỊ:</span>` +
+    trendWatches.map((w, idx) => {
+      const snap = getLiveWatchSnapshot(w);
+      const isVis = w.visible !== false;
+      return `
+        <div class="trend-legend-pill ${isVis ? '' : 'is-hidden'}">
+          <input type="checkbox" ${isVis ? 'checked' : ''} onchange="toggleTrendWatchVisibility(${idx}, event)" style="accent-color: ${w.color}; cursor: pointer;" title="Bật/Tắt vẽ đường sóng này">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: ${w.color}; display: inline-block;"></span>
+          <span style="font-weight: 700; color: #e2e8f0; cursor: pointer;" onclick="toggleTrendWatchVisibility(${idx}, event)">${escapeHtmlStr(snap.alias)}</span>
+          <span style="font-family: monospace; font-weight: 800; color: ${w.color};">${snap.displayVal}${snap.unit ? ' ' + escapeHtmlStr(snap.unit) : ''}</span>
+          <button style="background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 10px; padding: 0 2px;" onclick="removeTrendWatchByIndex(${idx}, event)" title="Xóa kênh này">✕</button>
+        </div>
+      `;
+    }).join('');
+}
+
+function renderTrendStudioView() {
+  ensureDefaultTrendWatches();
+  const cntBadge = document.getElementById('badgeTrendWatchCount');
+  if (cntBadge) cntBadge.textContent = `${trendWatches.length} Tag theo dõi`;
+
+  let maxSamples = 0;
+  trendWatches.forEach(w => {
+    const len = (trendDataSeries[w.id] || []).length;
+    if (len > maxSamples) maxSamples = len;
+  });
+  const smpBadge = document.getElementById('badgeTrendSampleCount');
+  if (smpBadge) smpBadge.textContent = `${maxSamples} mẫu lịch sử`;
+
+  // Sync Poll button state on Trend toolbar
+  const btnPoll = document.getElementById('btnTrendStartPoll');
+  if (btnPoll) {
+    const anyPolling = sessionTabs.some(t => t.isPolling);
+    btnPoll.className = anyPolling ? 'btn btn-rose' : 'btn btn-emerald';
+    btnPoll.innerHTML = anyPolling ? '⏹ Dừng Polling' : '▶ Bật Polling Các Tag';
+  }
+
+  setTrendStudioDisplayMode(trendStudioDisplayMode);
+  setTrendGridColumns(trendGridCols);
+  renderTrendDynamicCardsGrid();
+  renderTrendLegendBar();
+  drawTrendCanvas();
 }
 
 function initTrendCanvas() {
-  drawTrendCanvas();
+  bindTrendCanvasEventsOnce();
+  renderTrendStudioView();
+}
+
+function bindTrendCanvasEventsOnce() {
+  if (trendCanvasEventsBound) return;
+  const cvs = document.getElementById('trendCanvas');
+  if (!cvs) return;
+  trendCanvasEventsBound = true;
+
+  cvs.addEventListener('mousemove', ev => {
+    const rect = cvs.getBoundingClientRect();
+    trendHoverX = ev.clientX - rect.left;
+    drawTrendCanvas();
+  });
+  cvs.addEventListener('mouseleave', () => {
+    trendHoverX = null;
+    const tt = document.getElementById('trendHoverTooltip');
+    if (tt) tt.style.display = 'none';
+    drawTrendCanvas();
+  });
+  cvs.addEventListener('wheel', ev => {
+    ev.preventDefault();
+    zoomTrendWindow(ev.deltaY < 0 ? -15 : 15);
+  }, { passive: false });
 }
 
 function drawTrendCanvas() {
   const cvs = document.getElementById('trendCanvas');
   if (!cvs) return;
   const ctx = cvs.getContext('2d');
-  const w = cvs.clientWidth;
-  const h = cvs.clientHeight;
-  cvs.width = w;
-  cvs.height = h;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cvs.clientWidth || 700;
+  const h = cvs.clientHeight || 340;
+  cvs.width = w * dpr;
+  cvs.height = h * dpr;
+  ctx.scale(dpr, dpr);
 
   ctx.fillStyle = '#030712';
   ctx.fillRect(0, 0, w, h);
 
-  ctx.strokeStyle = '#1e293b';
-  ctx.lineWidth = 1;
-  for (let y = 30; y < h; y += 40) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
+  const pad = { top: 22, right: 64, bottom: 28, left: 18 };
+  const plotW = Math.max(100, w - pad.left - pad.right);
+  const plotH = Math.max(80, h - pad.top - pad.bottom);
+
+  // Compute global Y range across visible watches
+  const activeSeriesMap = trendIsPaused && trendPausedSnapshot ? trendPausedSnapshot : trendDataSeries;
+  const visibleWatches = (trendWatches || []).filter(tw => tw.visible !== false);
+  const winPts = trendWindowPoints || 60;
+
+  let globalMin = Infinity, globalMax = -Infinity;
+  let longestWindow = [];
+
+  visibleWatches.forEach(tw => {
+    const fullArr = activeSeriesMap[tw.id] || [];
+    const sliced = fullArr.slice(-winPts);
+    if (sliced.length > longestWindow.length) longestWindow = sliced;
+    sliced.forEach(pt => {
+      if (pt.val < globalMin) globalMin = pt.val;
+      if (pt.val > globalMax) globalMax = pt.val;
+    });
+  });
+
+  if (!isFinite(globalMin) || !isFinite(globalMax)) {
+    globalMin = 0; globalMax = 100;
+  } else if (Math.abs(globalMax - globalMin) < 1e-6) {
+    globalMin -= 5; globalMax += 5;
+  } else {
+    const margin = (globalMax - globalMin) * 0.1;
+    globalMin -= margin;
+    globalMax += margin;
   }
 
-  if (trendHistory.length < 2) return;
+  // Draw Horizontal Grid Lines & Y-Axis Labels
+  const gridRows = 5;
+  ctx.font = '10px monospace';
+  for (let r = 0; r <= gridRows; r++) {
+    const ratio = r / gridRows;
+    const y = pad.top + ratio * plotH;
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(pad.left + plotW, y);
+    ctx.stroke();
 
-  const colors = ['#06b6d4', '#10b981', '#f59e0b'];
-  const chks = [
-    document.getElementById('chkCh0')?.checked,
-    document.getElementById('chkCh1')?.checked,
-    document.getElementById('chkCh2')?.checked
-  ];
+    const lblVal = trendNormalizedScale
+      ? `${Math.round((1 - ratio) * 100)}%`
+      : (globalMax - ratio * (globalMax - globalMin)).toFixed(Math.abs(globalMax - globalMin) < 10 ? 2 : 0);
+    ctx.fillStyle = '#64748b';
+    ctx.textAlign = 'left';
+    ctx.fillText(lblVal, pad.left + plotW + 6, y + 3);
+  }
 
-  for (let ch = 0; ch < 3; ch++) {
-    if (!chks[ch]) continue;
-    ctx.strokeStyle = colors[ch];
-    ctx.lineWidth = 2;
+  // Draw X-Axis Time Labels
+  if (longestWindow.length > 0) {
+    ctx.fillStyle = '#64748b';
+    const step = Math.max(1, Math.floor(longestWindow.length / 5));
+    for (let i = 0; i < longestWindow.length; i += step) {
+      const x = longestWindow.length === 1
+        ? pad.left + plotW / 2
+        : pad.left + (i / (longestWindow.length - 1)) * plotW;
+      ctx.textAlign = (i === 0 && longestWindow.length > 1)
+        ? 'left'
+        : (i + step >= longestWindow.length && longestWindow.length > 1 ? 'right' : 'center');
+      ctx.fillText(longestWindow[i].time, x, h - 8);
+    }
+  } else {
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText("Đang chờ mẫu dữ liệu Polling... (Nhấn '▶ Bật Polling Các Tag' hoặc 'Đọc 1 Lần')", pad.left + plotW / 2, pad.top + plotH / 2);
+  }
+
+  // Draw Each Visible Trace Curve
+  visibleWatches.forEach(tw => {
+    const fullArr = activeSeriesMap[tw.id] || [];
+    const sliced = fullArr.slice(-winPts);
+    if (sliced.length === 0) return;
+
+    let tMin = globalMin, tMax = globalMax;
+    if (trendNormalizedScale) {
+      const vals = sliced.map(p => p.val);
+      tMin = Math.min(...vals);
+      tMax = Math.max(...vals);
+      if (Math.abs(tMax - tMin) < 1e-6) { tMin -= 1; tMax += 1; }
+    }
+
+    ctx.strokeStyle = tw.color || '#06b6d4';
+    ctx.lineWidth = 2.2;
     ctx.beginPath();
 
-    trendHistory.forEach((pt, i) => {
-      const x = (i / (trendHistory.length - 1)) * (w - 40) + 20;
-      const val = pt.vals[ch] || 0;
-      const y = h - 30 - ((val % 500) / 500) * (h - 60);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+    const coords = sliced.map((pt, i) => {
+      const x = sliced.length === 1
+        ? pad.left + plotW / 2
+        : pad.left + (i / (sliced.length - 1)) * plotW;
+      const norm = (pt.val - tMin) / (tMax - tMin);
+      const y = pad.top + plotH - Math.max(0, Math.min(1, norm)) * plotH;
+      return { x, y, pt };
+    });
+
+    coords.forEach((c, i) => {
+      if (i === 0) ctx.moveTo(c.x, c.y);
+      else ctx.lineTo(c.x, c.y);
     });
     ctx.stroke();
+
+    // Draw latest point dot
+    const last = coords[coords.length - 1];
+    ctx.beginPath();
+    ctx.arc(last.x, last.y, 3.8, 0, Math.PI * 2);
+    ctx.fillStyle = tw.color || '#06b6d4';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  // Draw Crosshair & Floating Tooltip on Hover
+  const tt = document.getElementById('trendHoverTooltip');
+  if (trendHoverX !== null && longestWindow.length > 0 && trendHoverX >= pad.left && trendHoverX <= pad.left + plotW) {
+    const ratio = (trendHoverX - pad.left) / plotW;
+    const hoverIdx = Math.max(0, Math.min(longestWindow.length - 1, Math.round(ratio * (longestWindow.length - 1))));
+    const snapX = longestWindow.length === 1
+      ? pad.left + plotW / 2
+      : pad.left + (hoverIdx / (longestWindow.length - 1)) * plotW;
+
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.7)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(snapX, pad.top);
+    ctx.lineTo(snapX, pad.top + plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const hoverTime = longestWindow[hoverIdx]?.time || '--';
+    const rowsHtml = [];
+    visibleWatches.forEach(tw => {
+      const s = (activeSeriesMap[tw.id] || []).slice(-winPts);
+      const localIdx = hoverIdx - (longestWindow.length - s.length);
+      if (localIdx >= 0 && localIdx < s.length) {
+        const p = s[localIdx];
+        rowsHtml.push(`
+          <div style="display: flex; justify-content: space-between; gap: 10px; align-items: center;">
+            <span style="color: #e2e8f0; display: inline-flex; align-items: center; gap: 4px;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; background: ${tw.color}; display: inline-block;"></span>
+              ${escapeHtmlStr(tw.alias)}
+            </span>
+            <b style="color: ${tw.color};">${Number(p.val).toFixed(Math.abs((tw.scale || 1) - 1) > 1e-9 ? 2 : 0)} ${escapeHtmlStr(tw.unit || '')}</b>
+          </div>
+        `);
+      }
+    });
+
+    if (tt && rowsHtml.length > 0) {
+      tt.style.display = 'block';
+      tt.style.left = `${Math.min(w - 230, Math.max(10, snapX + 12))}px`;
+      tt.style.top = `14px`;
+      tt.innerHTML = `
+        <div style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 4px; color: var(--cyan); font-weight: 700;">
+          🕒 Mốc thời gian: ${hoverTime}
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 3px;">
+          ${rowsHtml.join('')}
+        </div>
+      `;
+    }
+  } else if (tt) {
+    tt.style.display = 'none';
   }
+}
+
+// ==================== TREND TAG MANAGER MODAL (ADD / EDIT / DELETE / SELECT TAGS) ====================
+function openTrendTagManagerModal() {
+  const modal = document.getElementById('trendTagManagerModal');
+  if (!modal) return;
+  const selTab = document.getElementById('selTrendMgrTab');
+  if (selTab) {
+    selTab.innerHTML = (sessionTabs || []).map(t =>
+      `<option value="${t.id}" ${t.id === activeTabId ? 'selected' : ''}>${escapeHtmlStr(t.name)} (${shortPortLabel(t.port)} • ID:${t.slave_id} • Addr ${t.start_addr}..${t.start_addr + t.count - 1})</option>`
+    ).join('');
+  }
+  renderTrendTagManagerPickerList();
+  renderTrendWatchedTableInModal();
+  modal.classList.add('open');
+}
+
+function closeTrendTagManagerModal() {
+  const modal = document.getElementById('trendTagManagerModal');
+  if (modal) modal.classList.remove('open');
+  renderTrendStudioView();
+  if (typeof renderTable === 'function') renderTable();
+}
+
+function renderTrendTagManagerPickerList() {
+  const box = document.getElementById('trendMgrPickerGrid');
+  if (!box) return;
+  const tabId = document.getElementById('selTrendMgrTab')?.value || activeTabId;
+  const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
+  if (!tab) return;
+
+  const q = (document.getElementById('inpTrendMgrSearch')?.value || '').trim().toLowerCase();
+  const onlyNamed = Boolean(document.getElementById('chkTrendMgrOnlyNamed')?.checked);
+  const plcPrefix = (tab.fn_code === 3) ? 40001 : (tab.fn_code === 4) ? 30001 : (tab.fn_code === 1) ? 1 : 10001;
+
+  const itemsHtml = [];
+  for (let i = 0; i < tab.count; i++) {
+    if (isRegisterDisabled(tab, i)) continue;
+    const addrDec = tab.start_addr + i;
+    const plcAddr = plcPrefix + addrDec;
+    const rawTag = getPointMeta(tab.tags, i, tab.start_addr, "");
+    if (onlyNamed && (!rawTag || !String(rawTag).trim())) continue;
+    const label = rawTag || `Điểm #${addrDec}`;
+    if (q && !label.toLowerCase().includes(q) && !String(addrDec).includes(q) && !String(plcAddr).includes(q)) {
+      continue;
+    }
+    const isWatched = isPointWatchedInTrend(tab.id, addrDec);
+    const raw = Array.isArray(tab.values) ? tab.values[i] : undefined;
+    const scale = getPointMeta(tab.scales, i, tab.start_addr, 1.0);
+    const unit = getPointMeta(tab.units, i, tab.start_addr, "");
+    const valStr = (raw !== undefined && raw !== null) ? formatValue(raw, tab.format, scale) : '--';
+
+    itemsHtml.push(`
+      <div class="trend-picker-item ${isWatched ? 'is-watched' : ''}" onclick="toggleTrendPickerPoint('${tab.id}', ${i})">
+        <div style="display: flex; align-items: center; gap: 6px; min-width: 0;">
+          <input type="checkbox" ${isWatched ? 'checked' : ''} style="accent-color: var(--emerald); pointer-events: none;">
+          <div style="min-width: 0;">
+            <div style="font-family: monospace; font-size: 10px; color: var(--cyan);">#${plcAddr} (Addr ${addrDec})</div>
+            <div style="font-weight: 700; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 135px;" title="${escapeHtmlStr(label)}">${escapeHtmlStr(label)}</div>
+          </div>
+        </div>
+        <span style="font-family: monospace; font-weight: 800; color: #fbbf24; font-size: 11px; flex-shrink: 0;">${valStr} ${escapeHtmlStr(unit)}</span>
+      </div>
+    `);
+  }
+
+  box.innerHTML = itemsHtml.length > 0
+    ? itemsHtml.join('')
+    : `<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 14px;">Không có thanh ghi nào khớp bộ lọc.</div>`;
+
+  const badge = document.getElementById('badgeModalTrendCount');
+  if (badge) badge.textContent = `${trendWatches.length} Tag đang chọn`;
+}
+
+function toggleTrendPickerPoint(tabId, idx) {
+  const tab = sessionTabs.find(t => t.id === tabId);
+  if (!tab) return;
+  toggleTrendWatchItem(tab, idx);
+  renderTrendTagManagerPickerList();
+  renderTrendWatchedTableInModal();
+}
+
+function batchSelectTaggedInTrendMgr() {
+  const tabId = document.getElementById('selTrendMgrTab')?.value || activeTabId;
+  const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
+  if (!tab) return;
+  let added = 0;
+  for (let i = 0; i < tab.count; i++) {
+    if (isRegisterDisabled(tab, i)) continue;
+    const rawTag = getPointMeta(tab.tags, i, tab.start_addr, "");
+    if (!rawTag || !String(rawTag).trim()) continue;
+    const addrDec = tab.start_addr + i;
+    if (!isPointWatchedInTrend(tab.id, addrDec)) {
+      const item = createWatchItemFromTabPoint(tab, i, trendWatches.length);
+      trendWatches.push(item);
+      const raw = Array.isArray(tab.values) ? tab.values[i] : undefined;
+      if (raw !== undefined && raw !== null) {
+        const stamp = (tab.lastUpdatedMap && tab.lastUpdatedMap[i]) || tab.lastUpdated || new Date().toTimeString().split(' ')[0];
+        pushWatchSamplePoint(item, tab, i, raw, stamp);
+      }
+      added++;
+    }
+  }
+  saveUiStateToStorage();
+  renderTrendTagManagerPickerList();
+  renderTrendWatchedTableInModal();
+  renderTrendStudioView();
+  showToast(`⚡ Đã thêm ${added} Tag của '${tab.name}' vào danh sách theo dõi!`);
+}
+
+function clearAllTrendWatches() {
+  trendWatches = [];
+  saveUiStateToStorage();
+  renderTrendTagManagerPickerList();
+  renderTrendWatchedTableInModal();
+  renderTrendStudioView();
+  if (typeof renderTable === 'function') renderTable();
+}
+
+function renderTrendWatchedTableInModal() {
+  const tbody = document.getElementById('tblTrendWatchedTags');
+  const badge = document.getElementById('badgeModalTrendCount');
+  if (badge) badge.textContent = `${trendWatches.length} Tag đang chọn`;
+  if (!tbody) return;
+  if (trendWatches.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Chưa chọn Tag nào. Tích vào các ô phía trên để đưa vào Bảng Thẻ Động & Biểu Đồ.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = trendWatches.map((w, idx) => {
+    const snap = getLiveWatchSnapshot(w);
+    const pLbl = snap.tab ? shortPortLabel(snap.tab.port) : shortPortLabel(w.port);
+    const ctrl = (snap.tab && snap.idx >= 0) ? getEffectiveControlConfig(snap.tab, snap.idx) : { type: 'none' };
+    return `
+      <tr>
+        <td>
+          <div style="display: flex; gap: 3px;">
+            <button class="btn btn-outline" style="padding: 2px 5px; font-size: 10px;" onclick="moveTrendWatchCard(${idx}, -1, event)">▲</button>
+            <button class="btn btn-outline" style="padding: 2px 5px; font-size: 10px;" onclick="moveTrendWatchCard(${idx}, 1, event)">▼</button>
+          </div>
+        </td>
+        <td style="text-align: center;">
+          <input type="checkbox" ${w.visible !== false ? 'checked' : ''} onchange="toggleTrendWatchVisibility(${idx}, event)" style="accent-color: ${w.color}; cursor: pointer;">
+        </td>
+        <td style="font-family: monospace; font-size: 11px; color: var(--cyan);">
+          ${escapeHtmlStr(pLbl)} • Addr <b>${w.addr}</b>
+        </td>
+        <td>
+          <input type="text" value="${escapeHtmlStr(snap.alias)}" style="width: 100%; font-size: 11px; padding: 3px 6px;"
+            onchange="onModalEditWatchField(${idx}, 'alias', this.value)">
+        </td>
+        <td>
+          <input type="text" value="${escapeHtmlStr(snap.unit)}" style="width: 58px; font-size: 11px; padding: 3px 5px;"
+            onchange="onModalEditWatchField(${idx}, 'unit', this.value)">
+        </td>
+        <td>
+          <input type="number" step="any" value="${snap.scale}" style="width: 58px; font-size: 11px; padding: 3px 5px;"
+            onchange="onModalEditWatchField(${idx}, 'scale', parseFloat(this.value) || 1)">
+        </td>
+        <td>
+          <input type="color" value="${w.color || '#06b6d4'}" style="width: 34px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer;"
+            onchange="onModalEditWatchField(${idx}, 'color', this.value)">
+        </td>
+        <td>
+          <select style="font-size: 11px; padding: 3px 5px;" onchange="onModalEditWatchField(${idx}, 'span', parseInt(this.value))">
+            <option value="1" ${w.span !== 2 ? 'selected' : ''}>1x1 Chuẩn</option>
+            <option value="2" ${w.span === 2 ? 'selected' : ''}>2x1 Rộng</option>
+          </select>
+        </td>
+        <td>
+          <select style="font-size: 11px; padding: 3px 5px;" onchange="onModalEditWatchField(${idx}, 'ctrlType', this.value)">
+            <option value="auto" ${ctrl.isAuto ? 'selected' : ''}>Tự động (${ctrl.type})</option>
+            <option value="toggle" ${!ctrl.isAuto && ctrl.type === 'toggle' ? 'selected' : ''}>Công tắc DO</option>
+            <option value="dropdown" ${!ctrl.isAuto && ctrl.type === 'dropdown' ? 'selected' : ''}>Multistate</option>
+            <option value="stepper" ${!ctrl.isAuto && ctrl.type === 'stepper' ? 'selected' : ''}>Stepper +/-</option>
+            <option value="none" ${!ctrl.isAuto && ctrl.type === 'none' ? 'selected' : ''}>Số thường</option>
+          </select>
+        </td>
+        <td>
+          <button class="btn btn-outline" style="padding: 2px 6px; font-size: 11px; color: var(--rose);" onclick="removeTrendWatchByIndex(${idx}, event)">✕</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function onModalEditWatchField(index, field, val) {
+  const w = trendWatches[index];
+  if (!w) return;
+  const snap = getLiveWatchSnapshot(w);
+  if (field === 'alias') {
+    w.alias = String(val || '').trim();
+    if (snap.tab && snap.idx >= 0) setPointMeta(snap.tab.tags, snap.idx, snap.tab.start_addr, w.alias);
+  } else if (field === 'unit') {
+    w.unit = String(val || '').trim();
+    if (snap.tab && snap.idx >= 0) setPointMeta(snap.tab.units, snap.idx, snap.tab.start_addr, w.unit);
+  } else if (field === 'scale') {
+    w.scale = Number(val) || 1.0;
+    if (snap.tab && snap.idx >= 0) setPointMeta(snap.tab.scales, snap.idx, snap.tab.start_addr, w.scale);
+  } else if (field === 'color') {
+    w.color = val;
+  } else if (field === 'span') {
+    w.span = (Number(val) === 2) ? 2 : 1;
+  } else if (field === 'ctrlType' && snap.tab && snap.idx >= 0) {
+    if (!snap.tab.controls) snap.tab.controls = {};
+    if (val === 'auto') {
+      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, undefined);
+    } else if (val === 'toggle') {
+      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'toggle', onValue: 1, offValue: 0 });
+    } else if (val === 'stepper') {
+      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'stepper', step: 1, min: 0, max: 65535 });
+    } else if (val === 'dropdown') {
+      const curInferred = inferControlFromTagAndFn(w.alias, snap.tab.fn_code);
+      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, {
+        type: 'dropdown',
+        options: (curInferred.options && curInferred.options.length > 0)
+          ? curInferred.options
+          : [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }, { value: 2, label: 'AUTO' }]
+      });
+    } else {
+      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'none' });
+    }
+  }
+  saveUiStateToStorage();
+  renderTrendTagManagerPickerList();
+  renderTrendWatchedTableInModal();
+  renderTrendStudioView();
+  if (typeof renderTable === 'function') renderTable();
 }
 
 // ==================== MULTI-COM GATEWAY MATRIX, SMART ROUTER & COM2COM ====================

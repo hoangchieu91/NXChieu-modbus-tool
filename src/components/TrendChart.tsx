@@ -17,14 +17,26 @@ import {
   Sliders,
   Plus,
   LineChart,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Edit3,
+  LayoutGrid,
 } from 'lucide-react';
 import { ChartDataPoint, ChartTrace, RegisterRow } from '../types/modbus';
+import { decodeRegisterStateBadge } from '../utils/rowBuilder';
 
 interface TrendChartProps {
   traces: ChartTrace[];
   traceData: Record<string, ChartDataPoint[]>;
   onToggleTraceVisibility: (traceId: string) => void;
   onRemoveTrace: (traceId: string) => void;
+  onMoveTrace?: (traceId: string, delta: number) => void;
+  onToggleTraceSpan?: (traceId: string) => void;
+  onRenameTrace?: (trace: ChartTrace, newLabel: string) => void;
+  onInlineWrite?: (address: number, newValStr: string) => void;
+  onToggleCoil?: (address: number, currentVal: boolean) => void;
+  isCoil?: boolean;
   onClear: () => void;
   onClose: () => void;
   isFullScreen?: boolean;
@@ -37,6 +49,12 @@ export const TrendChart: React.FC<TrendChartProps> = ({
   traceData,
   onToggleTraceVisibility,
   onRemoveTrace,
+  onMoveTrace,
+  onToggleTraceSpan,
+  onRenameTrace,
+  onInlineWrite,
+  onToggleCoil,
+  isCoil = false,
   onClear,
   onClose,
   isFullScreen = false,
@@ -51,6 +69,14 @@ export const TrendChart: React.FC<TrendChartProps> = ({
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [isNormalizedScale, setIsNormalizedScale] = useState<boolean>(false);
   const [showAddMenu, setShowAddMenu] = useState<boolean>(false);
+  const [displayLayout, setDisplayLayout] = useState<'both' | 'cards' | 'chart'>('both');
+  const [gridCols, setGridCols] = useState<'auto' | '2' | '3' | '4'>('auto');
+
+  const rowByAddress = useMemo(() => {
+    const map = new Map<number, RegisterRow>();
+    (availableRows || []).forEach((r) => map.set(r.address, r));
+    return map;
+  }, [availableRows]);
 
 
   // Zoom & Pan state
@@ -578,7 +604,11 @@ export const TrendChart: React.FC<TrendChartProps> = ({
     <div
       ref={containerRef}
       className={`flex flex-col bg-slate-950 text-xs font-sans shadow-2xl relative ${
-        isFullScreen ? 'flex-1 h-full border-0' : isExpanded ? 'h-96 border-t border-cyan-800/40' : 'h-72 border-t border-cyan-800/40'
+        isFullScreen
+          ? 'flex-1 h-full border-0'
+          : isExpanded
+          ? 'h-[480px] border-t border-cyan-800/40'
+          : 'h-[360px] border-t border-cyan-800/40'
       }`}
     >
       {/* Top Header & Toolbar */}
@@ -586,9 +616,9 @@ export const TrendChart: React.FC<TrendChartProps> = ({
         {/* Left: Title & Realtime Status */}
         <div className="flex items-center space-x-2">
           <TrendingUp className="w-4 h-4 text-cyan-400" />
-          <span className="font-bold text-slate-100 text-sm">Biểu Đồ Xu Hướng Đa Kênh</span>
+          <span className="font-bold text-slate-100 text-sm">Thẻ Động & Biểu Đồ Sóng</span>
           <span className="text-slate-500 font-mono text-[11px]">
-            ({traces.length} đường, hiển thị {Math.min(viewPointsCount, maxAvailablePoints)}/{maxAvailablePoints} mẫu)
+            ({traces.length} tag • {Math.min(viewPointsCount, maxAvailablePoints)}/{maxAvailablePoints} mẫu)
           </span>
 
           {/* Pan offset badge / Back to Live */}
@@ -604,35 +634,67 @@ export const TrendChart: React.FC<TrendChartProps> = ({
           )}
         </div>
 
-        {/* Center: Zoom / Navigation Controls */}
-        <div className="flex items-center space-x-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-          <button
-            onClick={() => setViewPointsCount((p) => Math.max(15, p - 10))}
-            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
-            title="Phóng to dòng thời gian (Zoom In)"
-          >
-            <ZoomIn className="w-3.5 h-3.5" />
-          </button>
-          <span className="text-[11px] font-mono text-cyan-300 px-1">{viewPointsCount} pts</span>
-          <button
-            onClick={() => setViewPointsCount((p) => Math.min(300, p + 15))}
-            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
-            title="Thu nhỏ dòng thời gian (Zoom Out)"
-          >
-            <ZoomOut className="w-3.5 h-3.5" />
-          </button>
-          <div className="h-3.5 w-px bg-slate-800 mx-1" />
-          <button
-            onClick={() => {
-              setPanOffset(0);
-              setViewPointsCount(60);
-            }}
-            className="flex items-center space-x-1 px-1.5 py-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors text-[10px]"
-            title="Đặt lại khung nhìn mặc định"
-          >
-            <RotateCcw className="w-3 h-3" />
-            <span>Reset</span>
-          </button>
+        {/* Center: Layout Mode, Grid Columns & Zoom Controls */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex items-center bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 gap-1">
+            <LayoutGrid className="w-3 h-3 text-cyan-400" />
+            <select
+              value={displayLayout}
+              onChange={(e) => setDisplayLayout(e.target.value as 'both' | 'cards' | 'chart')}
+              className="bg-transparent text-[11px] font-semibold text-cyan-300 focus:outline-none cursor-pointer"
+              title="Chế độ hiển thị Thẻ Động và Biểu Đồ Sóng"
+            >
+              <option value="both" className="bg-slate-900 text-slate-200">🎛️+📈 Thẻ & Sóng</option>
+              <option value="cards" className="bg-slate-900 text-slate-200">🎛️ Chỉ Thẻ Động</option>
+              <option value="chart" className="bg-slate-900 text-slate-200">📈 Chỉ Biểu Đồ</option>
+            </select>
+            {displayLayout !== 'chart' && (
+              <>
+                <div className="h-3.5 w-px bg-slate-800 mx-0.5" />
+                <select
+                  value={gridCols}
+                  onChange={(e) => setGridCols(e.target.value as 'auto' | '2' | '3' | '4')}
+                  className="bg-transparent text-[11px] font-mono text-slate-300 focus:outline-none cursor-pointer"
+                  title="Số cột lưới Thẻ Động"
+                >
+                  <option value="auto" className="bg-slate-900 text-slate-200">Lưới Auto</option>
+                  <option value="2" className="bg-slate-900 text-slate-200">2 Cột</option>
+                  <option value="3" className="bg-slate-900 text-slate-200">3 Cột</option>
+                  <option value="4" className="bg-slate-900 text-slate-200">4 Cột</option>
+                </select>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center space-x-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+            <button
+              onClick={() => setViewPointsCount((p) => Math.max(15, p - 10))}
+              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+              title="Phóng to dòng thời gian (Zoom In)"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <span className="text-[11px] font-mono text-cyan-300 px-1">{viewPointsCount} pts</span>
+            <button
+              onClick={() => setViewPointsCount((p) => Math.min(300, p + 15))}
+              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+              title="Thu nhỏ dòng thời gian (Zoom Out)"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <div className="h-3.5 w-px bg-slate-800 mx-1" />
+            <button
+              onClick={() => {
+                setPanOffset(0);
+                setViewPointsCount(60);
+              }}
+              className="flex items-center space-x-1 px-1.5 py-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors text-[10px]"
+              title="Đặt lại khung nhìn mặc định"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset</span>
+            </button>
+          </div>
         </div>
 
         {/* Right Actions */}
@@ -745,112 +807,317 @@ export const TrendChart: React.FC<TrendChartProps> = ({
         </div>
       </div>
 
-      {/* Traces Legend Pill Bar */}
-      <div className="flex items-center space-x-2 px-3 py-1 bg-slate-950 border-b border-slate-900 overflow-x-auto select-none">
-        <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider shrink-0">
-          Các kênh:
-        </span>
-        {traces.map((trace) => {
-          const stats = traceStats[trace.id] || { current: 0, min: 0, max: 0, avg: 0 };
-          return (
-            <div
-              key={trace.id}
-              className={`flex items-center space-x-1.5 px-2 py-0.5 rounded-full border transition-all shrink-0 ${
-                trace.visible
-                  ? 'bg-slate-900/90 border-slate-700'
-                  : 'bg-slate-950/60 border-slate-900 opacity-50'
-              }`}
-            >
-              {/* Color indicator dot */}
-              <div
-                className="w-2.5 h-2.5 rounded-full shadow-sm"
-                style={{ backgroundColor: trace.color }}
-              />
-
-              {/* Trace Label */}
-              <span className="font-semibold text-slate-200 text-xs">
-                {trace.displayAddress}
-              </span>
-              <span className="text-slate-400 text-[11px] truncate max-w-[120px]">
-                {trace.label}
-              </span>
-
-              {/* Current Value Readout */}
-              <span
-                className="font-mono font-bold text-xs ml-1"
-                style={{ color: trace.color }}
-              >
-                {stats.current.toFixed(2)} {trace.unit}
-              </span>
-
-              {/* Visibility Toggle */}
-              <button
-                onClick={() => onToggleTraceVisibility(trace.id)}
-                className="text-slate-400 hover:text-slate-200 transition-colors p-0.5"
-                title={trace.visible ? 'Ẩn đường này' : 'Hiện đường này'}
-              >
-                {trace.visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-slate-600" />}
-              </button>
-
-              {/* Remove Trace Button */}
-              <button
-                onClick={() => onRemoveTrace(trace.id)}
-                className="text-slate-500 hover:text-rose-400 transition-colors p-0.5"
-                title="Bỏ theo dõi đường này"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Canvas Area with Pan/Zoom & Inspection Cursor */}
-      <div className="flex-1 relative w-full h-full bg-slate-950/90 cursor-crosshair overflow-hidden">
-        <canvas
-          ref={canvasRef}
-          onMouseMove={handleCanvasMouseMove}
-          onMouseDown={handleCanvasMouseDown}
-          onMouseUp={handleCanvasMouseUp}
-          onMouseLeave={handleCanvasMouseLeave}
-          onWheel={handleWheel}
-          className="w-full h-full block"
-        />
-
-        {/* Floating Crosshair HUD Tooltip */}
-        {hoverInfo && (
+      {/* SCADA Dynamic Telemetry Cards Grid */}
+      {displayLayout !== 'chart' && (
+        <div
+          className={`px-3 py-2 bg-slate-950/95 border-b border-slate-900 overflow-y-auto select-none ${
+            displayLayout === 'cards' ? 'flex-1' : 'max-h-44'
+          }`}
+        >
           <div
-            className="absolute z-20 pointer-events-none bg-slate-900/95 border border-slate-700/80 rounded-lg p-2.5 shadow-2xl backdrop-blur-sm text-xs font-mono min-w-[180px]"
+            className="grid gap-2.5"
             style={{
-              left: Math.min(hoverInfo.x + 15, (containerRef.current?.clientWidth || 800) - 210),
-              top: Math.max(10, Math.min(hoverInfo.y - 40, (containerRef.current?.clientHeight || 300) - 130)),
+              gridTemplateColumns:
+                gridCols === 'auto'
+                  ? 'repeat(auto-fill, minmax(240px, 1fr))'
+                  : `repeat(${gridCols}, minmax(0, 1fr))`,
             }}
           >
-            <div className="text-slate-400 font-sans border-b border-slate-800 pb-1 mb-1.5 flex items-center justify-between text-[11px]">
-              <span>Mốc thời gian:</span>
-              <span className="text-cyan-400 font-bold">{hoverInfo.timestamp}</span>
-            </div>
-            <div className="space-y-1">
-              {hoverInfo.points.map((pt, i) => (
-                <div key={i} className="flex items-center justify-between space-x-3">
-                  <div className="flex items-center space-x-1.5 truncate max-w-[130px]">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: pt.color }} />
-                    <span className="text-slate-300 font-sans truncate">{pt.label}</span>
-                  </div>
-                  <span className="font-bold font-mono" style={{ color: pt.color }}>
-                    {pt.value.toFixed(2)} {pt.unit}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+            {traces.map((trace, idx) => {
+              const stats = traceStats[trace.id] || { current: 0, min: 0, max: 0, avg: 0 };
+              const row = rowByAddress.get(trace.address);
+              const pts = activeData[trace.id] || [];
+              const lastPt = pts.length > 0 ? pts[pts.length - 1] : null;
+              const lastTimeStr = row?.lastUpdated || lastPt?.timestamp || '--:--:--';
+              const decodedBadge = row ? decodeRegisterStateBadge(row, isCoil) : null;
+              const ctrl = row?.control;
+              const rawNum =
+                row && row.rawValue !== null && row.rawValue !== undefined
+                  ? typeof row.rawValue === 'boolean'
+                    ? row.rawValue
+                      ? 1
+                      : 0
+                    : Number(row.rawValue)
+                  : stats.current;
 
-        {/* Pan helper hint */}
-        <div className="absolute bottom-1 right-14 text-[10px] text-slate-600 font-sans pointer-events-none select-none">
-          Kéo chuột để di chuyển (Pan) • Lăn chuột để phóng to/thu nhỏ (Zoom)
+              return (
+                <div
+                  key={trace.id}
+                  style={{
+                    borderTopColor: trace.color,
+                    gridColumn: trace.span === 2 ? 'span 2 / span 2' : undefined,
+                  }}
+                  className={`flex flex-col justify-between p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 border-t-[3px] shadow-lg transition-all ${
+                    !trace.visible ? 'opacity-50' : ''
+                  }`}
+                >
+                  {/* Card Header: Color Dot + Tag Name + Reorder/Span/Actions */}
+                  <div className="flex items-start justify-between gap-1.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: trace.color }}
+                        />
+                        <span
+                          className="font-bold text-slate-100 text-xs truncate"
+                          title={row?.alias || trace.label}
+                        >
+                          {row?.alias || trace.label}
+                        </span>
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-400 mt-0.5 truncate">
+                        {trace.displayAddress} • {trace.tabTitle}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      {onMoveTrace && (
+                        <>
+                          <button
+                            disabled={idx === 0}
+                            onClick={() => onMoveTrace(trace.id, -1)}
+                            className="p-0.5 rounded bg-slate-950/80 border border-slate-800 text-slate-400 hover:text-cyan-300 disabled:opacity-30"
+                            title="Di chuyển thẻ sang trái"
+                          >
+                            <ChevronLeft className="w-3 h-3" />
+                          </button>
+                          <button
+                            disabled={idx === traces.length - 1}
+                            onClick={() => onMoveTrace(trace.id, 1)}
+                            className="p-0.5 rounded bg-slate-950/80 border border-slate-800 text-slate-400 hover:text-cyan-300 disabled:opacity-30"
+                            title="Di chuyển thẻ sang phải"
+                          >
+                            <ChevronRight className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                      {onToggleTraceSpan && (
+                        <button
+                          onClick={() => onToggleTraceSpan(trace.id)}
+                          className="px-1 py-0.5 rounded bg-slate-950/80 border border-slate-800 text-[9px] font-mono text-slate-400 hover:text-cyan-300"
+                          title="Đổi độ rộng thẻ trên lưới (1 cột / 2 cột)"
+                        >
+                          {trace.span === 2 ? '2x' : '1x'}
+                        </button>
+                      )}
+                      {onRenameTrace && (
+                        <button
+                          onClick={() => {
+                            const nextName = window.prompt(
+                              `Đổi tên Tag (${trace.displayAddress}):`,
+                              row?.alias || trace.label
+                            );
+                            if (nextName !== null && nextName.trim()) {
+                              onRenameTrace(trace, nextName.trim());
+                            }
+                          }}
+                          className="p-0.5 rounded bg-slate-950/80 border border-slate-800 text-slate-400 hover:text-amber-300"
+                          title="Sửa tên Tag"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => onToggleTraceVisibility(trace.id)}
+                        className="p-0.5 rounded bg-slate-950/80 border border-slate-800 text-slate-400 hover:text-slate-200"
+                        title={trace.visible ? 'Ẩn sóng' : 'Hiện sóng'}
+                      >
+                        {trace.visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-slate-600" />}
+                      </button>
+                      <button
+                        onClick={() => onRemoveTrace(trace.id)}
+                        className="p-0.5 rounded bg-slate-950/80 border border-slate-800 text-slate-400 hover:text-rose-400"
+                        title="Xóa thẻ theo dõi"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Card Body: Realtime Value + Decoded State Badge */}
+                  <div className="flex items-baseline justify-between gap-2 my-1.5 flex-wrap">
+                    <div className="flex items-baseline gap-1">
+                      <span
+                        className="font-mono font-extrabold text-lg leading-none"
+                        style={{ color: trace.color }}
+                      >
+                        {row?.hasValue ? row.displayValue : stats.current.toFixed(2)}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-400">
+                        {row?.unit || trace.unit}
+                      </span>
+                    </div>
+
+                    {decodedBadge && (
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                          decodedBadge.tone === 'on'
+                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                            : decodedBadge.tone === 'enum'
+                            ? 'bg-purple-500/15 text-purple-300 border-purple-500/40'
+                            : decodedBadge.tone === 'bits'
+                            ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
+                            : 'bg-slate-800/80 text-slate-400 border-slate-700'
+                        }`}
+                      >
+                        {decodedBadge.text}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Inline Quick Controls inside Card (DO Toggle / Multistate Dropdown / Stepper) */}
+                  {ctrl && ctrl.type !== 'none' && (onInlineWrite || onToggleCoil) && (
+                    <div className="flex items-center gap-1.5 mb-1.5 pt-1 border-t border-slate-800/60">
+                      {ctrl.type === 'toggle' && (
+                        <>
+                          <button
+                            onClick={() => {
+                              if (isCoil && onToggleCoil) {
+                                onToggleCoil(trace.address, false);
+                              } else if (onInlineWrite) {
+                                onInlineWrite(trace.address, String(ctrl.onValue ?? 1));
+                              }
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                              rawNum === (ctrl.onValue ?? 1)
+                                ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50'
+                                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-emerald-300'
+                            }`}
+                          >
+                            ON
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (isCoil && onToggleCoil) {
+                                onToggleCoil(trace.address, true);
+                              } else if (onInlineWrite) {
+                                onInlineWrite(trace.address, String(ctrl.offValue ?? 0));
+                              }
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                              rawNum === (ctrl.offValue ?? 0)
+                                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-rose-300'
+                            }`}
+                          >
+                            OFF
+                          </button>
+                        </>
+                      )}
+
+                      {ctrl.type === 'dropdown' && ctrl.options && onInlineWrite && (
+                        <select
+                          value={Math.round(rawNum)}
+                          onChange={(e) => onInlineWrite(trace.address, e.target.value)}
+                          className="w-full bg-slate-950 border border-purple-500/40 rounded px-1.5 py-0.5 text-[10px] font-mono text-purple-200 focus:outline-none"
+                        >
+                          {ctrl.options.map((opt) => (
+                            <option key={opt.value} value={opt.value} className="bg-slate-900">
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      {ctrl.type === 'stepper' && onInlineWrite && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              const step = ctrl.step || 1;
+                              const nextVal = rawNum - step;
+                              onInlineWrite(
+                                trace.address,
+                                String(ctrl.min !== undefined ? Math.max(ctrl.min, nextVal) : nextVal)
+                              );
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-cyan-300 hover:bg-slate-800 font-mono font-bold text-[10px]"
+                          >
+                            -{ctrl.step || 1}
+                          </button>
+                          <button
+                            onClick={() => {
+                              const step = ctrl.step || 1;
+                              const nextVal = rawNum + step;
+                              onInlineWrite(
+                                trace.address,
+                                String(ctrl.max !== undefined ? Math.min(ctrl.max, nextVal) : nextVal)
+                              );
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-cyan-300 hover:bg-slate-800 font-mono font-bold text-[10px]"
+                          >
+                            +{ctrl.step || 1}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Card Footer: Timestamp & Min/Max/Avg */}
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/70">
+                    <span className="flex items-center gap-1 text-cyan-400/90" title="Thời điểm cập nhật giá trị gần nhất">
+                      <Clock className="w-2.5 h-2.5" />
+                      <span>{lastTimeStr}</span>
+                    </span>
+                    <span className="truncate">
+                      Min:{stats.min.toFixed(1)} Max:{stats.max.toFixed(1)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Canvas Area with Pan/Zoom & Inspection Cursor */}
+      {displayLayout !== 'cards' && (
+        <div className="flex-1 relative w-full h-full bg-slate-950/90 cursor-crosshair overflow-hidden min-h-[140px]">
+          <canvas
+            ref={canvasRef}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseUp={handleCanvasMouseUp}
+            onMouseLeave={handleCanvasMouseLeave}
+            onWheel={handleWheel}
+            className="w-full h-full block"
+          />
+
+          {/* Floating Crosshair HUD Tooltip */}
+          {hoverInfo && (
+            <div
+              className="absolute z-20 pointer-events-none bg-slate-900/95 border border-slate-700/80 rounded-lg p-2.5 shadow-2xl backdrop-blur-sm text-xs font-mono min-w-[180px]"
+              style={{
+                left: Math.min(hoverInfo.x + 15, (containerRef.current?.clientWidth || 800) - 210),
+                top: Math.max(10, Math.min(hoverInfo.y - 40, (containerRef.current?.clientHeight || 300) - 130)),
+              }}
+            >
+              <div className="text-slate-400 font-sans border-b border-slate-800 pb-1 mb-1.5 flex items-center justify-between text-[11px]">
+                <span>Mốc thời gian:</span>
+                <span className="text-cyan-400 font-bold">{hoverInfo.timestamp}</span>
+              </div>
+              <div className="space-y-1">
+                {hoverInfo.points.map((pt, i) => (
+                  <div key={i} className="flex items-center justify-between space-x-3">
+                    <div className="flex items-center space-x-1.5 truncate max-w-[130px]">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: pt.color }} />
+                      <span className="text-slate-300 font-sans truncate">{pt.label}</span>
+                    </div>
+                    <span className="font-bold font-mono" style={{ color: pt.color }}>
+                      {pt.value.toFixed(2)} {pt.unit}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Pan helper hint */}
+          <div className="absolute bottom-1 right-14 text-[10px] text-slate-600 font-sans pointer-events-none select-none">
+            Kéo chuột để di chuyển (Pan) • Lăn chuột để phóng to/thu nhỏ (Zoom)
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -681,16 +681,21 @@ function hydrateTabsFromProfileArray(arr) {
     timer: null,
     values: [],
     rawHexs: [],
+    lastUpdatedMap: {},
     lastPollState: "idle",
     lastError: "",
     blockErrors: [],
     tags: t.tags || {},
     units: t.units || {},
     scales: t.scales || {},
+    controls: t.controls || {},
     selectedIndex: 0,
     auto_poll: Boolean(t.auto_poll)
   }));
   activeTabId = sessionTabs[0].id;
+  if (typeof syncTrendWatchesWithSessionTabs === 'function') {
+    syncTrendWatchesWithSessionTabs();
+  }
   renderTabs();
   sessionTabs.forEach((tab, idx) => {
     if (tab.auto_poll) {
@@ -731,8 +736,10 @@ function buildCurrentProfileExportObject(customName) {
       auto_poll: Boolean(t.isPolling),
       tags: t.tags || {},
       units: t.units || {},
-      scales: t.scales || {}
+      scales: t.scales || {},
+      controls: t.controls || {}
     })),
+    trend_watches: typeof trendWatches !== 'undefined' ? trendWatches : [],
     datalogger: {
       auto_start: false,
       name: document.getElementById('inpLogName') ? document.getElementById('inpLogName').value : "Log_Da_Cong",
@@ -780,6 +787,11 @@ async function applyProfileJsonObject(obj) {
     if (typeof initMultiGatewayMatrix === 'function') initMultiGatewayMatrix();
 
     if (Array.isArray(data.polling_tabs) && data.polling_tabs.length > 0) {
+      if (Array.isArray(obj.trend_watches) && obj.trend_watches.length > 0 && typeof trendWatches !== 'undefined') {
+        trendWatches = obj.trend_watches;
+      } else if (typeof trendWatches !== 'undefined') {
+        trendWatches = [];
+      }
       hydrateTabsFromProfileArray(data.polling_tabs);
     }
     if (obj.datalogger && Array.isArray(obj.datalogger.channels)) {
@@ -1893,6 +1905,11 @@ async function loadSdProfileFile(fname) {
       syncSdProfilesDropdown(profs, fname);
     }
     if (Array.isArray(data.polling_tabs) && data.polling_tabs.length > 0) {
+      if (Array.isArray(data.trend_watches) && data.trend_watches.length > 0 && typeof trendWatches !== 'undefined') {
+        trendWatches = data.trend_watches;
+      } else if (typeof trendWatches !== 'undefined') {
+        trendWatches = [];
+      }
       hydrateTabsFromProfileArray(data.polling_tabs);
     }
     if (data.profile && data.profile.datalogger && Array.isArray(data.profile.datalogger.channels)) {

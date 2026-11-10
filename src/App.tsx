@@ -153,6 +153,9 @@ export const App: React.FC = () => {
     handleToggleTrace,
     handleToggleTraceVisibility,
     handleRemoveTrace,
+    handleMoveTrace,
+    handleToggleTraceSpan,
+    handleUpdateTraceLabel,
     handleClearAllChart,
     resetAllTraces,
     removeTracesForTab,
@@ -1521,6 +1524,15 @@ export const App: React.FC = () => {
                   traceData={traceData}
                   onToggleTraceVisibility={handleToggleTraceVisibility}
                   onRemoveTrace={handleRemoveTrace}
+                  onMoveTrace={handleMoveTrace}
+                  onToggleTraceSpan={handleToggleTraceSpan}
+                  onRenameTrace={(trace, newLabel) => {
+                    handleUpdateTraceLabel(trace.id, newLabel);
+                    handleUpdateAlias(trace.tabId, trace.address, newLabel);
+                  }}
+                  onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
+                  onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
+                  isCoil={activeRowsObj.isCoil}
                   onClear={handleClearAllChart}
                   onClose={() => setIsChartVisible(false)}
                   availableRows={activeRowsObj.rows}
@@ -1574,6 +1586,15 @@ export const App: React.FC = () => {
                 traceData={traceData}
                 onToggleTraceVisibility={handleToggleTraceVisibility}
                 onRemoveTrace={handleRemoveTrace}
+                onMoveTrace={handleMoveTrace}
+                onToggleTraceSpan={handleToggleTraceSpan}
+                onRenameTrace={(trace, newLabel) => {
+                  handleUpdateTraceLabel(trace.id, newLabel);
+                  handleUpdateAlias(trace.tabId, trace.address, newLabel);
+                }}
+                onInlineWrite={(addr, val) => handleInlineWriteForTab(activeTab.id, addr, val)}
+                onToggleCoil={(addr, cur) => handleToggleCoilForTab(activeTab.id, addr, cur)}
+                isCoil={activeRowsObj.isCoil}
                 onClear={handleClearAllChart}
                 onClose={() => setCurrentView('registers')}
                 isFullScreen

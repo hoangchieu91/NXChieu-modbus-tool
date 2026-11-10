@@ -111,6 +111,31 @@ export function useTrendChart(
     });
   }, []);
 
+  const handleMoveTrace = useCallback((traceId: string, delta: number) => {
+    setChartTraces((prev) => {
+      const idx = prev.findIndex((t) => t.id === traceId);
+      if (idx < 0) return prev;
+      const targetIdx = idx + delta;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(idx, 1);
+      next.splice(targetIdx, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const handleToggleTraceSpan = useCallback((traceId: string) => {
+    setChartTraces((prev) =>
+      prev.map((t) => (t.id === traceId ? { ...t, span: t.span === 2 ? 1 : 2 } : t))
+    );
+  }, []);
+
+  const handleUpdateTraceLabel = useCallback((traceId: string, newLabel: string) => {
+    setChartTraces((prev) =>
+      prev.map((t) => (t.id === traceId ? { ...t, label: newLabel } : t))
+    );
+  }, []);
+
   const handleClearAllChart = useCallback(() => {
     setTraceData({});
   }, []);
@@ -191,6 +216,9 @@ export function useTrendChart(
     handleToggleTrace,
     handleToggleTraceVisibility,
     handleRemoveTrace,
+    handleMoveTrace,
+    handleToggleTraceSpan,
+    handleUpdateTraceLabel,
     handleClearAllChart,
     resetAllTraces,
     removeTracesForTab,

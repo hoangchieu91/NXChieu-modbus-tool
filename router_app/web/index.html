@@ -352,16 +352,17 @@
                 <tr>
                   <th style="width: 52px; text-align: center;" title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)">Đọc</th>
                   <th style="width: 40px;">#</th>
-                  <th style="width: 85px;">Địa Chỉ DEC</th>
-                  <th style="width: 75px;">HEX</th>
-                  <th style="width: 85px;">PLC Addr</th>
-                  <th style="min-width: 160px;">Tên Gợi Nhớ (Alias / Tag)</th>
-                  <th style="min-width: 115px;">Giá Trị Hiển Thị</th>
-                  <th style="width: 65px;">Đơn Vị</th>
-                  <th style="width: 65px;">Hệ Số</th>
-                  <th style="width: 85px;">Raw Hex</th>
-                  <th style="width: 110px;">Trạng Thái</th>
-                  <th style="width: 95px;">Thao Tác</th>
+                  <th style="width: 78px;">Địa Chỉ DEC</th>
+                  <th style="width: 68px;">HEX</th>
+                  <th style="width: 78px;">PLC Addr</th>
+                  <th style="min-width: 170px;">Tên Gợi Nhớ (Alias / Tag)</th>
+                  <th style="min-width: 175px;">Giá Trị &amp; Điều Khiển Nhanh</th>
+                  <th style="width: 62px;">Đơn Vị</th>
+                  <th style="width: 62px;">Hệ Số</th>
+                  <th style="width: 78px;">Raw Hex</th>
+                  <th style="width: 82px;">Cập Nhật</th>
+                  <th style="width: 98px;">Trạng Thái</th>
+                  <th style="width: 118px;">Thao Tác</th>
                 </tr>
               </thead>
               <tbody id="tblRegisters">
@@ -382,6 +383,15 @@
                 <div class="hero-val-label" id="inspHeroLabel">GIÁ TRỊ THỜI GIAN THỰC</div>
                 <div class="hero-val-num" id="inspHeroNum">0</div>
                 <div class="hero-val-unit" id="inspHeroUnit">--</div>
+                <div id="inspDecodedStateBadge" style="margin-top: 4px; display: none;"></div>
+                <div style="margin-top: 8px; display: flex; justify-content: center; gap: 6px; flex-wrap: wrap;">
+                  <button id="btnInspPinTrend" class="btn btn-outline" style="padding: 4px 10px; font-size: 11px; color: var(--cyan); border-color: rgba(6,182,212,0.45);" onclick="toggleSelectedPointInTrend()">
+                    📈 Ghim Thẻ Động &amp; Trend
+                  </button>
+                  <button class="btn btn-outline" style="padding: 4px 8px; font-size: 11px;" onclick="showView('trend')">
+                    🎛️ Mở Trang Trend
+                  </button>
+                </div>
               </div>
 
               <!-- Enable / Disable Register In Poll -->
@@ -401,10 +411,15 @@
 
               <!-- Metadata Configuration -->
               <div class="panel-card" style="padding: 12px; gap: 8px;">
-                <div style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Cấu Hình Tên &amp; Tỉ Lệ</div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Cấu Hình Tên Tag &amp; Tỉ Lệ</span>
+                  <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; color: var(--rose); border-color: rgba(244,63,94,0.35);" onclick="clearSelectedPointMeta()" title="Xóa trắng Tên Tag, Đơn vị, Hệ số và Kiểu điều khiển của thanh ghi này">
+                    🗑️ Xóa Tag
+                  </button>
+                </div>
                 <div class="field-box">
                   <label>Tên Gợi Nhớ (Alias / Tag)</label>
-                  <input type="text" id="inpInspAlias" placeholder="VD: Nhiệt Độ Buồng Sấy" onchange="savePointMeta('alias', this.value)">
+                  <input type="text" id="inpInspAlias" placeholder="VD: RL1_STATE (0=OFF,1=ON,2=Toggle)" onchange="savePointMeta('alias', this.value)">
                 </div>
                 <div style="display: flex; gap: 8px;">
                   <div class="field-box" style="flex: 1;">
@@ -414,6 +429,51 @@
                   <div class="field-box" style="flex: 1;">
                     <label>Hệ Số Nhân (Scale)</label>
                     <input type="number" step="0.001" id="inpInspScale" value="1.0" onchange="savePointMeta('scale', parseFloat(this.value))">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Quick Control & State Decoder Configuration -->
+              <div class="panel-card" style="padding: 12px; gap: 8px; border-color: rgba(6,182,212,0.3);">
+                <div style="font-size: 11px; font-weight: 700; color: var(--cyan); text-transform: uppercase;">🎛️ Điều Khiển Nhanh &amp; Giải Mã Trạng Thái</div>
+                <div class="field-box">
+                  <label>Kiểu Nút Điều Khiển Trên Bảng &amp; Thẻ Động</label>
+                  <select id="selInspCtrlType" onchange="onInspectorControlTypeChange(this.value)">
+                    <option value="auto">✨ Tự động nhận diện từ Tên Tag / Vùng nhớ</option>
+                    <option value="none">🔢 Mặc định (Số + Ô nhập nhanh)</option>
+                    <option value="toggle">🔘 Công tắc DO (Nút Bật/Tắt ON/OFF)</option>
+                    <option value="dropdown">📋 Multistate (Danh sách trạng thái lựa chọn)</option>
+                    <option value="stepper">➕➖ Nút Tăng / Giảm Số (Stepper +/-)</option>
+                  </select>
+                </div>
+                <div id="boxInspCtrlToggle" style="display: none; gap: 8px;">
+                  <div class="field-box" style="flex: 1;">
+                    <label>Giá Trị BẬT (ON)</label>
+                    <input type="number" id="inpInspCtrlOnVal" value="1" onchange="saveInspectorControlConfig()">
+                  </div>
+                  <div class="field-box" style="flex: 1;">
+                    <label>Giá Trị TẮT (OFF)</label>
+                    <input type="number" id="inpInspCtrlOffVal" value="0" onchange="saveInspectorControlConfig()">
+                  </div>
+                </div>
+                <div id="boxInspCtrlStepper" style="display: none; gap: 6px; flex-wrap: wrap;">
+                  <div class="field-box" style="flex: 1; min-width: 65px;">
+                    <label>Bước Nhảy (Step)</label>
+                    <input type="number" step="any" id="inpInspCtrlStep" value="1" onchange="saveInspectorControlConfig()">
+                  </div>
+                  <div class="field-box" style="flex: 1; min-width: 65px;">
+                    <label>Min</label>
+                    <input type="number" step="any" id="inpInspCtrlMin" value="0" onchange="saveInspectorControlConfig()">
+                  </div>
+                  <div class="field-box" style="flex: 1; min-width: 65px;">
+                    <label>Max</label>
+                    <input type="number" step="any" id="inpInspCtrlMax" value="65535" onchange="saveInspectorControlConfig()">
+                  </div>
+                </div>
+                <div id="boxInspCtrlDropdown" style="display: none; flex-direction: column; gap: 6px;">
+                  <div class="field-box">
+                    <label>Danh Sách Trạng Thái (Cú pháp: <code>0=OFF, 1=ON, 2=AUTO</code>)</label>
+                    <input type="text" id="inpInspCtrlOptions" placeholder="0=OFF, 1=ON, 2=Toggle" onchange="saveInspectorControlConfig()">
                   </div>
                 </div>
               </div>
@@ -872,26 +932,113 @@
         </div>
       </div>
 
-      <!-- VIEW 3: REALTIME TREND CHART -->
+      <!-- VIEW 3: SCADA DYNAMIC TELEMETRY CARDS & REALTIME MULTI-TAG TREND STUDIO -->
       <div id="view-trend" class="view-panel">
-        <div class="panel-card">
-          <div class="panel-card-title">
-            <span>Biểu Đồ Sóng Thời Gian Thực (Trend Canvas 100% Offline)</span>
-            <span style="font-size: 11px; color: var(--text-muted);">Hiển thị biến thiên các kênh đo Modbus trực tiếp</span>
+        <div class="panel-card" style="gap: 12px;">
+          <!-- TOP HEADER & TAG MANAGEMENT TOOLBAR -->
+          <div class="panel-card-title" style="flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span style="font-size: 15px; font-weight: 800; color: #fff;">🎛️ Thẻ Động SCADA &amp; Biểu Đồ Sóng Đa Kênh (Realtime Telemetry &amp; Trend Studio)</span>
+              <span id="badgeTrendWatchCount" class="badge badge-cyan">0 Tag theo dõi</span>
+              <span id="badgeTrendSampleCount" class="badge badge-slate">0 mẫu</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <button class="btn btn-emerald" style="padding: 5px 12px; font-size: 12px; font-weight: 800;" onclick="openTrendTagManagerModal()">
+                ➕ Thêm / Chọn Tag Theo Dõi
+              </button>
+              <button class="btn btn-primary" style="padding: 5px 10px; font-size: 11px;" onclick="autoPopulateTrendFromActiveTab()" title="Nạp nhanh các thanh ghi đã đặt tên Tag từ Tab đang mở vào Bảng Thẻ Động & Biểu Đồ">
+                ⚡ Nạp Nhanh Tag Đang Mở
+              </button>
+              <button id="btnTrendStartPoll" class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: var(--emerald); border-color: rgba(16,185,129,0.4);" onclick="ensureTrendWatchedTabsPolling()" title="Bật đọc Polling trực tiếp cho các Tab có Tag đang theo dõi">
+                ▶ Bật Polling Các Tag
+              </button>
+            </div>
           </div>
-          <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 6px;">
-            <label style="font-size: 11px; color: var(--text-muted);">KÊNH HIỂN THỊ:</label>
-            <label style="font-size: 12px; color: var(--cyan); display: inline-flex; align-items: center; gap: 4px;">
-              <input type="checkbox" id="chkCh0" checked> Kênh 0
-            </label>
-            <label style="font-size: 12px; color: var(--emerald); display: inline-flex; align-items: center; gap: 4px;">
-              <input type="checkbox" id="chkCh1" checked> Kênh 1
-            </label>
-            <label style="font-size: 12px; color: var(--amber); display: inline-flex; align-items: center; gap: 4px;">
-              <input type="checkbox" id="chkCh2" checked> Kênh 2
-            </label>
+
+          <!-- CHART & GRID CONTROL BAR (MENU ĐIỀU CHỈNH BIỂU ĐỒ & BỐ CỤC LƯỚI THẺ ĐỘNG) -->
+          <div class="trend-studio-toolbar">
+            <!-- Left: View Mode & Grid Columns -->
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">CHẾ ĐỘ XEM:</span>
+              <button id="btnTrendMode_both" class="btn btn-primary" style="padding: 4px 9px; font-size: 11px;" onclick="setTrendStudioDisplayMode('both')">
+                🎛️+📈 Thẻ Động &amp; Sóng
+              </button>
+              <button id="btnTrendMode_cards" class="btn btn-outline" style="padding: 4px 9px; font-size: 11px;" onclick="setTrendStudioDisplayMode('cards')">
+                🎛️ Chỉ Thẻ Động
+              </button>
+              <button id="btnTrendMode_chart" class="btn btn-outline" style="padding: 4px 9px; font-size: 11px;" onclick="setTrendStudioDisplayMode('chart')">
+                📈 Chỉ Biểu Đồ
+              </button>
+
+              <div class="field-box" style="flex-direction: row; align-items: center; gap: 5px; margin-left: 4px;">
+                <label style="white-space: nowrap; margin: 0;">Lưới Thẻ:</label>
+                <select id="selTrendGridCols" style="padding: 3px 7px; font-size: 11px;" onchange="setTrendGridColumns(this.value)">
+                  <option value="auto" selected>Tự động (Auto Grid)</option>
+                  <option value="2">2 Cột Lớn</option>
+                  <option value="3">3 Cột Chuẩn</option>
+                  <option value="4">4 Cột SCADA</option>
+                  <option value="6">6 Cột Compact</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Right: Chart Time Window, Scale, Pause, Export & Clear -->
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <div class="field-box" style="flex-direction: row; align-items: center; gap: 4px;">
+                <label style="white-space: nowrap; margin: 0;">Khung Thời Gian:</label>
+                <button class="btn btn-outline" style="padding: 2px 7px; font-size: 11px;" onclick="zoomTrendWindow(-15)" title="Phóng to dòng thời gian (Zoom In)">🔍+</button>
+                <select id="selTrendWindowPts" style="padding: 3px 6px; font-size: 11px; font-family: monospace; color: var(--cyan);" onchange="setTrendWindowPoints(parseInt(this.value))">
+                  <option value="30">30 mẫu</option>
+                  <option value="60" selected>60 mẫu</option>
+                  <option value="120">120 mẫu</option>
+                  <option value="300">300 mẫu</option>
+                </select>
+                <button class="btn btn-outline" style="padding: 2px 7px; font-size: 11px;" onclick="zoomTrendWindow(15)" title="Thu nhỏ dòng thời gian (Zoom Out)">🔍-</button>
+              </div>
+
+              <button id="btnTrendScaleMode" class="btn btn-outline" style="padding: 4px 9px; font-size: 11px;" onclick="toggleTrendNormalizedScale()" title="Chuẩn hóa biên độ 0-100% giúp so sánh nhiều kênh khác đơn vị (VD: Điện áp 3300mV, Nhiệt độ 30°C và Trạng thái Relay 0/1) trên cùng 1 đồ thị">
+                ⚖️ Thang Tuyệt Đối
+              </button>
+
+              <button id="btnTrendPause" class="btn btn-outline" style="padding: 4px 9px; font-size: 11px;" onclick="toggleTrendPause()" title="Tạm dừng đóng băng biểu đồ để tra cứu tọa độ mẫu">
+                ⏸ Tạm Dừng
+              </button>
+
+              <button class="btn btn-outline" style="padding: 4px 9px; font-size: 11px; color: var(--cyan);" onclick="exportTrendHistoryCsv()" title="Xuất toàn bộ lịch sử các kênh đang theo dõi ra file CSV">
+                📥 Xuất CSV
+              </button>
+
+              <button class="btn btn-outline" style="padding: 4px 9px; font-size: 11px; color: var(--rose);" onclick="clearTrendHistoryData()" title="Xóa lịch sử mẫu đo để vẽ lại từ đầu">
+                🗑️ Xóa Mẫu
+              </button>
+            </div>
           </div>
-          <canvas id="trendCanvas" style="width: 100%; height: 320px; background: #030712; border: 1px solid var(--border); border-radius: 8px;"></canvas>
+
+          <!-- SECTION 1: DYNAMIC REALTIME TELEMETRY CARDS GRID (THẺ ĐỘNG HIỂN THỊ REALTIME, GIẢI MÃ TRẠNG THÁI, ĐIỀU CHỈNH VỊ TRÍ LƯỚI & ĐIỀU KHIỂN NHANH) -->
+          <div id="trendCardsSection" style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span style="font-size: 12px; font-weight: 800; color: var(--cyan); text-transform: uppercase;">🎛️ Lưới Thẻ Động Thời Gian Thực (Kéo thả hoặc nhấn ◀ ▶ để đổi vị trí • Hỗ trợ điều khiển DO / Multistate / Stepper)</span>
+              </div>
+              <span style="font-size: 11px; color: var(--text-muted);">Hiển thị Tên Tag, Giá trị thực, Trạng thái giải mã &amp; Thời gian cập nhật (HH:MM:SS)</span>
+            </div>
+            <div id="trendDynamicCardsGrid" class="scada-telemetry-grid"></div>
+          </div>
+
+          <!-- SECTION 2: MULTI-TRACE INTERACTIVE TREND CANVAS -->
+          <div id="trendChartSection" style="display: flex; flex-direction: column; gap: 8px;">
+            <!-- Legend & Trace Filter Bar -->
+            <div id="trendLegendBar" class="trend-legend-bar"></div>
+
+            <!-- Interactive Canvas Wrapper with Crosshair HUD Tooltip -->
+            <div id="trendCanvasWrap" style="position: relative; width: 100%; height: 340px; background: #030712; border: 1px solid var(--border); border-radius: 10px; overflow: hidden;">
+              <canvas id="trendCanvas" style="width: 100%; height: 100%; display: block; cursor: crosshair;"></canvas>
+              <div id="trendHoverTooltip" class="trend-hover-tooltip" style="display: none;"></div>
+              <div style="position: absolute; top: 5px; left: 16px; font-size: 10px; color: #64748b; pointer-events: none;">
+                Rê chuột / Chạm để xem giá trị tại mốc thời gian • Lăn chuột để Zoom • Nhấn ✏️ trên thẻ để sửa Tag
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1990,6 +2137,84 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
     </div>
   </div>
 
+  <!-- MODAL: TREND & DYNAMIC TELEMETRY CARDS TAG MANAGER (THÊM / SỬA / XÓA / CHỌN TAG THEO DÕI) -->
+  <div class="modal-overlay" id="trendTagManagerModal">
+    <div class="modal-box" style="width: 880px; max-width: 96vw; max-height: 90dvh;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-size: 14px; font-weight: 800; color: #fff;">🎛️ Quản Lý Tag Theo Dõi — Thẻ Động SCADA &amp; Biểu Đồ Sóng</span>
+          <span id="badgeModalTrendCount" class="badge badge-cyan">0 Tag đã chọn</span>
+        </div>
+        <span style="cursor: pointer; font-size: 16px;" onclick="closeTrendTagManagerModal()">✕</span>
+      </div>
+      <div class="modal-body" style="gap: 10px; overflow-y: auto;">
+        <!-- Quick Filter & Batch Selection -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; flex-wrap: wrap; background: rgba(15,23,42,0.75); border: 1px solid var(--border); padding: 10px 12px; border-radius: 10px;">
+          <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; flex: 1;">
+            <div class="field-box" style="min-width: 185px;">
+              <label>Chọn Phiên Đo (Tab Nguồn)</label>
+              <select id="selTrendMgrTab" onchange="renderTrendTagManagerPickerList()"></select>
+            </div>
+            <div class="field-box" style="flex: 1; min-width: 160px;">
+              <label>Tìm Theo Địa Chỉ / Tên Tag</label>
+              <input type="text" id="inpTrendMgrSearch" placeholder="VD: TEMP, RL1, 40009..." oninput="renderTrendTagManagerPickerList()">
+            </div>
+            <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--emerald); cursor: pointer; padding-bottom: 5px;">
+              <input type="checkbox" id="chkTrendMgrOnlyNamed" onchange="renderTrendTagManagerPickerList()">
+              Chỉ hiện ô đã đặt tên Tag
+            </label>
+          </div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button class="btn btn-emerald" style="padding: 5px 10px; font-size: 11px;" onclick="batchSelectTaggedInTrendMgr()">
+              ⚡ Chọn Tất Cả Ô Có Tag Của Tab Này
+            </button>
+            <button class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: var(--rose);" onclick="clearAllTrendWatches()">
+              🗑️ Bỏ Chọn Hết
+            </button>
+          </div>
+        </div>
+
+        <!-- Picker Grid of Registers in Selected Tab -->
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div style="font-size: 11px; font-weight: 700; color: var(--cyan); text-transform: uppercase;">
+            1. Tích Chọn Thanh Ghi / Tag Cần Đưa Lên Bảng Thẻ Động &amp; Biểu Đồ:
+          </div>
+          <div id="trendMgrPickerGrid" class="trend-mgr-picker-grid"></div>
+        </div>
+
+        <!-- Currently Watched Tags Table (Edit Name, Unit, Scale, Color, Grid Span, Control Type, Reorder, Delete) -->
+        <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 4px;">
+          <div style="font-size: 11px; font-weight: 700; color: var(--emerald); text-transform: uppercase;">
+            2. Danh Sách Thẻ Động &amp; Kênh Đang Theo Dõi (Sửa trực tiếp Tên Tag, Đơn vị, Hệ số, Màu sắc, Kích thước thẻ 1x/2x &amp; Vị trí lưới):
+          </div>
+          <div style="max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 64px;">Vị Trí</th>
+                  <th style="width: 52px;">Vẽ Sóng</th>
+                  <th style="width: 115px;">Nguồn &amp; Địa Chỉ</th>
+                  <th>Tên Hiển Thị Trên Thẻ &amp; Biểu Đồ (Tag)</th>
+                  <th style="width: 68px;">Đơn Vị</th>
+                  <th style="width: 68px;">Hệ Số</th>
+                  <th style="width: 62px;">Màu</th>
+                  <th style="width: 78px;">Khổ Thẻ</th>
+                  <th style="width: 120px;">Điều Khiển</th>
+                  <th style="width: 48px;">Xóa</th>
+                </tr>
+              </thead>
+              <tbody id="tblTrendWatchedTags"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <span style="font-size: 11px; color: var(--text-muted);">Mọi thay đổi Tên Tag, Đơn vị, Hệ số và Kiểu điều khiển được đồng bộ hai chiều với Bảng Dữ Liệu (Poll)</span>
+        <button class="btn btn-emerald" onclick="closeTrendTagManagerModal()">✔ Hoàn Tất &amp; Xem Thẻ Động</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MOBILE NATIVE BOTTOM NAVIGATION BAR (<= 820px) -->
   <nav class="mobile-bottom-nav">
     <button class="mob-nav-item active" data-view="poll" onclick="showView('poll')">
@@ -2021,8 +2246,8 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
   </footer>
 
   <!-- MODULAR FRONTEND JAVASCRIPT (v3.3 Clean Architecture) -->
-  <script src="/js/app_core.js?v=3.3.3"></script>
-  <script src="/js/scanner_gateway_datalog.js?v=3.3.3"></script>
-  <script src="/js/profile_studio_and_builder.js?v=3.3.3"></script>
+  <script src="/js/app_core.js?v=3.3.4"></script>
+  <script src="/js/scanner_gateway_datalog.js?v=3.3.4"></script>
+  <script src="/js/profile_studio_and_builder.js?v=3.3.4"></script>
 </body>
 </html>

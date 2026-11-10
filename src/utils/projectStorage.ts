@@ -105,6 +105,52 @@ function convertRouterTabToDesktopTab(rt: Record<string, any>, idx: number): Rec
   mapMeta(rt.units, units);
   mapMeta(rt.scales || rt.scalings, scalings);
 
+  const controls: Record<number, RegisterControlConfig> = {};
+  const rawControls: Record<number, any> = {};
+  mapMeta(rt.controls, rawControls);
+  for (const [addrStr, c] of Object.entries(rawControls)) {
+    const addr = Number(addrStr);
+    if (!isRecord(c) || isNaN(addr)) continue;
+    const rawType = String(c.type || 'none').toLowerCase();
+    if (rawType === 'toggle' || rawType === 'do') {
+      controls[addr] = {
+        type: 'toggle',
+        onValue: num(c.onValue ?? c.on_val, 1),
+        offValue: num(c.offValue ?? c.off_val, 0),
+      };
+    } else if (rawType === 'dropdown' || rawType === 'multistate') {
+      const opts: { label: string; value: number }[] = [];
+      if (Array.isArray(c.options)) {
+        c.options.forEach((o: any) => {
+          if (isRecord(o) && o.value !== undefined) {
+            opts.push({ value: Number(o.value), label: String(o.label ?? o.value) });
+          }
+        });
+      } else if (typeof c.options === 'string') {
+        c.options.split(/[,;|]+/).forEach((part: string) => {
+          const idxEq = part.indexOf('=');
+          const idxCol = part.indexOf(':');
+          const sep = idxEq >= 0 ? idxEq : idxCol;
+          if (sep > 0) {
+            const v = parseInt(part.slice(0, sep).trim(), 10);
+            const lbl = part.slice(sep + 1).trim();
+            if (!isNaN(v) && lbl) opts.push({ value: v, label: lbl });
+          }
+        });
+      }
+      if (opts.length > 0) {
+        controls[addr] = { type: 'dropdown', options: opts };
+      }
+    } else if (rawType === 'stepper' || rawType === 'number') {
+      controls[addr] = {
+        type: 'stepper',
+        step: num(c.step, 1),
+        min: c.min !== undefined ? num(c.min, 0) : undefined,
+        max: c.max !== undefined ? num(c.max, 65535) : undefined,
+      };
+    }
+  }
+
   const disAddrs = parseAddrRangeArray(rt.disabled_addrs || rt.skip_addrs);
 
   return {
@@ -124,7 +170,7 @@ function convertRouterTabToDesktopTab(rt: Record<string, any>, idx: number): Rec
     aliases,
     units,
     scalings,
-    controls: {},
+    controls,
   };
 }
 

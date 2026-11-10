@@ -2758,7 +2758,8 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                             "auto_poll": bool(t.get("auto_poll", False)),
                             "tags": t.get("tags") or {},
                             "units": t.get("units") or {},
-                            "scales": t.get("scales") or {}
+                            "scales": t.get("scales") or {},
+                            "controls": t.get("controls") or {}
                         })
                     state.saved_polling_tabs = applied_tabs
 
@@ -2790,6 +2791,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                     "profile_name": prof_name,
                     "port_aliases": state.port_aliases,
                     "polling_tabs": state.saved_polling_tabs,
+                    "trend_watches": req.get("trend_watches") or [],
                     "datalogger": dl_cfg or state.logger_config,
                     "gateways": gw_cfg or {"auto_start_on_boot": state.auto_start_gateways, "ports": state.saved_gateways}
                 }, custom_filename=req.get("filename"))
@@ -2863,7 +2865,8 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                         "auto_poll": bool(t.get("auto_poll", False)),
                         "tags": t.get("tags") or {},
                         "units": t.get("units") or {},
-                        "scales": t.get("scales") or {}
+                        "scales": t.get("scales") or {},
+                        "controls": t.get("controls") or {}
                     })
                 if loaded_tabs:
                     state.saved_polling_tabs = loaded_tabs
@@ -2874,6 +2877,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                     "profile_name": prof_name,
                     "tabs_count": len(loaded_tabs),
                     "polling_tabs": loaded_tabs,
+                    "trend_watches": prof_data.get("trend_watches") or [],
                     "port_aliases": state.port_aliases,
                     "datalogger": prof_data.get("datalogger") or state.logger_config,
                     "saved_profiles": list_sd_profiles(state.active_profile_name),

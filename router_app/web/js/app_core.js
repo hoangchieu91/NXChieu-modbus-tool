@@ -73,6 +73,7 @@ function saveUiStateToStorage() {
       tags: t.tags || {},
       units: t.units || {},
       scales: t.scales || {},
+      controls: t.controls || {},
       selectedIndex: t.selectedIndex || 0
     }));
     const payload = {
@@ -80,6 +81,11 @@ function saveUiStateToStorage() {
       activeTabId: activeTabId || (serializedTabs[0] && serializedTabs[0].id) || "tab_1",
       currentProfileName: currentProfileName || "NXChieu_MultiPort_Profile",
       sessionTabs: serializedTabs,
+      trendWatches: typeof trendWatches !== 'undefined' ? trendWatches : [],
+      trendStudioDisplayMode: typeof trendStudioDisplayMode !== 'undefined' ? trendStudioDisplayMode : "both",
+      trendGridCols: typeof trendGridCols !== 'undefined' ? trendGridCols : "auto",
+      trendWindowPoints: typeof trendWindowPoints !== 'undefined' ? trendWindowPoints : 60,
+      trendNormalizedScale: typeof trendNormalizedScale !== 'undefined' ? Boolean(trendNormalizedScale) : false,
       sdStudioSelectedFilename: typeof sdStudioSelectedFilename !== 'undefined' ? sdStudioSelectedFilename : "",
       sdStudioActiveTabIdx: typeof sdStudioActiveTabIdx !== 'undefined' ? sdStudioActiveTabIdx : 0,
       activeSubTabs: activeSubTabs,
@@ -122,16 +128,33 @@ function restoreUiStateFromStorage() {
           timer: null,
           values: [],
           rawHexs: [],
+          lastUpdatedMap: {},
           lastPollState: "idle",
           lastError: "",
           blockErrors: [],
           tags: t.tags || {},
           units: t.units || {},
           scales: t.scales || {},
+          controls: t.controls || {},
           selectedIndex: parseInt(t.selectedIndex) || 0,
           auto_poll: Boolean(t.auto_poll)
         }));
         window.restoredTabsFromLocalStorage = true;
+      }
+      if (Array.isArray(st.trendWatches) && typeof trendWatches !== 'undefined') {
+        trendWatches = st.trendWatches;
+      }
+      if (st.trendStudioDisplayMode && typeof trendStudioDisplayMode !== 'undefined') {
+        trendStudioDisplayMode = st.trendStudioDisplayMode;
+      }
+      if (st.trendGridCols && typeof trendGridCols !== 'undefined') {
+        trendGridCols = st.trendGridCols;
+      }
+      if (st.trendWindowPoints && typeof trendWindowPoints !== 'undefined') {
+        trendWindowPoints = parseInt(st.trendWindowPoints) || 60;
+      }
+      if (typeof st.trendNormalizedScale === 'boolean' && typeof trendNormalizedScale !== 'undefined') {
+        trendNormalizedScale = st.trendNormalizedScale;
       }
       if (st.activeTabId && sessionTabs.some(x => x.id === st.activeTabId)) {
         activeTabId = st.activeTabId;
@@ -389,6 +412,13 @@ let currentView = "poll";
 let isGatewayRunning = false;
 let isLoggerRunning = false;
 let trendHistory = [];
+let trendWatches = [];
+let trendDataSeries = {};
+let trendStudioDisplayMode = "both";
+let trendGridCols = "auto";
+let trendWindowPoints = 60;
+let trendNormalizedScale = false;
+let trendIsPaused = false;
 let selectorsInitialized = false;
 
 function getActiveTab() {
@@ -652,6 +682,9 @@ async function saveSerialConfigModal() {
 }
 
 // ==================== VIEW & SUB-TAB SWITCHERS ====================
+function switchView(viewId, skipHashUpdate) {
+  showView(viewId, skipHashUpdate);
+}
 function showView(viewId, skipHashUpdate) {
   currentView = viewId || 'poll';
   toggleMobileSidebar(false);
@@ -1386,6 +1419,486 @@ function formatValue(raw, format, scale) {
   }
 }
 
+// ==================== SMART STATE DECODER & INLINE QUICK CONTROLS ====================
+function escapeHtmlStr(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function parseMultistateOptionsSpec(spec) {
+  if (!spec) return [];
+  if (Array.isArray(spec)) {
+    return spec
+      .map(o => ({
+        value: typeof o.value === 'number' ? o.value : parseInt(String(o.value), String(o.value).startsWith('0x') ? 16 : 10),
+        label: String(o.label ?? o.value ?? '')
+      }))
+      .filter(o => !isNaN(o.value));
+  }
+  const out = [];
+  const str = String(spec).trim();
+  if (!str) return out;
+  str.split(/[,;|]+/).forEach(part => {
+    const p = part.trim();
+    if (!p || /^bit\d/i.test(p)) return;
+    const m = p.match(/(?:^|\s)(0x[0-9a-fA-F]+|-?\d+)\s*(?:=|:)\s*(.+)$/);
+    if (m) {
+      const v = m[1].toLowerCase().startsWith('0x') ? parseInt(m[1], 16) : parseInt(m[1], 10);
+      const lbl = m[2].trim();
+      if (!isNaN(v) && lbl) out.push({ value: v, label: lbl });
+    }
+  });
+  return out;
+}
+
+function formatMultistateOptionsSpec(options) {
+  if (!Array.isArray(options) || options.length === 0) return "";
+  return options.map(o => `${o.value}=${o.label}`).join(", ");
+}
+
+function inferControlFromTagAndFn(tagName, fnCode) {
+  const tag = String(tagName || '').trim();
+  if (fnCode === 1) {
+    return { type: 'toggle', onValue: 1, offValue: 0, isAuto: true };
+  }
+  if (/BITMAP|BITMASK/i.test(tag)) {
+    return { type: 'none', isAuto: true };
+  }
+  // Check parenthesized state list in tag name, e.g., RL1_STATE (0=OFF,1=ON,2=Toggle) or PORT1_MODE (0=Off,1=Master,2=Routed,3=Trans)
+  const parenMatch = tag.match(/\(([^)]*(?:0x[0-9a-fA-F]+|\d+)\s*=\s*[^)]+)\)/);
+  if (parenMatch) {
+    const opts = parseMultistateOptionsSpec(parenMatch[1]);
+    if (opts.length >= 2) {
+      if (fnCode === 3) {
+        return { type: 'dropdown', options: opts, isAuto: true };
+      }
+      return { type: 'none', options: opts, isAuto: true };
+    }
+  }
+  if (fnCode === 3 && tag) {
+    if (/(^|_)(RL\d+|OUT12V_\d+|RELAY\d*|DO\d+|COIL\d*)(_STATE|_CMD|_ON|_EN)?\b/i.test(tag)) {
+      return { type: 'toggle', onValue: 1, offValue: 0, isAuto: true };
+    }
+    if (/(PWM|DUTY|FREQ_SET|SETPOINT|SLAVE_ID|BAUD|TIMEOUT)/i.test(tag)) {
+      const isDuty = /DUTY|PWM/i.test(tag);
+      return { type: 'stepper', step: isDuty ? 10 : 1, min: 0, max: 65535, isAuto: true };
+    }
+  }
+  return { type: 'none', isAuto: true };
+}
+
+function getEffectiveControlConfig(tab, idx) {
+  if (!tab) return { type: 'none' };
+  if (!tab.controls) tab.controls = {};
+  const explicit = getPointMeta(tab.controls, idx, tab.start_addr, null);
+  const rawTag = getPointMeta(tab.tags, idx, tab.start_addr, "");
+  const inferred = inferControlFromTagAndFn(rawTag, tab.fn_code);
+
+  if (explicit && typeof explicit === 'object' && explicit.type && explicit.type !== 'auto') {
+    if (explicit.type === 'dropdown') {
+      const opts = parseMultistateOptionsSpec(explicit.options);
+      return {
+        type: 'dropdown',
+        options: opts.length > 0 ? opts : (inferred.options || [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }])
+      };
+    }
+    if (explicit.type === 'toggle') {
+      return {
+        type: 'toggle',
+        onValue: explicit.onValue !== undefined ? Number(explicit.onValue) : 1,
+        offValue: explicit.offValue !== undefined ? Number(explicit.offValue) : 0
+      };
+    }
+    if (explicit.type === 'stepper') {
+      return {
+        type: 'stepper',
+        step: explicit.step !== undefined ? Number(explicit.step) : 1,
+        min: explicit.min !== undefined ? Number(explicit.min) : 0,
+        max: explicit.max !== undefined ? Number(explicit.max) : 65535
+      };
+    }
+    return { type: 'none', options: inferred.options };
+  }
+  return inferred;
+}
+
+function decodeRegisterStateInfo(tab, idx, rawVal) {
+  if (rawVal === undefined || rawVal === null || !tab) return null;
+  const numVal = Number(rawVal);
+  if (isNaN(numVal)) return null;
+  const ctrl = getEffectiveControlConfig(tab, idx);
+  const rawTag = String(getPointMeta(tab.tags, idx, tab.start_addr, "") || "");
+
+  // 1. Multistate options (from explicit dropdown or inferred from tag)
+  const opts = ctrl.options || [];
+  if (opts.length > 0) {
+    const matched = opts.find(o => Number(o.value) === numVal);
+    if (matched) {
+      const upper = matched.label.toUpperCase();
+      let tone = 'purple';
+      if (upper === 'ON' || upper === 'RUN' || upper === 'ACTIVE' || upper === 'AUTO' || upper === 'MASTER') tone = 'emerald';
+      else if (upper === 'OFF' || upper === 'STOP' || upper === 'IDLE' || upper === 'NONE') tone = 'slate';
+      else if (upper.includes('ERR') || upper.includes('FAULT') || upper.includes('RESET')) tone = 'amber';
+      return {
+        badgeText: `${matched.label} (${numVal})`,
+        shortLabel: matched.label,
+        tone
+      };
+    }
+  }
+
+  // 2. Coils (FC01), Discrete Inputs (FC02), or Toggle Control
+  if (tab.fn_code === 1 || tab.fn_code === 2 || ctrl.type === 'toggle' || /^(DI\d+|RL\d+|OUT12V_\d+)\b/i.test(rawTag)) {
+    const onVal = ctrl.onValue !== undefined ? Number(ctrl.onValue) : 1;
+    const isOn = (numVal === onVal) || (tab.fn_code <= 2 && numVal > 0);
+    return {
+      badgeText: isOn ? `● ON (${numVal})` : `○ OFF (${numVal})`,
+      shortLabel: isOn ? 'ON' : 'OFF',
+      tone: isOn ? 'emerald' : 'slate'
+    };
+  }
+
+  // 3. Bitmap registers (e.g., DI_BITMAP, DO_BITMAP, DIP_STATE)
+  if (/BITMAP|DIP_STATE|STATUS_BITS/i.test(rawTag)) {
+    const activeBits = [];
+    for (let b = 0; b < 16; b++) {
+      if ((numVal >> b) & 1) activeBits.push(`B${b}`);
+    }
+    return {
+      badgeText: activeBits.length > 0 ? `Bits ON: ${activeBits.slice(0, 6).join(',')}${activeBits.length > 6 ? '…' : ''}` : 'All Bits OFF (0)',
+      shortLabel: activeBits.length > 0 ? `${activeBits.length} bit ON` : '0 bit ON',
+      tone: activeBits.length > 0 ? 'cyan' : 'slate'
+    };
+  }
+
+  return null;
+}
+
+function buildQuickControlCellHtml(tab, idx, rawVal, isDisabled, context) {
+  if (isDisabled) {
+    return `<span style="color: #64748b; font-size: 11px;">BỎ QUA</span>`;
+  }
+  const addrDec = tab.start_addr + idx;
+  const hasVal = (rawVal !== undefined && rawVal !== null);
+  const scale = getPointMeta(tab.scales, idx, tab.start_addr, 1.0);
+  const unit = getPointMeta(tab.units, idx, tab.start_addr, "");
+  const valStr = formatValue(rawVal, tab.format, scale);
+  const ctrl = getEffectiveControlConfig(tab, idx);
+  const decoded = decodeRegisterStateInfo(tab, idx, rawVal);
+  const isWritable = (tab.fn_code === 1 || tab.fn_code === 3);
+
+  if (! isWritable) {
+    const decHtml = decoded ? `<span class="decoded-state-pill tone-${decoded.tone}">${escapeHtmlStr(decoded.badgeText)}</span>` : '';
+    return `<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+      <span style="font-weight: 800; color: #38bdf8; font-family: monospace;">${valStr}</span>
+      ${decHtml}
+    </div>`;
+  }
+
+  // Writable 1: DO Toggle Switch (FC01 Coils or FC03 Toggle)
+  if (ctrl.type === 'toggle') {
+    const onVal = ctrl.onValue !== undefined ? Number(ctrl.onValue) : 1;
+    const offVal = ctrl.offValue !== undefined ? Number(ctrl.offValue) : 0;
+    const isOn = hasVal && Number(rawVal) === onVal;
+    const nextVal = isOn ? offVal : onVal;
+    const stateTxt = isOn ? `● ON (${onVal})` : `○ OFF (${hasVal ? rawVal : offVal})`;
+    const actHint = isOn ? 'Nhấn để TẮT' : 'Nhấn để BẬT';
+    return `<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" onclick="event.stopPropagation();">
+      <button class="qc-toggle-btn ${isOn ? 'is-on' : 'is-off'}" onclick="quickControlWrite('${tab.id}', ${addrDec}, ${nextVal}, event)" title="${actHint} (Địa chỉ ${addrDec})">
+        <span>${stateTxt}</span>
+        <span style="font-size: 9px; opacity: 0.8;">⇄</span>
+      </button>
+    </div>`;
+  }
+
+  // Writable 2: Multistate Dropdown (FC03 Holding Register with state options)
+  if (ctrl.type === 'dropdown' && Array.isArray(ctrl.options) && ctrl.options.length > 0) {
+    const curNum = hasVal ? Number(rawVal) : NaN;
+    const hasMatch = ctrl.options.some(o => Number(o.value) === curNum);
+    let optsHtml = '';
+    if (!hasMatch) {
+      optsHtml += `<option value="${hasVal ? curNum : ''}" selected>${hasVal ? `Hiện tại: ${curNum}` : '-- Chọn trạng thái --'}</option>`;
+    }
+    optsHtml += ctrl.options.map(o =>
+      `<option value="${o.value}" ${Number(o.value) === curNum ? 'selected' : ''}>[${o.value}] ${escapeHtmlStr(o.label)}</option>`
+    ).join('');
+    const pillHtml = decoded ? `<span class="decoded-state-pill tone-${decoded.tone}">${escapeHtmlStr(decoded.shortLabel)}</span>` : '';
+    return `<div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;" onclick="event.stopPropagation();">
+      <select class="qc-select" onchange="quickControlWrite('${tab.id}', ${addrDec}, parseInt(this.value), event)" title="Chọn trạng thái Multistate để ghi ngay xuống địa chỉ ${addrDec}">
+        ${optsHtml}
+      </select>
+      ${pillHtml}
+    </div>`;
+  }
+
+  // Writable 3: Number Stepper ([-] [input] [+])
+  if (ctrl.type === 'stepper') {
+    const step = ctrl.step !== undefined ? Number(ctrl.step) : 1;
+    const dispNum = hasVal ? valStr : "0";
+    return `<div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;" onclick="event.stopPropagation();">
+      <div class="qc-stepper-wrap">
+        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, ${-step}, event)" title="Giảm ${step} ${unit}">−</button>
+        <input type="number" step="any" class="qc-inline-num" value="${dispNum}"
+           onkeydown="onInlineCellValueKeydown('${tab.id}', ${idx}, this, event)"
+          title="Nhập số rồi nhấn Enter để ghi ngay">
+        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, ${step}, event)" title="Tăng +${step} ${unit}">+</button>
+      </div>
+    </div>`;
+  }
+
+  // Default FC03 Holding Register: Value + Decoded State Badge (if any) + quick step/edit on hover or click
+  const decHtml = decoded ? `<span class="decoded-state-pill tone-${decoded.tone}">${escapeHtmlStr(decoded.badgeText)}</span>` : '';
+  if (context === 'scada_card') {
+    return `<div style="display: flex; align-items: center; gap: 4px;" onclick="event.stopPropagation();">
+      <div class="qc-stepper-wrap">
+        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, -1, event)" title="Giảm -1">−</button>
+        <input type="number" step="any" class="qc-inline-num" value="${hasVal ? valStr : 0}"
+          onkeydown="onInlineCellValueKeydown('${tab.id}', ${idx}, this, event)"
+          title="Nhập giá trị mới rồi nhấn Enter để ghi">
+        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, 1, event)" title="Tăng +1">+</button>
+      </div>
+    </div>`;
+  }
+  return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap;">
+    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+      <span style="font-weight: 800; color: #38bdf8; font-family: monospace;">${valStr}</span>
+      ${decHtml}
+    </div>
+    <div style="display: inline-flex; align-items: center; gap: 2px; opacity: 0.78;" onclick="event.stopPropagation();">
+      <button class="qc-step-btn" style="width: 19px; height: 19px; font-size: 11px;" onclick="quickStepRegisterValue('${tab.id}', ${idx}, -1, event)" title="Giảm nhanh -1">−</button>
+      <button class="qc-step-btn" style="width: 19px; height: 19px; font-size: 11px;" onclick="quickStepRegisterValue('${tab.id}', ${idx}, 1, event)" title="Tăng nhanh +1">+</button>
+    </div>
+  </div>`;
+}
+
+async function quickControlWrite(tabId, addrDec, writeVal, ev) {
+  if (ev) ev.stopPropagation();
+  const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
+  if (!tab || isNaN(Number(writeVal))) return;
+  const numVal = Math.round(Number(writeVal));
+  const fn = (tab.fn_code === 1 || tab.fn_code === 2) ? 5 : 6;
+  const idx = addrDec - tab.start_addr;
+
+  // Optimistic UI update + immediate write
+  try {
+    const res = await fetch('/api/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        port: tab.port,
+        baud: tab.baud,
+        parity: tab.parity || 'N',
+        stopbits: tab.stopbits || 1,
+        slave_id: tab.slave_id,
+        fn_code: fn,
+        address: addrDec,
+        value: numVal
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const nowStr = new Date().toTimeString().split(' ')[0];
+      if (!Array.isArray(tab.values)) tab.values = [];
+      if (idx >= 0 && idx < tab.count) {
+        tab.values[idx] = numVal;
+        if (!tab.lastUpdatedMap) tab.lastUpdatedMap = {};
+        tab.lastUpdatedMap[idx] = nowStr;
+      }
+      if (data.tx_hex && data.rx_hex) {
+        appendTrafficLog('TX', data.tx_hex, 0, shortPortLabel(tab.port));
+        appendTrafficLog('RX', data.rx_hex, data.latency_ms, shortPortLabel(tab.port));
+      }
+      const tagLbl = getPointMeta(tab.tags, idx, tab.start_addr, "") || `Addr ${addrDec}`;
+      showToast(`⚡ Đã ghi [${tagLbl}] = ${numVal} (${data.latency_ms || 0}ms)`);
+      if (typeof ingestPollIntoTrendStudio === 'function') ingestPollIntoTrendStudio(tab, nowStr);
+      if (tab.id === activeTabId) {
+        renderTable();
+        updateInspector();
+      }
+      if (currentView === 'trend' && typeof renderTrendStudioView === 'function') {
+        renderTrendStudioView();
+      }
+      // Read back from device to confirm hardware state
+      executePoll(tab);
+    } else {
+      showToast(`❌ Lỗi ghi địa chỉ ${addrDec}: ${data.error || 'Thất bại'}`);
+    }
+  } catch (e) {
+    showToast(`❌ Lỗi kết nối khi ghi: ${e}`);
+  }
+}
+
+function quickStepRegisterValue(tabId, idx, deltaScaled, ev) {
+  if (ev) ev.stopPropagation();
+  const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
+  if (!tab) return;
+  const addrDec = tab.start_addr + idx;
+  const scale = Number(getPointMeta(tab.scales, idx, tab.start_addr, 1.0)) || 1.0;
+  const curRaw = (Array.isArray(tab.values) && tab.values[idx] !== undefined && tab.values[idx] !== null) ? Number(tab.values[idx]) : 0;
+  const curScaled = curRaw * scale;
+  const ctrl = getEffectiveControlConfig(tab, idx);
+  let nextScaled = curScaled + Number(deltaScaled);
+  if (ctrl.min !== undefined && nextScaled < Number(ctrl.min)) nextScaled = Number(ctrl.min);
+  if (ctrl.max !== undefined && nextScaled > Number(ctrl.max)) nextScaled = Number(ctrl.max);
+  let nextRaw = Math.round(nextScaled / scale);
+  if (nextRaw < 0) nextRaw = (nextRaw + 65536) & 0xFFFF;
+  quickControlWrite(tab.id, addrDec, nextRaw, ev);
+}
+
+function onInlineCellValueKeydown(tabId, idx, inputEl, ev) {
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
+    if (!tab || !inputEl) return;
+    const addrDec = tab.start_addr + idx;
+    const scale = Number(getPointMeta(tab.scales, idx, tab.start_addr, 1.0)) || 1.0;
+    const typed = parseFloat(inputEl.value);
+    if (isNaN(typed)) return;
+    let rawToWrite = Math.round(typed / scale);
+    if (rawToWrite < 0) rawToWrite = (rawToWrite + 65536) & 0xFFFF;
+    inputEl.blur();
+    quickControlWrite(tab.id, addrDec, rawToWrite, ev);
+  }
+}
+
+function promptInlineEditTag(idx, ev) {
+  if (ev) ev.stopPropagation();
+  const t = getActiveTab();
+  if (!t) return;
+  const addrDec = t.start_addr + idx;
+  const curTag = getPointMeta(t.tags, idx, t.start_addr, "");
+  const curUnit = getPointMeta(t.units, idx, t.start_addr, "");
+  const curScale = getPointMeta(t.scales, idx, t.start_addr, 1.0);
+  const currentSpec = curUnit || (curScale !== 1 && curScale !== 1.0)
+    ? `${curTag}:${curUnit}:${curScale}`
+    : curTag;
+
+  const input = prompt(
+    `Sửa nhanh Tên Tag cho địa chỉ ${addrDec} (#${(t.fn_code === 3 ? 40001 : 1) + addrDec}):\n` +
+    `• Nhập mỗi Tên Tag (VD: Áp suất khí xả)\n` +
+    `• Hoặc nhập kèm Đơn vị & Hệ số: Tên_Tag:Đơn_vị:Hệ_số (VD: Nhiệt độ đầu nén:°C:0.1)\n` +
+    `• Mẹo Multistate: Thêm (0=OFF,1=ON,2=AUTO) vào tên Tag để tự động tạo menu chọn trạng thái!\n` +
+    `• Để trống nếu muốn xóa Tag của dòng này.`,
+    currentSpec
+  );
+  if (input === null) return;
+  const trimmed = input.trim();
+  if (!trimmed) {
+    setPointMeta(t.tags, idx, t.start_addr, "");
+    setPointMeta(t.units, idx, t.start_addr, "");
+    setPointMeta(t.scales, idx, t.start_addr, 1.0);
+    showToast(`🗑️ Đã xóa Tag tại địa chỉ ${addrDec}.`);
+  } else {
+    const parts = trimmed.split(':');
+    setPointMeta(t.tags, idx, t.start_addr, parts[0].trim());
+    if (parts.length >= 2) setPointMeta(t.units, idx, t.start_addr, parts[1].trim());
+    if (parts.length >= 3 && !isNaN(parseFloat(parts[2]))) {
+      setPointMeta(t.scales, idx, t.start_addr, parseFloat(parts[2]));
+    }
+    showToast(`✏️ Đã cập nhật Tag [${parts[0].trim()}] cho địa chỉ ${addrDec}!`);
+  }
+  syncToolbarWithActiveTab();
+  renderTable();
+  updateInspector();
+  saveUiStateToStorage();
+}
+
+function clearSelectedPointMeta() {
+  const t = getActiveTab();
+  if (!t) return;
+  const idx = t.selectedIndex || 0;
+  const addrDec = t.start_addr + idx;
+  setPointMeta(t.tags, idx, t.start_addr, "");
+  setPointMeta(t.units, idx, t.start_addr, "");
+  setPointMeta(t.scales, idx, t.start_addr, 1.0);
+  if (t.controls) setPointMeta(t.controls, idx, t.start_addr, undefined);
+  syncToolbarWithActiveTab();
+  renderTable();
+  updateInspector();
+  saveUiStateToStorage();
+  showToast(`🗑️ Đã xóa cấu hình Tag tại địa chỉ ${addrDec}.`);
+}
+
+function onInspectorControlTypeChange(newType) {
+  const boxToggle = document.getElementById('boxInspCtrlToggle');
+  const boxStep = document.getElementById('boxInspCtrlStepper');
+  const boxDrop = document.getElementById('boxInspCtrlDropdown');
+  if (boxToggle) boxToggle.style.display = (newType === 'toggle') ? 'flex' : 'none';
+  if (boxStep) boxStep.style.display = (newType === 'stepper') ? 'flex' : 'none';
+  if (boxDrop) boxDrop.style.display = (newType === 'dropdown') ? 'flex' : 'none';
+  saveInspectorControlConfig();
+}
+
+function saveInspectorControlConfig() {
+  const t = getActiveTab();
+  if (!t) return;
+  if (!t.controls) t.controls = {};
+  const idx = t.selectedIndex || 0;
+  const ctrlType = document.getElementById('selInspCtrlType')?.value || 'auto';
+
+  if (ctrlType === 'auto') {
+    setPointMeta(t.controls, idx, t.start_addr, undefined);
+  } else if (ctrlType === 'none') {
+    setPointMeta(t.controls, idx, t.start_addr, { type: 'none' });
+  } else if (ctrlType === 'toggle') {
+    const onVal = parseInt(document.getElementById('inpInspCtrlOnVal')?.value);
+    const offVal = parseInt(document.getElementById('inpInspCtrlOffVal')?.value);
+    setPointMeta(t.controls, idx, t.start_addr, {
+      type: 'toggle',
+      onValue: isNaN(onVal) ? 1 : onVal,
+      offValue: isNaN(offVal) ? 0 : offVal
+    });
+  } else if (ctrlType === 'stepper') {
+    const step = parseFloat(document.getElementById('inpInspCtrlStep')?.value);
+    const min = parseFloat(document.getElementById('inpInspCtrlMin')?.value);
+    const max = parseFloat(document.getElementById('inpInspCtrlMax')?.value);
+    setPointMeta(t.controls, idx, t.start_addr, {
+      type: 'stepper',
+      step: isNaN(step) || step <= 0 ? 1 : step,
+      min: isNaN(min) ? 0 : min,
+      max: isNaN(max) ? 65535 : max
+    });
+  } else if (ctrlType === 'dropdown') {
+    const optStr = document.getElementById('inpInspCtrlOptions')?.value || '0=OFF, 1=ON';
+    const opts = parseMultistateOptionsSpec(optStr);
+    setPointMeta(t.controls, idx, t.start_addr, {
+      type: 'dropdown',
+      options: opts.length > 0 ? opts : [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }]
+    });
+  }
+  renderTable();
+  updateInspector();
+  if (typeof renderTrendStudioView === 'function' && currentView === 'trend') renderTrendStudioView();
+  saveUiStateToStorage();
+}
+
+function isPointWatchedInTrend(tabId, addrDec) {
+  if (!Array.isArray(trendWatches)) return false;
+  return trendWatches.some(w => w.tabId === tabId && Number(w.addr) === Number(addrDec));
+}
+
+function togglePointInTrend(tabId, idx, ev) {
+  if (ev) ev.stopPropagation();
+  const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
+  if (!tab) return;
+  const addrDec = tab.start_addr + idx;
+  if (typeof toggleTrendWatchItem === 'function') {
+    toggleTrendWatchItem(tab, idx);
+  }
+  renderTable();
+  updateInspector();
+}
+
+function toggleSelectedPointInTrend() {
+  const t = getActiveTab();
+  if (!t) return;
+  togglePointInTrend(t.id, t.selectedIndex || 0);
+}
+
 // ==================== TABLE & MOBILE CARD RENDERING ====================
 function renderTable() {
   const t = getActiveTab();
@@ -1430,6 +1943,9 @@ function renderTable() {
     const unit = getPointMeta(t.units, i, t.start_addr, "");
     const scale = getPointMeta(t.scales, i, t.start_addr, 1.0);
     const valStr = isDisabled ? "BỎ QUA" : formatValue(raw, t.format, scale);
+    const updatedAtStr = (!isDisabled && t.lastUpdatedMap && t.lastUpdatedMap[i]) ? t.lastUpdatedMap[i] : (hasVal && t.lastUpdated ? t.lastUpdated : "--");
+    const isWatched = isPointWatchedInTrend(t.id, addrDec);
+    const quickCtrlHtml = buildQuickControlCellHtml(t, i, raw, isDisabled, 'table');
 
     let statusHtml = '';
     if (isDisabled) {
@@ -1460,16 +1976,23 @@ function renderTable() {
       <td style="color: var(--cyan); font-weight: 700;">${addrDec}</td>
       <td style="color: #94a3b8;">${addrHex}</td>
       <td style="color: #cbd5e1; font-weight: 600;">${plcAddr}</td>
-      <td style="color: ${rawTag ? '#f1f5f9' : '#64748b'}; font-weight: ${rawTag ? '600' : '400'};">${tag}</td>
-      <td class="cell-value" title="Nhấp đúp để ghi giá trị">${valStr}</td>
-      <td style="color: var(--text-muted);">${unit}</td>
-      <td style="color: #64748b;">${scale}</td>
-      <td style="color: #94a3b8;">${rawHex}</td>
+      <td style="color: ${rawTag ? '#f1f5f9' : '#64748b'}; font-weight: ${rawTag ? '600' : '400'};" title="Nhấp biểu tượng ✏️ để sửa nhanh Tên Tag, Đơn vị & Hệ số">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+          <span style="word-break: break-word;">${escapeHtmlStr(tag)}</span>
+          <button class="btn btn-outline" style="padding: 1px 5px; font-size: 10px; opacity: 0.65; flex-shrink: 0;" onclick="promptInlineEditTag(${i}, event)" title="Sửa nhanh Tên Tag / Đơn vị / Hệ số (hoặc xóa Tag)">✏️</button>
+        </div>
+      </td>
+      <td class="cell-value">${quickCtrlHtml}</td>
+      <td style="color: var(--text-muted); cursor: pointer;" onclick="promptInlineEditTag(${i}, event)" title="Nhấp để sửa Đơn vị">${escapeHtmlStr(unit)}</td>
+      <td style="color: #64748b; cursor: pointer;" onclick="promptInlineEditTag(${i}, event)" title="Nhấp để sửa Hệ số nhân">${scale}</td>
+      <td style="color: #94a3b8; font-family: monospace;">${rawHex}</td>
+      <td style="color: ${updatedAtStr !== '--' ? '#38bdf8' : '#64748b'}; font-family: monospace; font-size: 11px;">${updatedAtStr}</td>
       <td>${statusHtml}</td>
       <td>
         <div style="display: flex; gap: 4px; align-items: center;">
+          <button class="btn ${isWatched ? 'btn-primary' : 'btn-outline'}" style="padding: 2px 6px; font-size: 11px; ${isWatched ? '' : 'color: var(--cyan);'}" onclick="togglePointInTrend('${t.id}', ${i}, event)" title="${isWatched ? 'Đang hiển thị trên Thẻ Động & Biểu Đồ Trend (Nhấn để bỏ)' : 'Đưa điểm này vào Bảng Thẻ Động & Biểu Đồ Sóng (Trend)'}">📈</button>
           <button class="btn btn-outline" style="padding: 2px 6px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0}); event.stopPropagation();" title="Ghi giá trị thanh ghi ${addrDec}">Ghi</button>
-          <button class="btn btn-outline" style="padding: 2px 5px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)" title="Mở chi tiết Point Inspector (sửa Tên Tag, Đơn vị, Hệ số & xem ma trận kiểu dữ liệu)">🔍</button>
+          <button class="btn btn-outline" style="padding: 2px 5px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)" title="Mở chi tiết Point Inspector (cấu hình Tên Tag, Kiểu điều khiển DO/Multistate/Stepper & Ma trận kiểu dữ liệu)">🔍</button>
         </div>
       </td>
     `;
@@ -1477,6 +2000,7 @@ function renderTable() {
 
     // Build Native Mobile Card HTML
     if (cardsBox) {
+      const mobileCtrlHtml = buildQuickControlCellHtml(t, i, raw, isDisabled, 'mobile');
       cardItemsHtml.push(`
         <div class="mobile-reg-card ${isDisabled ? 'is-disabled' : ''} ${i === t.selectedIndex ? 'selected' : ''}" onclick="selectRow(${i}, false)">
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
@@ -1485,28 +2009,34 @@ function renderTable() {
               <span class="badge badge-cyan" style="font-family: monospace; font-size: 11px;">Addr ${addrDec} (${addrHex})</span>
               <span style="font-size: 11px; color: var(--text-muted); font-family: monospace;">#${plcAddr}</span>
             </div>
-            ${statusHtml}
+            <div style="display: flex; align-items: center; gap: 4px;">
+              ${updatedAtStr !== '--' ? `<span style="font-size: 10px; font-family: monospace; color: var(--cyan);">🕒 ${updatedAtStr}</span>` : ''}
+              ${statusHtml}
+            </div>
           </div>
-          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 2px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
             <div style="font-weight: 700; font-size: 14px; color: ${rawTag ? '#fff' : '#94a3b8'}; line-height: 1.3; word-break: break-word;">
-              ${tag}
+              ${escapeHtmlStr(tag)}
             </div>
             <div style="text-align: right; flex-shrink: 0;">
-              <span class="mrc-val">${valStr}</span>
-              ${unit ? `<span style="font-size: 12px; color: var(--cyan); font-weight: 700; margin-left: 3px;">${unit}</span>` : ''}
+              ${mobileCtrlHtml}
+              ${unit ? `<span style="font-size: 11px; color: var(--cyan); font-weight: 700; margin-left: 3px;">${escapeHtmlStr(unit)}</span>` : ''}
             </div>
           </div>
           <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.07); padding-top: 6px; margin-top: 2px;">
             <span style="font-family: monospace;">RAW: ${rawHex} • ×${scale}</span>
             <div style="display: flex; gap: 5px;" onclick="event.stopPropagation();">
+              <button class="btn ${isWatched ? 'btn-primary' : 'btn-outline'}" style="padding: 3px 8px; font-size: 11px;" onclick="togglePointInTrend('${t.id}', ${i}, event)">
+                📈 ${isWatched ? 'Đang Vẽ' : 'Trend'}
+              </button>
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="promptInlineEditTag(${i}, event)">
+                ✏️ Tag
+              </button>
               <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)">
                 🔍 Chi Tiết
               </button>
-              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="toggleAddrDisabled(${addrDec}, event)">
-                ${isDisabled ? '☑ Mở' : '🚫 Khóa'}
-              </button>
               <button class="btn btn-primary" style="padding: 3px 9px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0})">
-                ✏️ Ghi
+                Ghi
               </button>
             </div>
           </div>
@@ -1516,7 +2046,7 @@ function renderTable() {
   }
 
   if (renderedRows === 0) {
-    tbody.innerHTML = `<tr><td colspan="12" style="text-align: center; color: var(--text-muted); padding: 30px;">Tất cả các dòng trong Tab này đang bị ẩn do bộ lọc 'Ẩn dòng Cấm Đọc'. Bỏ tích 'Ẩn dòng Cấm Đọc' để xem lại.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: var(--text-muted); padding: 30px;">Tất cả các dòng trong Tab này đang bị ẩn do bộ lọc 'Ẩn dòng Cấm Đọc'. Bỏ tích 'Ẩn dòng Cấm Đọc' để xem lại.</td></tr>`;
     if (cardsBox) {
       cardsBox.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px;">Đang ẩn các dòng Cấm Đọc.</div>`;
     }
@@ -1557,11 +2087,13 @@ function updateInspector() {
   const plcAddr = plcPrefix + addrDec;
   const rawVal = Array.isArray(t.values) ? t.values[idx] : undefined;
   const raw = (rawVal !== undefined && rawVal !== null) ? rawVal : 0;
-  const tag = getPointMeta(t.tags, idx, t.start_addr, "") || `Điểm #${addrDec}`;
+  const rawTag = getPointMeta(t.tags, idx, t.start_addr, "");
+  const tag = rawTag || `Điểm #${addrDec}`;
   const unit = getPointMeta(t.units, idx, t.start_addr, "");
   const scale = getPointMeta(t.scales, idx, t.start_addr, 1.0);
   const isDisabled = isRegisterDisabled(t, idx);
   const valStr = isDisabled ? "CẤM ĐỌC" : formatValue(rawVal, t.format, scale);
+  const updatedAtStr = (t.lastUpdatedMap && t.lastUpdatedMap[idx]) ? t.lastUpdatedMap[idx] : (t.lastUpdated || "--");
 
   const elTitle = document.getElementById('inspTitle');
   if (elTitle) elTitle.textContent = `Point Inspector #${plcAddr} (Addr: ${addrDec})`;
@@ -1571,16 +2103,69 @@ function updateInspector() {
   if (elUnit) {
     elUnit.textContent = isDisabled
       ? `🚫 Đã khóa: Không gọi lệnh Modbus vào địa chỉ ${addrDec}`
-      : (unit ? `Đơn vị: ${unit}` : "--");
+      : `${unit ? 'Đơn vị: ' + unit + ' • ' : ''}Cập nhật: ${updatedAtStr}`;
   }
+
+  // Decoded state badge in Inspector
+  const decBadge = document.getElementById('inspDecodedStateBadge');
+  const decoded = decodeRegisterStateInfo(t, idx, rawVal);
+  if (decBadge) {
+    if (decoded && !isDisabled) {
+      decBadge.style.display = 'block';
+      decBadge.innerHTML = `<span class="decoded-state-pill tone-${decoded.tone}" style="font-size: 11px; padding: 3px 10px;">Trạng thái giải mã: ${escapeHtmlStr(decoded.badgeText)}</span>`;
+    } else {
+      decBadge.style.display = 'none';
+      decBadge.innerHTML = '';
+    }
+  }
+
+  // Trend Pin Button state
+  const btnPin = document.getElementById('btnInspPinTrend');
+  const isWatched = isPointWatchedInTrend(t.id, addrDec);
+  if (btnPin) {
+    btnPin.className = isWatched ? 'btn btn-primary' : 'btn btn-outline';
+    btnPin.innerHTML = isWatched ? '📈 Đang Ghim Trên Thẻ Động (Bỏ Ghim)' : '📈 Ghim Thẻ Động &amp; Trend';
+  }
+
   const inpAlias = document.getElementById('inpInspAlias');
-  if (inpAlias) inpAlias.value = tag;
+  if (inpAlias && document.activeElement !== inpAlias) inpAlias.value = rawTag;
   const inpUnit = document.getElementById('inpInspUnit');
-  if (inpUnit) inpUnit.value = unit;
+  if (inpUnit && document.activeElement !== inpUnit) inpUnit.value = unit;
   const inpScale = document.getElementById('inpInspScale');
-  if (inpScale) inpScale.value = scale;
+  if (inpScale && document.activeElement !== inpScale) inpScale.value = scale;
   const inpWrite = document.getElementById('inpInspWriteVal');
-  if (inpWrite) inpWrite.value = raw;
+  if (inpWrite && document.activeElement !== inpWrite) inpWrite.value = raw;
+
+  // Sync Quick Control config fields
+  const explicitCtrl = t.controls ? getPointMeta(t.controls, idx, t.start_addr, null) : null;
+  const effectiveCtrl = getEffectiveControlConfig(t, idx);
+  const selCtrl = document.getElementById('selInspCtrlType');
+  const curCtrlType = (explicitCtrl && explicitCtrl.type) ? explicitCtrl.type : 'auto';
+  if (selCtrl && document.activeElement !== selCtrl) {
+    selCtrl.value = curCtrlType;
+  }
+  const showType = curCtrlType === 'auto' ? effectiveCtrl.type : curCtrlType;
+  const boxToggle = document.getElementById('boxInspCtrlToggle');
+  const boxStep = document.getElementById('boxInspCtrlStepper');
+  const boxDrop = document.getElementById('boxInspCtrlDropdown');
+  if (boxToggle) boxToggle.style.display = (showType === 'toggle') ? 'flex' : 'none';
+  if (boxStep) boxStep.style.display = (showType === 'stepper') ? 'flex' : 'none';
+  if (boxDrop) boxDrop.style.display = (showType === 'dropdown') ? 'flex' : 'none';
+
+  const inpOn = document.getElementById('inpInspCtrlOnVal');
+  if (inpOn && document.activeElement !== inpOn) inpOn.value = effectiveCtrl.onValue !== undefined ? effectiveCtrl.onValue : 1;
+  const inpOff = document.getElementById('inpInspCtrlOffVal');
+  if (inpOff && document.activeElement !== inpOff) inpOff.value = effectiveCtrl.offValue !== undefined ? effectiveCtrl.offValue : 0;
+  const inpStep = document.getElementById('inpInspCtrlStep');
+  if (inpStep && document.activeElement !== inpStep) inpStep.value = effectiveCtrl.step !== undefined ? effectiveCtrl.step : 1;
+  const inpMin = document.getElementById('inpInspCtrlMin');
+  if (inpMin && document.activeElement !== inpMin) inpMin.value = effectiveCtrl.min !== undefined ? effectiveCtrl.min : 0;
+  const inpMax = document.getElementById('inpInspCtrlMax');
+  if (inpMax && document.activeElement !== inpMax) inpMax.value = effectiveCtrl.max !== undefined ? effectiveCtrl.max : 65535;
+  const inpOpts = document.getElementById('inpInspCtrlOptions');
+  if (inpOpts && document.activeElement !== inpOpts) {
+    inpOpts.value = formatMultistateOptionsSpec(effectiveCtrl.options || [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }]);
+  }
 
   const btnDis = document.getElementById('btnInspToggleDisable');
   if (btnDis) {
@@ -1618,6 +2203,7 @@ function savePointMeta(key, val) {
   syncToolbarWithActiveTab();
   renderTable();
   updateInspector();
+  saveUiStateToStorage();
 }
 
 function submitInspectorWrite() {
@@ -1713,8 +2299,17 @@ async function executePoll(tab) {
     });
     const data = await res.json();
     if (data.success) {
+      const nowTime = new Date();
+      const nowStr = nowTime.toTimeString().split(' ')[0];
       tab.values = data.values || [];
       tab.rawHexs = tab.values.map(v => (v !== null && v !== undefined) ? ("0x" + (v & 0xFFFF).toString(16).toUpperCase().padStart(4, "0")) : "--");
+      tab.lastUpdated = nowStr;
+      if (!tab.lastUpdatedMap) tab.lastUpdatedMap = {};
+      tab.values.forEach((v, idx) => {
+        if (v !== null && v !== undefined) {
+          tab.lastUpdatedMap[idx] = nowStr;
+        }
+      });
       tab.lastPollState = 'ok';
       tab.lastError = '';
       tab.blockErrors = data.block_errors || [];
@@ -1728,12 +2323,21 @@ async function executePoll(tab) {
         appendTrafficLog('RX', data.rx_hex, data.latency_ms, pTag);
       }
 
+      // Feed any watched tags belonging to this tab into SCADA Dynamic Cards & Trend Chart
+      try {
+        if (typeof ingestPollIntoTrendStudio === 'function') {
+          ingestPollIntoTrendStudio(tab, nowStr);
+        }
+      } catch (trendErr) {
+        console.error("ingestPollIntoTrendStudio error:", trendErr);
+      }
+
       if (tab.id === activeTabId) {
         try { renderTable(); } catch (uiErr) { console.error("renderTable error:", uiErr); }
         try { updateInspector(); } catch (uiErr) { console.error("updateInspector error:", uiErr); }
-        try {
-          if (typeof pushTrendRecord === 'function') pushTrendRecord(tab.values.map(v => v || 0));
-        } catch (uiErr) {}
+      }
+      if (currentView === 'trend' && typeof renderTrendStudioView === 'function') {
+        try { renderTrendStudioView(); } catch (uiErr) {}
       }
     } else {
       tab.lastPollState = 'error';

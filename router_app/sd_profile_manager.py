@@ -364,7 +364,8 @@ def analyze_sd_profile_dict(prof_data: dict, clean_name: str = "") -> dict:
             "scan_ms": int(t.get("scan_ms", 1000)),
             "tags": t_tags,
             "units": t_units,
-            "scales": t_scales
+            "scales": t_scales,
+            "controls": t.get("controls") or {}
         })
 
     pname = str(prof_data.get("profile_name") or (clean_name[:-5] if clean_name.endswith(".json") else clean_name))
@@ -376,5 +377,6 @@ def analyze_sd_profile_dict(prof_data: dict, clean_name: str = "") -> dict:
         "total_disabled": total_disabled,
         "total_tagged": total_tagged,
         "total_sub_blocks": total_sub_blocks,
-        "tabs": tabs_analysis
+        "tabs": tabs_analysis,
+        "trend_watches": prof_data.get("trend_watches") or []
     }

@@ -436,6 +436,7 @@ export interface ChartTrace {
   displayAddress: string;
   color: string;
   visible: boolean;
+  span?: 1 | 2;
 }
 
 export interface ChartTarget {
