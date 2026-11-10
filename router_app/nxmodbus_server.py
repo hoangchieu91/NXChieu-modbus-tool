@@ -3867,7 +3867,7 @@ def ensure_router_remote_access_and_wg_watchdog():
        IP tĩnh sang DHCP (hoặc đổi mạng Wi-Fi Repeater / 4G), hệ thống lập tức xóa conntrack UDP cũ
        và ép WireGuard bắt tay lại ngay (< 3 giây) thay vì bị treo nhiều phút.
     """
-    if not IS_LINUX or not os.path.exists("/etc/openwrt_release"):
+    if not os.path.exists("/etc/openwrt_release"):
         return
     try:
         fw_cmds = (

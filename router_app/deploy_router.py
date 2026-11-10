@@ -9,6 +9,7 @@ Fallback management endpoint: Local LAN (192.168.10.1)
 import socket
 import subprocess
 import sys
+import time
 import urllib.request
 
 PSCP = r"C:\Program Files\PuTTY\pscp.exe"
@@ -57,7 +58,13 @@ def main():
             raise SystemExit(1)
         print(f"Uploaded {src} -> {host}:{dst}")
 
-    restart_cmd = "chmod +x /etc/init.d/nxmodbus && /etc/init.d/nxmodbus restart && sleep 3 && ps | grep nxmodbus_server"
+    restart_cmd = (
+        "sed -i 's/\\r$//' /etc/init.d/nxmodbus /etc/nxmodbus/*.py && "
+        "chmod +x /etc/init.d/nxmodbus && "
+        "/etc/init.d/nxmodbus restart && "
+        "sleep 5 && "
+        "ps | grep nxmodbus_server"
+    )
     res = subprocess.run([PLINK, "-batch", "-hostkey", HOSTKEY, "-l", "root", "-pw", PASS, host, restart_cmd], capture_output=True, text=True)
     print("Router process:\n" + res.stdout.strip())
 
@@ -71,9 +78,16 @@ def main():
         "/api/profile/list",
     ]:
         url = f"http://{host}:8098{path}"
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            body = resp.read()
-            print(f"GET {url:52s} -> HTTP {resp.status} ({len(body):6d} bytes)")
+        for attempt in range(8):
+            try:
+                with urllib.request.urlopen(url, timeout=5) as resp:
+                    body = resp.read()
+                    print(f"GET {url:52s} -> HTTP {resp.status} ({len(body):6d} bytes)")
+                break
+            except Exception:
+                if attempt == 7:
+                    raise
+                time.sleep(1.5)
 
 
 if __name__ == "__main__":
