@@ -210,7 +210,8 @@ button.btn { padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size:
 
 /* Data Table */
 table.data-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
-#pollDataTable { table-layout: fixed; min-width: 1120px; }
+#pollDataTable { table-layout: fixed; min-width: 1308px; }
+#pollDataTable th, #pollDataTable td { padding: 6px 5px; }
 table.data-table thead { position: sticky; top: 0; background: #0d1527; z-index: 10; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
 table.data-table th { padding: 8px 8px; font-weight: 600; color: #94a3b8; border-bottom: 1px solid var(--border); text-transform: uppercase; font-size: 11px; letter-spacing: 0.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 table.data-table td { padding: 6px 8px; border-bottom: 1px solid rgba(51,65,85,0.4); font-family: monospace; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; height: 36px; }
@@ -223,6 +224,18 @@ table.data-table tr.selected td { background: rgba(6,182,212,0.12) !important; b
 .cell-value-num { font-weight: 800; color: #38bdf8; font-family: monospace; font-size: 13px; font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 44px; display: inline-block; }
 .cell-flash { animation: valueFlash 0.6s ease-out; }
 @keyframes valueFlash { 0% { background: rgba(6,182,212,0.5); } 100% { background: transparent; } }
+.qc-btn-sending {
+  transform: scale(0.95);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.65) !important;
+  border-color: var(--emerald) !important;
+}
+.val-updated-flash {
+  animation: valAckFlash 0.55s ease-out;
+}
+@keyframes valAckFlash {
+  0% { background: rgba(16, 185, 129, 0.28); border-radius: 6px; }
+  100% { background: transparent; }
+}
 
 /* Mobile Native Telemetry Cards Grid */
 .mobile-cards-grid {
@@ -603,6 +616,23 @@ footer { padding: 5px 16px; background: #050912; border-top: 1px solid var(--bor
   .inspector-drawer.collapsed {
     max-height: 0;
     border-top: none;
+  }
+  .inspector-width-pill,
+  .inspector-resize-handle {
+    display: none !important;
+  }
+  .toast-banner {
+    top: auto !important;
+    bottom: 64px !important;
+    left: 10px !important;
+    right: 10px !important;
+    padding: 8px 12px !important;
+    font-size: 12px !important;
+    border-radius: 10px !important;
+  }
+  .subtab-pane {
+    overflow-x: auto;
+    max-width: 100%;
   }
   .traffic-body {
     height: 105px;

@@ -9,7 +9,8 @@
   <meta name="apple-mobile-web-app-title" content="NXModbus Pro">
   <meta name="mobile-web-app-capable" content="yes">
   <title>NXChieu Modbus Studio Pro - GL.iNet Router Edition</title>
-  <link rel="stylesheet" href="/css/studio.css?v=3.3.7">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230284c7'/%3E%3Ctext x='32' y='44' font-family='monospace' font-weight='900' font-size='34' text-anchor='middle' fill='%23ffffff'%3EM%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/css/studio.css?v=3.3.8">
 </head>
 <body>
 
@@ -371,37 +372,37 @@
             <div id="mobileRegisterCards" class="mobile-cards-grid"></div>
             <table class="data-table" id="pollDataTable">
               <colgroup>
-                <col style="width: 44px;">
-                <col style="width: 34px;">
+                <col style="width: 42px;">
+                <col style="width: 32px;">
+                <col style="width: 48px;">
+                <col style="width: 58px;">
+                <col style="width: 58px;">
+                <col style="width: 245px;">
+                <col style="width: 185px;">
+                <col style="width: 196px;">
+                <col style="width: 54px;">
+                <col style="width: 48px;">
                 <col style="width: 68px;">
-                <col style="width: 66px;">
-                <col style="width: 68px;">
-                <col style="width: 24%;">
-                <col style="width: 210px;">
-                <col style="width: 195px;">
-                <col style="width: 56px;">
-                <col style="width: 52px;">
                 <col style="width: 72px;">
-                <col style="width: 76px;">
-                <col style="width: 88px;">
-                <col style="width: 126px;">
+                <col style="width: 84px;">
+                <col style="width: 118px;">
               </colgroup>
               <thead>
                 <tr>
-                  <th style="width: 44px; text-align: center;" title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)">Đọc</th>
-                  <th style="width: 34px;">#</th>
-                  <th style="width: 68px;">Địa Chỉ DEC</th>
-                  <th style="width: 66px;">HEX</th>
-                  <th style="width: 68px;">PLC Addr</th>
-                  <th>Tên Gợi Nhớ (Alias / Tag)</th>
-                  <th style="width: 210px;">Giá Trị &amp; Giải Mã</th>
-                  <th style="width: 195px;">Điều Khiển Nhanh (Action)</th>
-                  <th style="width: 56px;">Đơn Vị</th>
-                  <th style="width: 52px;">Hệ Số</th>
-                  <th style="width: 72px;">Raw Hex</th>
-                  <th style="width: 76px;">Cập Nhật</th>
-                  <th style="width: 88px;">Trạng Thái</th>
-                  <th style="width: 126px;">Thao Tác</th>
+                  <th style="width: 42px; text-align: center;" title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)">Đọc</th>
+                  <th style="width: 32px;">#</th>
+                  <th style="width: 48px;" title="Địa chỉ thanh ghi hệ thập phân (0-based)">DEC</th>
+                  <th style="width: 58px;">HEX</th>
+                  <th style="width: 58px;">PLC</th>
+                  <th style="width: 245px;">Tên Gợi Nhớ (Alias / Tag)</th>
+                  <th style="width: 185px;">Giá Trị &amp; Giải Mã</th>
+                  <th style="width: 196px;">Điều Khiển Nhanh (Action)</th>
+                  <th style="width: 54px;">Đơn Vị</th>
+                  <th style="width: 48px;">Hệ Số</th>
+                  <th style="width: 68px;">Raw Hex</th>
+                  <th style="width: 72px;">Cập Nhật</th>
+                  <th style="width: 84px;">Trạng Thái</th>
+                  <th style="width: 118px;">Thao Tác</th>
                 </tr>
               </thead>
               <tbody id="tblRegisters">
@@ -1928,7 +1929,7 @@ curl -s -X POST http://10.212.156.12:8098/api/poll/auto_mask -H "Content-Type: a
           <div class="panel-card" style="padding: 14px; gap: 12px;" id="sdStudioDetailCard">
             <!-- SELECTED PROFILE HEADER (PRIMARY CRUD CONTROLS) -->
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-              <div style="min-width: 0; flex: 1;">
+              <div style="min-width: 260px; flex: 1 1 320px;">
                 <div style="display: flex; align-items: center; gap: 7px; flex-wrap: wrap;">
                   <span style="font-size: 15px; font-weight: 800; color: #fff; word-break: break-word;" id="lblSdInspectTitle">Chọn một hồ sơ để xem &amp; chỉnh sửa</span>
                   <span class="badge badge-emerald" id="badgeSdInspectActive" style="display: none;">ĐANG CHẠY</span>
@@ -2544,6 +2545,10 @@ curl -s -X POST http://10.212.156.12:8098/api/poll/auto_mask -H "Content-Type: a
       <span class="mob-ico">📊</span>
       <span>Bảng Đo</span>
     </button>
+    <button class="mob-nav-item" data-view="trend" onclick="showView('trend')">
+      <span class="mob-ico">📈</span>
+      <span>Thẻ/Trend</span>
+    </button>
     <button class="mob-nav-item" data-view="quick" onclick="openQuickProfileBuilderModal()">
       <span class="mob-ico" style="color: var(--emerald);">➕</span>
       <span style="color: var(--emerald); font-weight: 800;">Khai Nhanh</span>
@@ -2564,13 +2569,13 @@ curl -s -X POST http://10.212.156.12:8098/api/poll/auto_mask -H "Content-Type: a
 
   <!-- FOOTER -->
   <footer>
-    <div>NXChieu Modbus Tool v3.3 — Multi-Port CH348 8-COM Edge Hub, Smart Sub-Block Skip &amp; SD Profile Studio (GL-XE300 / OpenWrt)</div>
+    <div>NXChieu Modbus Tool v3.3.8 — Multi-Port CH348 8-COM Edge Hub, Smart Sub-Block Skip &amp; SD Profile Studio (GL-XE300 / OpenWrt)</div>
     <div id="lblTime">2026-11-10</div>
   </footer>
 
-  <!-- MODULAR FRONTEND JAVASCRIPT (v3.3.6 Clean Architecture) -->
-  <script src="/js/app_core.js?v=3.3.6"></script>
-  <script src="/js/scanner_gateway_datalog.js?v=3.3.6"></script>
-  <script src="/js/profile_studio_and_builder.js?v=3.3.6"></script>
+  <!-- MODULAR FRONTEND JAVASCRIPT (v3.3.8 Clean Architecture) -->
+  <script src="/js/app_core.js?v=3.3.8"></script>
+  <script src="/js/scanner_gateway_datalog.js?v=3.3.8"></script>
+  <script src="/js/profile_studio_and_builder.js?v=3.3.8"></script>
 </body>
 </html>

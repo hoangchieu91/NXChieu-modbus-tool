@@ -1197,7 +1197,7 @@ function mergeSameSlaveTabs() {
 }
 
 // ==================== TAB SYSTEM ====================
-function renderTabs() {
+function renderTabs(skipTableRebuild) {
   const scrollBox = document.getElementById('tabListScroll');
   const addBtn = document.getElementById('btnAddSessionTab');
   if (!scrollBox || !addBtn) return;
@@ -1227,14 +1227,24 @@ function renderTabs() {
     allBtn.style.color = anyPolling ? 'var(--rose)' : 'var(--cyan)';
   }
   syncToolbarWithActiveTab();
-  renderTable();
+  if (!skipTableRebuild) {
+    renderTable();
+  }
   updateInspector();
 }
 
 function selectSessionTab(tabId) {
+  const gridBox = document.getElementById('pollGridContainer');
+  const prevTab = getActiveTab();
+  if (prevTab && gridBox) {
+    prevTab._scrollTop = gridBox.scrollTop;
+  }
   activeTabId = tabId;
   renderTabs();
   const t = getActiveTab();
+  if (t && gridBox) {
+    gridBox.scrollTop = t._scrollTop || 0;
+  }
   updateHeaderSerialBadge(t.port, t.baud, t.parity || 'N', t.stopbits || 1);
   saveUiStateToStorage();
 }
@@ -1517,13 +1527,13 @@ function formatMultistateOptionsSpec(options) {
 function isTagAutoReadOnly(tagName) {
   const tag = String(tagName || '').trim();
   if (!tag) return false;
-  if (/WRITE|CLEAR|RESET|CMD|SETPOINT|PULSE|PWM_DUTY|FREQ_SET|_MODE|_BAUD|_PARITY|SLAVE_ID/i.test(tag)) {
+  if (/WRITE|CLEAR|RESET|CMD|SETPOINT|PULSE|CYCLE|PWM|DUTY|FREQ_SET|_MODE|_BAUD|_PARITY|SLAVE_ID|RELAY_BITMAP|OUT12V_BITMAP/i.test(tag)) {
     return false;
   }
   if (/^(RL\d+|OUT12V_\d+|RELAY\d*|DO\d+|COIL\d*)\b/i.test(tag)) {
     return false;
   }
-  if (/\b(DEVICE_ID|FW_VERSION|HW_VERSION|UPTIME|REBOOT_COUNT|DIP_STATE|DI_BITMAP|DO_BITMAP|RELAY_BITMAP|OUT12V_BITMAP|UID_WORD|NTC_TEMP|AI\d+_|MCU_VDDA|MCU_TEMP|DI\d+_STATE|DI\d+_FREQ|DI\d+_CNT|ERR_CNT|OK_CNT|SERIAL_NO|STATUS_WORD)\b/i.test(tag)) {
+  if (/(^|[^A-Z0-9])(DEVICE_ID|FW_VERSION|HW_VERSION|UPTIME|REBOOT_COUNT|DIP_STATE|DI_BITMAP|DO_BITMAP|UID_WORD|NTC_TEMP|AI\d+_|MCU_VDDA|MCU_TEMP|DI\d+_STATE|DI\d+_FREQ|DI\d+_CNT|ERR_CNT|OK_CNT|SERIAL_NO|STATUS_WORD)/i.test(tag)) {
     return true;
   }
   return false;
@@ -1667,10 +1677,48 @@ function inferControlFromTagAndFn(tagName, fnCode) {
       return { type: 'readonly', options: opts, isAuto: true };
     }
   }
+  if (/WRITE\s*0\s*(TO\s*)?(RESET|CLEAR)/i.test(tag)) {
+    return {
+      type: 'buttons',
+      options: [{ value: 0, label: '↺ Reset (0)' }],
+      isAuto: true
+    };
+  }
   if (/WRITE\s*1\s*CLEAR|CLEAR_ALL|RESET_ERR/i.test(tag)) {
     return {
       type: 'buttons',
       options: [{ value: 1, label: '⚡ Ghi 1 (Clear)' }],
+      isAuto: true
+    };
+  }
+  if (/RELAY_BITMAP/i.test(tag)) {
+    return {
+      type: 'buttons',
+      options: [
+        { value: 0, label: 'Tắt Hết (0)' },
+        { value: 15, label: 'Bật Cả 4 (15)' }
+      ],
+      isAuto: true
+    };
+  }
+  if (/OUT12V_BITMAP/i.test(tag)) {
+    return {
+      type: 'buttons',
+      options: [
+        { value: 0, label: 'Tắt Hết (0)' },
+        { value: 7, label: 'Bật Cả 3 (7)' }
+      ],
+      isAuto: true
+    };
+  }
+  if (/(PULSE|CYCLE).*100MS/i.test(tag)) {
+    return {
+      type: 'buttons',
+      options: [
+        { value: 5, label: '⚡ 0.5s' },
+        { value: 10, label: '⚡ 1s' },
+        { value: 30, label: '⚡ 3s' }
+      ],
       isAuto: true
     };
   }
@@ -1805,7 +1853,7 @@ function buildQuickControlCellHtml(tab, idx, rawVal, isDisabled, context) {
   const isReadOnly = isRegisterReadOnly(tab, idx);
   const ctrl = getEffectiveControlConfig(tab, idx);
   const isHardwareReadOnly = (tab.fn_code === 2 || tab.fn_code === 4);
-  const isPureTableAction = (context === 'table');
+  const isPureTableAction = (context === 'table' || context === 'mobile');
 
   if (isReadOnly || ctrl.type === 'readonly') {
     if (context === 'scada_card') {
@@ -1962,6 +2010,11 @@ async function quickControlWrite(tabId, addrDec, writeVal, ev) {
   }
   const numVal = Math.round(Number(writeVal));
   const fn = (tab.fn_code === 1 || tab.fn_code === 2) ? 5 : 6;
+  const clickedBtn = ev && ev.target && typeof ev.target.closest === 'function' ? ev.target.closest('button') : null;
+  if (clickedBtn) {
+    clickedBtn.classList.add('qc-btn-sending');
+    setTimeout(() => clickedBtn.classList.remove('qc-btn-sending'), 280);
+  }
 
   try {
     const res = await fetch('/api/write', {
@@ -1982,8 +2035,14 @@ async function quickControlWrite(tabId, addrDec, writeVal, ev) {
     if (data.success) {
       const nowStr = new Date().toTimeString().split(' ')[0];
       if (!Array.isArray(tab.values)) tab.values = [];
+      const rawTag = getPointMeta(tab.tags, idx, tab.start_addr, "");
       if (idx >= 0 && idx < tab.count) {
-        tab.values[idx] = numVal;
+        // Smart optimistic prediction for Toggle (2) on 0=OFF,1=ON,2=Toggle relays
+        if (numVal === 2 && /2\s*=\s*Toggle/i.test(rawTag) && (tab.values[idx] === 0 || tab.values[idx] === 1)) {
+          tab.values[idx] = tab.values[idx] === 1 ? 0 : 1;
+        } else {
+          tab.values[idx] = numVal;
+        }
         if (!tab.lastUpdatedMap) tab.lastUpdatedMap = {};
         tab.lastUpdatedMap[idx] = nowStr;
       }
@@ -1991,11 +2050,20 @@ async function quickControlWrite(tabId, addrDec, writeVal, ev) {
         appendTrafficLog('TX', data.tx_hex, 0, shortPortLabel(tab.port));
         appendTrafficLog('RX', data.rx_hex, data.latency_ms, shortPortLabel(tab.port));
       }
-      const tagLbl = getPointMeta(tab.tags, idx, tab.start_addr, "") || `Addr ${addrDec}`;
+      const tagLbl = rawTag || `Addr ${addrDec}`;
       showToast(`⚡ Đã ghi [${tagLbl}] = ${numVal} (${data.latency_ms || 0}ms)`);
       if (typeof ingestPollIntoTrendStudio === 'function') ingestPollIntoTrendStudio(tab, nowStr);
       if (tab.id === activeTabId) {
         updateTableLiveValuesInPlace(tab);
+        const cVal = document.getElementById(`cellVal_${idx}`);
+        const mVal = document.getElementById(`mobVal_${idx}`);
+        [cVal, mVal].forEach(el => {
+          if (el) {
+            el.classList.remove('val-updated-flash');
+            void el.offsetWidth;
+            el.classList.add('val-updated-flash');
+          }
+        });
         updateInspector();
       }
       if (currentView === 'trend' && typeof updateTrendCardsLiveValuesInPlace === 'function') {
@@ -2436,15 +2504,17 @@ function updateTableLiveValuesInPlace(t) {
     const raw = Array.isArray(t.values) ? t.values[i] : undefined;
     const hasVal = (raw !== undefined && raw !== null);
     const rawHex = hasVal ? ("0x" + (raw & 0xFFFF).toString(16).toUpperCase().padStart(4, "0")) : "--";
+    const scale = getPointMeta(t.scales, i, t.start_addr, 1.0);
     const updatedAtStr = (!isDisabled && t.lastUpdatedMap && t.lastUpdatedMap[i]) ? t.lastUpdatedMap[i] : (hasVal && t.lastUpdated ? t.lastUpdated : "--");
+    const newValHtml = buildValueAndStateCellHtml(t, i, raw, isDisabled);
+    const newStatusHtml = buildRowStatusBadgeHtml(t, addrDec, isDisabled, hasVal, errAddrSet);
 
     const cellVal = document.getElementById(`cellVal_${i}`);
-    if (cellVal) {
-      const newValHtml = buildValueAndStateCellHtml(t, i, raw, isDisabled);
-      if (cellVal.innerHTML !== newValHtml) cellVal.innerHTML = newValHtml;
+    if (cellVal && cellVal.innerHTML !== newValHtml) {
+      cellVal.innerHTML = newValHtml;
     }
 
-    // NOTE: cellQuickCtrl_${i} is NEVER touched during polling so action buttons stay 100% static without repainting!
+    // NOTE: cellQuickCtrl_${i} & mobQuickCtrl_${i} are NEVER touched during polling so action buttons stay 100% static without repainting!
 
     const cellHex = document.getElementById(`cellHex_${i}`);
     if (cellHex && cellHex.textContent !== rawHex) cellHex.textContent = rawHex;
@@ -2456,9 +2526,31 @@ function updateTableLiveValuesInPlace(t) {
     }
 
     const cellStatus = document.getElementById(`cellStatus_${i}`);
-    if (cellStatus) {
-      const newStatusHtml = buildRowStatusBadgeHtml(t, addrDec, isDisabled, hasVal, errAddrSet);
-      if (cellStatus.innerHTML !== newStatusHtml) cellStatus.innerHTML = newStatusHtml;
+    if (cellStatus && cellStatus.innerHTML !== newStatusHtml) {
+      cellStatus.innerHTML = newStatusHtml;
+    }
+
+    // In-Place Live Update for Mobile Register Cards (#mobileRegisterCards) — Zero scroll jump or card flicker!
+    const mobVal = document.getElementById(`mobVal_${i}`);
+    if (mobVal && mobVal.innerHTML !== newValHtml) {
+      mobVal.innerHTML = newValHtml;
+    }
+
+    const mobRaw = document.getElementById(`mobRaw_${i}`);
+    const expectedMobRaw = `RAW: ${rawHex} • ×${scale}`;
+    if (mobRaw && mobRaw.textContent !== expectedMobRaw) {
+      mobRaw.textContent = expectedMobRaw;
+    }
+
+    const mobTime = document.getElementById(`mobTime_${i}`);
+    if (mobTime) {
+      const expectedMobTime = updatedAtStr !== '--' ? `🕒 ${updatedAtStr}` : '';
+      if (mobTime.textContent !== expectedMobTime) mobTime.textContent = expectedMobTime;
+    }
+
+    const mobStatus = document.getElementById(`mobStatus_${i}`);
+    if (mobStatus && mobStatus.innerHTML !== newStatusHtml) {
+      mobStatus.innerHTML = newStatusHtml;
     }
   }
 }
@@ -2467,9 +2559,9 @@ function renderTable() {
   const t = getActiveTab();
   const tbody = document.getElementById('tblRegisters');
   const cardsBox = document.getElementById('mobileRegisterCards');
+  const gridBox = document.getElementById('pollGridContainer');
   if (!tbody || !t) return;
-  tbody.innerHTML = '';
-  if (cardsBox) cardsBox.innerHTML = '';
+  const savedScrollTop = gridBox ? gridBox.scrollTop : 0;
 
   const hideDisabled = Boolean(document.getElementById('chkHideDisabled')?.checked);
   tbody.dataset.renderedSig = computeTableStructureSig(t, hideDisabled);
@@ -2490,6 +2582,7 @@ function renderTable() {
 
   let renderedRows = 0;
   const cardItemsHtml = [];
+  const rowFrag = document.createDocumentFragment();
 
   for (let i = 0; i < t.count; i++) {
     const addrDec = t.start_addr + i;
@@ -2556,12 +2649,12 @@ function renderTable() {
         </div>
       </td>
     `;
-    tbody.appendChild(tr);
+    rowFrag.appendChild(tr);
 
     if (cardsBox) {
       const mobileCtrlHtml = buildQuickControlCellHtml(t, i, raw, isDisabled, 'mobile');
       cardItemsHtml.push(`
-        <div class="mobile-reg-card ${isDisabled ? 'is-disabled' : ''} ${i === t.selectedIndex ? 'selected' : ''}" onclick="selectRow(${i}, false)">
+        <div id="mobCard_${i}" class="mobile-reg-card ${isDisabled ? 'is-disabled' : ''} ${i === t.selectedIndex ? 'selected' : ''}" onclick="selectRow(${i}, false)">
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
             <div style="display: flex; align-items: center; gap: 6px;">
               <input type="checkbox" ${!isDisabled ? 'checked' : ''} onclick="toggleAddrDisabled(${addrDec}, event)" style="width: 17px; height: 17px; accent-color: var(--emerald); cursor: pointer;">
@@ -2569,8 +2662,8 @@ function renderTable() {
               <span style="font-size: 11px; color: var(--text-muted); font-family: monospace;">#${plcAddr}</span>
             </div>
             <div style="display: flex; align-items: center; gap: 4px;">
-              ${updatedAtStr !== '--' ? `<span style="font-size: 10px; font-family: monospace; color: var(--cyan);">🕒 ${updatedAtStr}</span>` : ''}
-              ${statusHtml}
+              <span id="mobTime_${i}" style="font-size: 10px; font-family: monospace; color: var(--cyan);">${updatedAtStr !== '--' ? `🕒 ${updatedAtStr}` : ''}</span>
+              <span id="mobStatus_${i}">${statusHtml}</span>
             </div>
           </div>
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
@@ -2578,21 +2671,24 @@ function renderTable() {
               ${escapeHtmlStr(tag)}
             </div>
             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-              ${valCellHtml}
+              <span id="mobVal_${i}">${valCellHtml}</span>
               ${unit ? `<span style="font-size: 11px; color: var(--cyan); font-weight: 700;">${escapeHtmlStr(unit)}</span>` : ''}
             </div>
           </div>
-          <div style="margin-top: 4px;">
+          <div id="mobQuickCtrl_${i}" style="margin-top: 4px;">
             ${mobileCtrlHtml}
           </div>
           <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.07); padding-top: 6px; margin-top: 4px;">
-            <span style="font-family: monospace;">RAW: ${rawHex} • ×${scale}</span>
+            <span id="mobRaw_${i}" style="font-family: monospace;">RAW: ${rawHex} • ×${scale}</span>
             <div style="display: flex; gap: 5px;" onclick="event.stopPropagation();">
               <button class="btn ${isWatched ? 'btn-primary' : 'btn-outline'}" style="padding: 3px 8px; font-size: 11px;" onclick="togglePointInTrend('${t.id}', ${i}, event)">
                 📈 ${isWatched ? 'Đang Vẽ' : 'Trend'}
               </button>
               <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="openRegisterCrudModal('edit', ${i}, event)">
                 ✏️ Sửa
+              </button>
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)" title="Chi tiết Point Inspector">
+                🔍
               </button>
               <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--rose);" onclick="deleteOrMaskRegisterRow(${i}, event)">
                 🗑️
@@ -2609,8 +2705,14 @@ function renderTable() {
     if (cardsBox) {
       cardsBox.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px;">Đang ẩn các dòng Cấm Đọc.</div>`;
     }
-  } else if (cardsBox) {
-    cardsBox.innerHTML = cardItemsHtml.join('');
+  } else {
+    tbody.replaceChildren(rowFrag);
+    if (cardsBox) {
+      cardsBox.innerHTML = cardItemsHtml.join('');
+    }
+  }
+  if (gridBox) {
+    gridBox.scrollTop = savedScrollTop;
   }
 }
 
@@ -2622,8 +2724,12 @@ function selectRow(idx, openInspectorNow) {
     tbody.querySelectorAll('tr').forEach(tr => {
       tr.classList.toggle('selected', tr.id === `pollRow_${idx}`);
     });
-  } else {
-    renderTable();
+  }
+  const cardsBox = document.getElementById('mobileRegisterCards');
+  if (cardsBox) {
+    cardsBox.querySelectorAll('.mobile-reg-card').forEach(card => {
+      card.classList.toggle('selected', card.id === `mobCard_${idx}`);
+    });
   }
   updateInspector();
   if (openInspectorNow) {
@@ -3004,7 +3110,7 @@ function toggleAllTabsPolling() {
       }, idx * 45);
     });
   }
-  renderTabs();
+  renderTabs(true);
 }
 
 // ==================== POLLING ENGINE (SMART CONTIGUOUS SUB-BLOCKS + IN-PLACE DOM PATCH) ====================
@@ -3103,7 +3209,7 @@ function togglePolling() {
     clearInterval(t.timer);
     t.timer = null;
   }
-  renderTabs();
+  renderTabs(true);
 }
 
 function pollOnce() {

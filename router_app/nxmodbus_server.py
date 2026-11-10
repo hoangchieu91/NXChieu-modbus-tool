@@ -2295,6 +2295,16 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(u.query)
 
         # 0. AI Schema, SD Card Profile Library & Profile Export
+        if path == "/favicon.ico":
+            svg_icon = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0284c7"/><text x="32" y="44" font-family="monospace" font-weight="900" font-size="34" text-anchor="middle" fill="#ffffff">M</text></svg>'
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/svg+xml')
+            self.send_header('Content-Length', str(len(svg_icon)))
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.end_headers()
+            self.wfile.write(svg_icon)
+            return
+
         if path == "/api/ai/spec":
             self.send_json(build_ai_spec_document())
             return

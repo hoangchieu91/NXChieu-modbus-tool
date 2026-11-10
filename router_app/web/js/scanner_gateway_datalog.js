@@ -776,16 +776,21 @@ function ensureDefaultTrendWatches() {
   trendInitialSeeded = true;
 
   // Prefer writable / control or sensor registers rather than static device IDs
-  const candidates = [];
+  const scoredCandidates = [];
   for (let i = 0; i < t.count; i++) {
     if (isRegisterDisabled(t, i)) continue;
-    const rawTag = getPointMeta(t.tags, i, t.start_addr, "");
-    if (rawTag && String(rawTag).trim()) {
-      candidates.push(i);
-    }
+    const rawTag = String(getPointMeta(t.tags, i, t.start_addr, "") || "").trim();
+    if (!rawTag) continue;
+    let priority = 10;
+    if (/^(RL\d+_STATE|OUT12V_\d+_STATE|DO_BITMAP)\b/i.test(rawTag)) priority = 100;
+    else if (/(TEMP|VOLT|CURR|PRESS|ADC|FREQ_HZ|POWER|FLOW|HUMID)/i.test(rawTag)) priority = 90;
+    else if (/(RL\d+|OUT12V_\d+|PWM|COUNT|BITMAP)/i.test(rawTag)) priority = 70;
+    else if (/(DEVICE_ID|FW_VERSION|HW_VERSION|UID_WORD|UPTIME)/i.test(rawTag)) priority = 1;
+    scoredCandidates.push({ idx: i, priority });
   }
-  const pickedIndices = candidates.length > 0
-    ? candidates.slice(0, 6)
+  scoredCandidates.sort((a, b) => b.priority - a.priority || a.idx - b.idx);
+  const pickedIndices = scoredCandidates.length > 0
+    ? scoredCandidates.slice(0, 6).map(x => x.idx)
     : Array.from({ length: Math.min(4, t.count) }, (_, i) => i);
 
   pickedIndices.forEach((idx, cIdx) => {
@@ -920,7 +925,7 @@ function ensureTrendWatchedTabsPolling() {
       t.timer = null;
       t.isPolling = false;
     });
-    renderTabs();
+    renderTabs(true);
     renderTrendStudioView();
     showToast("⏹ Đã tạm dừng Polling các Tab đang theo dõi.");
     return;
@@ -940,7 +945,7 @@ function ensureTrendWatchedTabsPolling() {
       executePoll(t);
     }
   });
-  renderTabs();
+  renderTabs(true);
   renderTrendStudioView();
   showToast(`▶ Đã bật Polling thời gian thực cho ${watchedTabs.length} Tab đang theo dõi!`);
 }
