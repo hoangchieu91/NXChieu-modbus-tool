@@ -2052,7 +2052,9 @@ def build_ai_spec_document():
     """Đặc tả JSON chuẩn để các luồng AI Agent khác đọc hiểu và tự động sinh file cấu hình theo dõi."""
     return {
         "schema_id": "nxmodbus-monitor-profile-v3.2",
-        "studio_url": f"http://192.168.10.1:{PORT_WEB}",
+        "studio_url": f"http://10.212.156.12:{PORT_WEB}",
+        "studio_url_wireguard": f"http://10.212.156.12:{PORT_WEB}",
+        "studio_url_lan": f"http://192.168.10.1:{PORT_WEB}",
         "description": "Đặc tả cấu hình JSON Theo Dõi Đa Cổng (Multi-Port Modbus Monitoring Profile) dành cho AI Agents & Kỹ sư tự động hóa trên Router GL-XE300 + Bộ 8 Cổng COM WCH CH348L.",
         "hardware_port_mapping": {
             "COM 1": "/dev/ttyCH0 (TCP Gateway mặc định :5001)",
@@ -3882,9 +3884,10 @@ def main():
 
     server = ThreadedHTTPServer(("0.0.0.0", PORT_WEB), StudioHandler)
     print("=====================================================")
-    print("  NXChieu Modbus Web Studio Pro v3.2 (Multi-Port Edge)")
-    print(f"  URL: http://192.168.10.1:{PORT_WEB}")
-    print(f"  AI Spec Endpoint: http://192.168.10.1:{PORT_WEB}/api/ai/spec")
+    print("  NXChieu Modbus Web Studio Pro v3.3.5 (Multi-Port Edge)")
+    print(f"  WireGuard URL: http://10.212.156.12:{PORT_WEB}")
+    print(f"  LAN URL:       http://192.168.10.1:{PORT_WEB}")
+    print(f"  AI Spec Endpoint: http://10.212.156.12:{PORT_WEB}/api/ai/spec")
     if ch348_hub and ch348_hub.online:
         print(f"  CH348 8-Port Hub: ONLINE ({ch348_hub.chip_type} Ver 0x{ch348_hub.chip_ver:02X} -> /dev/ttyCH0..7)")
     print(f"  SD Card Storage: {get_storage_dir()}")

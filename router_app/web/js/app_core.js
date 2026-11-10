@@ -446,9 +446,12 @@ function refreshPortDropdowns() {
 
   // Collect any active TCP endpoints from sessionTabs so they stay selectable in #selPort and #selMapPort
   const customTcpSet = new Set([
+    'tcp://10.212.156.12:5000',
+    'tcp://10.212.156.12:5001',
     'tcp://192.168.10.1:502',
     'tcp://127.0.0.1:5000',
     'tcp://127.0.0.1:5001',
+    'rtuovertcp://10.212.156.12:5001',
     'rtuovertcp://192.168.10.1:502'
   ]);
   (sessionTabs || []).forEach(t => {

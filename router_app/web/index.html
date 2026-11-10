@@ -588,6 +588,8 @@
                 </div>
                 <div style="display: flex; gap: 5px; flex-wrap: wrap; align-items: center;">
                   <span style="font-size: 11px; color: var(--text-muted);">Chọn nhanh:</span>
+                  <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px; color: #a78bfa; border-color: rgba(167,139,250,0.45);" onclick="setTcpScannerPreset('10.212.156.12', 5000, 'tcp')">🔒 WireGuard Hub :5000</button>
+                  <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px; color: #a78bfa; border-color: rgba(167,139,250,0.45);" onclick="setTcpScannerPreset('10.212.156.12', 5001, 'tcp')">🔒 WireGuard COM1 :5001</button>
                   <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px; color: var(--cyan);" onclick="setTcpScannerPreset('192.168.10.1', 502, 'tcp')">Port 502 (Chuẩn PLC)</button>
                   <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px; color: var(--emerald);" onclick="setTcpScannerPreset('127.0.0.1', 5000, 'tcp')">Smart Hub :5000</button>
                   <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px;" onclick="setTcpScannerPreset('127.0.0.1', 5001, 'tcp')">GW COM1 :5001</button>
@@ -1680,22 +1682,23 @@ CẤU TRÚC JSON BẮT BUỘC TRẢ VỀ (chỉ trả về JSON hợp lệ):
           <div id="aiPane_api" class="subtab-pane">
             <div class="doc-box">
               <div style="font-size: 13px; font-weight: 700; color: var(--emerald);">Các luồng AI Agent (Antigravity / Python / n8n) trong mạng có thể điều khiển trực tiếp qua HTTP REST API:</div>
-              <pre class="doc-code"># 1. Đọc đặc tả JSON Schema v3.3 &amp; danh sách hồ sơ đang lưu trong Thẻ nhớ SD:
-curl -s http://192.168.10.1:8098/api/ai/spec
-curl -s http://192.168.10.1:8098/api/profile/list
+              <pre class="doc-code"># Quản trị linh hoạt qua WireGuard VPN (10.212.156.12:8098) hoặc LAN nội bộ (192.168.10.1:8098)
+# 1. Đọc đặc tả JSON Schema v3.3 &amp; danh sách hồ sơ đang lưu trong Thẻ nhớ SD:
+curl -s http://10.212.156.12:8098/api/ai/spec
+curl -s http://10.212.156.12:8098/api/profile/list
 
 # 2. Đẩy trực tiếp file JSON theo dõi lên Web Studio &amp; tự động lưu bền vững vào Thẻ nhớ SD (/mnt/sda1/modbus_data/profiles/):
-curl -s -X POST http://192.168.10.1:8098/api/profile/apply -H "Content-Type: application/json" -d @monitor_profile.json
+curl -s -X POST http://10.212.156.12:8098/api/profile/apply -H "Content-Type: application/json" -d @monitor_profile.json
 
 # 3. Mở nhanh 1 hồ sơ JSON đã lưu trong Thẻ nhớ SD bất kỳ lúc nào:
-curl -s -X POST http://192.168.10.1:8098/api/profile/load -H "Content-Type: application/json" -d '{"file": "Ten_Ho_So.json"}'
+curl -s -X POST http://10.212.156.12:8098/api/profile/load -H "Content-Type: application/json" -d '{"file": "Ten_Ho_So.json"}'
 
 # 4. Đọc thanh ghi thông minh có né các địa chỉ cấm đọc ở giữa (disabled_addrs):
-curl -s -X POST http://192.168.10.1:8098/api/poll -H "Content-Type: application/json" \
+curl -s -X POST http://10.212.156.12:8098/api/poll -H "Content-Type: application/json" \
   -d '{"port":"/dev/ttyCH0","baud":19200,"parity":"E","stopbits":1,"slave_id":1,"fn_code":3,"start_addr":2,"count":92,"disabled_addrs":"3-5,8-10,12,17-18,31-44,49,52-53,56-57,60-74"}'
 
 # 5. Tự động dò tìm các thanh ghi bị cấm đọc (trả về Exception 0x02) trong 1 dải địa chỉ:
-curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: application/json" \
+curl -s -X POST http://10.212.156.12:8098/api/poll/auto_mask -H "Content-Type: application/json" \
   -d '{"port":"/dev/ttyCH0","baud":19200,"parity":"E","stopbits":1,"slave_id":1,"fn_code":3,"start_addr":0,"count":50}'</pre>
             </div>
           </div>

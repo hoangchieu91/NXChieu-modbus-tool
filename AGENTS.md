@@ -1,6 +1,6 @@
 # AGENTS.md — NXChieu Modbus Studio Pro (PC & GL-XE300 Multi-Port Router Edition)
 
-Tài liệu định hướng dành cho các AI Agent làm việc trên dự án **NXChieu Modbus Studio Pro** (`E:\00_Code\NXChieu-modbus-tool`) hoặc kết nối tới Router hiện trường (`http://192.168.10.1:8098`).
+Tài liệu định hướng dành cho các AI Agent làm việc trên dự án **NXChieu Modbus Studio Pro** (`E:\00_Code\NXChieu-modbus-tool`) hoặc kết nối quản trị Router hiện trường qua **WireGuard VPN (`http://10.212.156.12:8098`, SSH `root@10.212.156.12`)** và **LAN nội bộ (`http://192.168.10.1:8098`, SSH `root@192.168.10.1`)**.
 
 ---
 
@@ -92,12 +92,13 @@ Khi người dùng yêu cầu AI tạo file `.json` theo dõi thiết bị Modbu
 }
 ```
 
-- **Tra cứu, Giải phẫu & Import/Export Hồ sơ Thẻ nhớ SD (`/mnt/sda1/modbus_data/profiles/`)**:
-  - `GET http://192.168.10.1:8098/api/ai/spec` — Lấy toàn bộ JSON Schema v3.3, danh sách cổng thực tế và danh sách hồ sơ trên Thẻ nhớ SD.
-  - `GET http://192.168.10.1:8098/api/profile/list` — Liệt kê các file JSON đang lưu trong `/mnt/sda1/modbus_data/profiles/` kèm thống kê số Tab, số điểm Tag, số địa chỉ cấm đọc.
-  - `GET http://192.168.10.1:8098/api/profile/get?file=<filename>` — Giải phẫu chi tiết 1 hồ sơ trên Thẻ nhớ SD (kèm sơ đồ tách khối `sub_blocks` của từng Tab) mà không làm gián đoạn phiên Polling đang chạy.
-  - `POST http://192.168.10.1:8098/api/profile/import` — Import 1 hoặc nhiều hồ sơ (hoặc gói Bundle) lưu thẳng vào Thẻ nhớ SD.
-  - `GET http://192.168.10.1:8098/api/profile/export_all` — Xuất toàn bộ kho hồ sơ trên Thẻ nhớ SD thành 1 file Backup Bundle (`NXModbus_SD_Profiles_Bundle.json`).
-  - `POST http://192.168.10.1:8098/api/profile/load` (`{"file": "Ten_Ho_So.json"}`) — Mở nhanh hồ sơ từ Thẻ nhớ SD vào Bảng Dữ Liệu (Poll).
-  - `POST http://192.168.10.1:8098/api/profile/clone` & `POST /api/profile/rename` — Nhân bản hoặc đổi tên hồ sơ trực tiếp trên Thẻ nhớ SD.
-  - `POST http://192.168.10.1:8098/api/poll/auto_mask` — Tự động dò và khóa các thanh ghi trả về lỗi Exception `0x02`.
+- **Tra cứu, Giải phẫu & Import/Export Hồ sơ Thẻ nhớ SD (`/mnt/sda1/modbus_data/profiles/` — Quản trị linh hoạt qua WireGuard `10.212.156.12` hoặc LAN `192.168.10.1`)**:
+  - `GET http://10.212.156.12:8098/api/ai/spec` (hoặc `http://192.168.10.1:8098/api/ai/spec`) — Lấy toàn bộ JSON Schema v3.3, danh sách cổng thực tế và danh sách hồ sơ trên Thẻ nhớ SD.
+  - `GET http://10.212.156.12:8098/api/profile/list` — Liệt kê các file JSON đang lưu trong `/mnt/sda1/modbus_data/profiles/` kèm thống kê số Tab, số điểm Tag, số địa chỉ cấm đọc.
+  - `GET http://10.212.156.12:8098/api/profile/get?file=<filename>` — Giải phẫu chi tiết 1 hồ sơ trên Thẻ nhớ SD (kèm sơ đồ tách khối `sub_blocks` của từng Tab) mà không làm gián đoạn phiên Polling đang chạy.
+  - `POST http://10.212.156.12:8098/api/profile/import` — Import 1 hoặc nhiều hồ sơ (hoặc gói Bundle) lưu thẳng vào Thẻ nhớ SD.
+  - `GET http://10.212.156.12:8098/api/profile/export_all` — Xuất toàn bộ kho hồ sơ trên Thẻ nhớ SD thành 1 file Backup Bundle (`NXModbus_SD_Profiles_Bundle.json`).
+  - `POST http://10.212.156.12:8098/api/profile/load` (`{"file": "Ten_Ho_So.json"}`) — Mở nhanh hồ sơ từ Thẻ nhớ SD vào Bảng Dữ Liệu (Poll).
+  - `POST http://10.212.156.12:8098/api/profile/clone` & `POST /api/profile/rename` — Nhân bản hoặc đổi tên hồ sơ trực tiếp trên Thẻ nhớ SD.
+  - `POST http://10.212.156.12:8098/api/poll/auto_mask` — Tự động dò và khóa các thanh ghi trả về lỗi Exception `0x02`.
+  - **Triển khai tự động lên Router**: Chạy `python router_app/deploy_router.py` (tự động ưu tiên kết nối qua WireGuard `10.212.156.12`, fallback sang `192.168.10.1`).

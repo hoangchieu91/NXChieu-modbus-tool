@@ -411,6 +411,8 @@ function renderQuickBuilderTabsList() {
       ? availablePortsCache
       : Array.from({ length: 8 }, (_, i) => ({ id: `/dev/ttyCH${i}`, label: `COM ${i + 1} (/dev/ttyCH${i})` }));
     const tcpPresets = [
+      { id: 'tcp://10.212.156.12:5000', label: '🔒 [WireGuard TCP] 10.212.156.12:5000 (Smart Hub)' },
+      { id: 'tcp://10.212.156.12:5001', label: '🔒 [WireGuard TCP] 10.212.156.12:5001 (GW COM 1)' },
       { id: 'tcp://192.168.10.1:502', label: '🌐 [Modbus TCP] 192.168.10.1:502 (MBAP)' },
       { id: 'tcp://127.0.0.1:5000', label: '🌐 [Modbus TCP] 127.0.0.1:5000 (Smart Hub)' },
       { id: 'tcp://127.0.0.1:5001', label: '🌐 [Modbus TCP] 127.0.0.1:5001 (GW COM 1)' },
