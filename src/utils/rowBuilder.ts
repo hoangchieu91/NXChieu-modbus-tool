@@ -16,14 +16,28 @@ import {
   modiconTableDigit,
 } from './formatters';
 
+export function isAliasAutoReadOnly(alias: string): boolean {
+  const tag = (alias || '').trim();
+  if (!tag) return false;
+  if (/WRITE|CLEAR|RESET|CMD|SETPOINT|PULSE|PWM_DUTY|FREQ_SET|_MODE|_BAUD|_PARITY|SLAVE_ID/i.test(tag)) {
+    return false;
+  }
+  if (/^(RL\d+|OUT12V_\d+|RELAY\d*|DO\d+|COIL\d*)\b/i.test(tag)) {
+    return false;
+  }
+  return /\b(DEVICE_ID|FW_VERSION|HW_VERSION|UPTIME|REBOOT_COUNT|DIP_STATE|DI_BITMAP|DO_BITMAP|RELAY_BITMAP|OUT12V_BITMAP|UID_WORD|NTC_TEMP|AI\d+_|MCU_VDDA|MCU_TEMP|DI\d+_STATE|DI\d+_FREQ|DI\d+_CNT|ERR_CNT|OK_CNT|SERIAL_NO|STATUS_WORD)\b/i.test(
+    tag
+  );
+}
+
 export function inferControlFromAlias(alias: string, fnCode: number): RegisterControlConfig | undefined {
-  if (fnCode === 2 || fnCode === 4) return undefined;
+  if (fnCode === 2 || fnCode === 4) return { type: 'readonly' };
   const tag = (alias || '').trim();
   if (fnCode === 1) {
     return { type: 'toggle', onValue: 1, offValue: 0 };
   }
-  if (/BITMAP|BITMASK/i.test(tag)) {
-    return undefined;
+  if (isAliasAutoReadOnly(tag)) {
+    return { type: 'readonly' };
   }
   const parenMatch = tag.match(/\(([^)]*=[^)]*)\)/);
   if (parenMatch) {
@@ -49,15 +63,21 @@ export function inferControlFromAlias(alias: string, fnCode: number): RegisterCo
       return { type: 'toggle', offValue: 0, onValue: 1 };
     }
     if (opts.length >= 2) {
-      return { type: 'dropdown', options: opts };
+      return { type: opts.length <= 5 ? 'buttons' : 'dropdown', options: opts };
     }
   }
-  if (/^(DO_|COIL_|RL\d+_ON|OUT12V\d_ON)/i.test(tag)) {
+  if (/^(DO_|COIL_|RL\d+_ON|OUT12V\d_ON|OUT12V_\d+)/i.test(tag)) {
     return { type: 'toggle', offValue: 0, onValue: 1 };
+  }
+  if (/WRITE\s*1\s*CLEAR|CLEAR_ALL|RESET_ERR/i.test(tag)) {
+    return {
+      type: 'buttons',
+      options: [{ value: 1, label: '⚡ Ghi 1 (Clear)' }],
+    };
   }
   if (/ghi\s*0xA55A/i.test(tag)) {
     return {
-      type: 'dropdown',
+      type: 'buttons',
       options: [
         { value: 0, label: '0: Khóa (Locked)' },
         { value: 0xa55a, label: '42330: Mở Khóa (0xA55A)' },
@@ -83,7 +103,7 @@ export function decodeRegisterStateBadge(
       tone: isOn ? 'on' : 'off',
     };
   }
-  if (ctrl?.type === 'dropdown' && ctrl.options && ctrl.options.length > 0) {
+  if ((ctrl?.type === 'dropdown' || ctrl?.type === 'buttons') && ctrl.options && ctrl.options.length > 0) {
     const hit = ctrl.options.find((o) => Number(o.value) === numVal);
     if (hit) {
       return {

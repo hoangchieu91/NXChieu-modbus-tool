@@ -759,14 +759,23 @@ function createWatchItemFromTabPoint(tab, idx, colorIdx) {
   };
 }
 
+let trendInitialSeeded = false;
+let trendWatchesUserCleared = false;
+
 function ensureDefaultTrendWatches() {
   if (!Array.isArray(trendWatches)) trendWatches = [];
   syncTrendWatchesWithSessionTabs();
-  if (trendWatches.length > 0) return;
+  if (trendWatches.length > 0) {
+    trendInitialSeeded = true;
+    return;
+  }
+  // Never auto-respawn tags if the user explicitly deleted or cleared them!
+  if (trendWatchesUserCleared || trendInitialSeeded) return;
   const t = getActiveTab();
   if (!t) return;
+  trendInitialSeeded = true;
 
-  // Prefer registers that have a meaningful Tag name and are not disabled
+  // Prefer writable / control or sensor registers rather than static device IDs
   const candidates = [];
   for (let i = 0; i < t.count; i++) {
     if (isRegisterDisabled(t, i)) continue;
@@ -776,13 +785,12 @@ function ensureDefaultTrendWatches() {
     }
   }
   const pickedIndices = candidates.length > 0
-    ? candidates.slice(0, 8)
+    ? candidates.slice(0, 6)
     : Array.from({ length: Math.min(4, t.count) }, (_, i) => i);
 
   pickedIndices.forEach((idx, cIdx) => {
     const item = createWatchItemFromTabPoint(t, idx, cIdx);
     trendWatches.push(item);
-    // Seed initial data point if value already exists
     const raw = Array.isArray(t.values) ? t.values[idx] : undefined;
     if (raw !== undefined && raw !== null) {
       const nowStr = (t.lastUpdatedMap && t.lastUpdatedMap[idx]) || t.lastUpdated || new Date().toTimeString().split(' ')[0];
@@ -829,7 +837,7 @@ function ingestPollIntoTrendStudio(tab, timeStr) {
   });
 
   if (anyUpdated && currentView === 'trend' && !trendIsPaused) {
-    renderTrendStudioView();
+    updateTrendCardsLiveValuesInPlace();
   }
 }
 
@@ -1148,6 +1156,9 @@ function removeTrendWatchByIndex(index, ev) {
   const w = trendWatches[index];
   if (!w) return;
   trendWatches.splice(index, 1);
+  if (trendWatches.length === 0) {
+    trendWatchesUserCleared = true;
+  }
   saveUiStateToStorage();
   renderTrendStudioView();
   if (typeof renderTable === 'function') renderTable();
@@ -1216,10 +1227,76 @@ function onTrendCardDrop(targetIdx, el, ev) {
   renderTrendStudioView();
 }
 
+function computeTrendCardsGridSig() {
+  if (!Array.isArray(trendWatches) || trendWatches.length === 0) return "EMPTY";
+  return trendWatches.map(w => `${w.id}:${w.alias}:${w.unit}:${w.scale}:${w.color}:${w.span || 1}:${w.visible !== false ? 1 : 0}`).join('|');
+}
+
+function updateTrendCardsLiveValuesInPlace() {
+  const grid = document.getElementById('trendDynamicCardsGrid');
+  if (!grid) return;
+  if (grid.dataset.renderedSig !== computeTrendCardsGridSig()) {
+    renderTrendStudioView();
+    return;
+  }
+
+  let maxSamples = 0;
+  trendWatches.forEach((w, idx) => {
+    const len = (trendDataSeries[w.id] || []).length;
+    if (len > maxSamples) maxSamples = len;
+    const snap = getLiveWatchSnapshot(w);
+    const hasDecimals = Math.abs((Number(snap.scale) || 1) - 1) > 1e-9;
+    const fmtStat = v => (v === null || v === undefined) ? '--' : Number(v).toFixed(hasDecimals ? 2 : 0);
+
+    const valEl = document.getElementById(`trendCardVal_${idx}`);
+    if (valEl && valEl.textContent !== String(snap.displayVal)) {
+      valEl.textContent = snap.displayVal;
+    }
+
+    const decEl = document.getElementById(`trendCardDecoded_${idx}`);
+    if (decEl) {
+      const decHtml = snap.decoded
+        ? `<span class="decoded-state-pill tone-${snap.decoded.tone}" title="Trạng thái giải mã trực tiếp">${escapeHtmlStr(snap.decoded.badgeText)}</span>`
+        : '';
+      if (decEl.innerHTML !== decHtml) decEl.innerHTML = decHtml;
+    }
+
+    const ctrlBox = document.getElementById(`trendCardCtrl_${idx}`);
+    if (ctrlBox && snap.tab && snap.idx >= 0 && typeof patchQuickControlLiveState === 'function') {
+      patchQuickControlLiveState(ctrlBox, snap.tab, snap.idx, snap.raw);
+    }
+
+    const timeEl = document.getElementById(`trendCardTime_${idx}`);
+    if (timeEl) {
+      timeEl.style.color = snap.updatedAt !== '--' ? '#38bdf8' : '#64748b';
+      const timeHtml = `🕒 Cập nhật: <b>${snap.updatedAt}</b>`;
+      if (timeEl.innerHTML !== timeHtml) timeEl.innerHTML = timeHtml;
+    }
+
+    const statsEl = document.getElementById(`trendCardStats_${idx}`);
+    if (statsEl) {
+      const statsHtml = `Min: <b style="color: #cbd5e1;">${fmtStat(snap.min)}</b> • Max: <b style="color: #cbd5e1;">${fmtStat(snap.max)}</b> • TB: <b style="color: #cbd5e1;">${fmtStat(snap.avg)}</b>`;
+      if (statsEl.innerHTML !== statsHtml) statsEl.innerHTML = statsHtml;
+    }
+
+    const legValEl = document.getElementById(`trendLegendVal_${idx}`);
+    if (legValEl) {
+      const lTxt = `${snap.displayVal}${snap.unit ? ' ' + snap.unit : ''}`;
+      if (legValEl.textContent !== lTxt) legValEl.textContent = lTxt;
+    }
+  });
+
+  const smpBadge = document.getElementById('badgeTrendSampleCount');
+  if (smpBadge) smpBadge.textContent = `${maxSamples} mẫu lịch sử`;
+
+  drawTrendCanvas();
+}
+
 function renderTrendDynamicCardsGrid() {
   const grid = document.getElementById('trendDynamicCardsGrid');
   if (!grid) return;
   grid.className = 'scada-telemetry-grid' + (trendGridCols !== 'auto' ? ` cols-${trendGridCols}` : '');
+  grid.dataset.renderedSig = computeTrendCardsGridSig();
 
   if (!Array.isArray(trendWatches) || trendWatches.length === 0) {
     grid.innerHTML = `
@@ -1247,7 +1324,7 @@ function renderTrendDynamicCardsGrid() {
       : '';
 
     return `
-      <div class="scada-dyn-card ${w.span === 2 ? 'span-2' : ''}"
+      <div id="trendCard_${idx}" class="scada-dyn-card ${w.span === 2 ? 'span-2' : ''}"
            draggable="true"
            ondragstart="onTrendCardDragStart(${idx}, event)"
            ondragover="onTrendCardDragOver(${idx}, this, event)"
@@ -1277,21 +1354,21 @@ function renderTrendDynamicCardsGrid() {
         <!-- Card Body: Big Realtime Value + Decoded State + Quick Control -->
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0;">
           <div style="display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;">
-            <span class="scada-card-val" style="color: ${w.color || '#38bdf8'};">${snap.displayVal}</span>
+            <span id="trendCardVal_${idx}" class="scada-card-val" style="color: ${w.color || '#38bdf8'};">${snap.displayVal}</span>
             ${snap.unit ? `<span style="font-size: 13px; font-weight: 800; color: #cbd5e1;">${escapeHtmlStr(snap.unit)}</span>` : ''}
-            ${decodedHtml}
+            <span id="trendCardDecoded_${idx}">${decodedHtml}</span>
           </div>
-          <div style="flex-shrink: 0;">
+          <div id="trendCardCtrl_${idx}" style="flex-shrink: 0;">
             ${snap.quickCtrlHtml}
           </div>
         </div>
 
         <!-- Card Footer: Update Timestamp + Min/Max/Avg Stats -->
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 10px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 6px;">
-          <span style="font-family: monospace; color: ${snap.updatedAt !== '--' ? '#38bdf8' : '#64748b'};" title="Thời điểm cập nhật giá trị gần nhất">
+          <span id="trendCardTime_${idx}" style="font-family: monospace; color: ${snap.updatedAt !== '--' ? '#38bdf8' : '#64748b'};" title="Thời điểm cập nhật giá trị gần nhất">
             🕒 Cập nhật: <b>${snap.updatedAt}</b>
           </span>
-          <span style="font-family: monospace;">
+          <span id="trendCardStats_${idx}" style="font-family: monospace;">
             Min: <b style="color: #cbd5e1;">${fmtStat(snap.min)}</b> • Max: <b style="color: #cbd5e1;">${fmtStat(snap.max)}</b> • TB: <b style="color: #cbd5e1;">${fmtStat(snap.avg)}</b>
           </span>
         </div>
@@ -1317,7 +1394,7 @@ function renderTrendLegendBar() {
           <input type="checkbox" ${isVis ? 'checked' : ''} onchange="toggleTrendWatchVisibility(${idx}, event)" style="accent-color: ${w.color}; cursor: pointer;" title="Bật/Tắt vẽ đường sóng này">
           <span style="width: 8px; height: 8px; border-radius: 50%; background: ${w.color}; display: inline-block;"></span>
           <span style="font-weight: 700; color: #e2e8f0; cursor: pointer;" onclick="toggleTrendWatchVisibility(${idx}, event)">${escapeHtmlStr(snap.alias)}</span>
-          <span style="font-family: monospace; font-weight: 800; color: ${w.color};">${snap.displayVal}${snap.unit ? ' ' + escapeHtmlStr(snap.unit) : ''}</span>
+          <span id="trendLegendVal_${idx}" style="font-family: monospace; font-weight: 800; color: ${w.color};">${snap.displayVal}${snap.unit ? ' ' + escapeHtmlStr(snap.unit) : ''}</span>
           <button style="background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 10px; padding: 0 2px;" onclick="removeTrendWatchByIndex(${idx}, event)" title="Xóa kênh này">✕</button>
         </div>
       `;
@@ -1325,7 +1402,7 @@ function renderTrendLegendBar() {
 }
 
 function renderTrendStudioView() {
-  ensureDefaultTrendWatches();
+  syncTrendWatchesWithSessionTabs();
   const cntBadge = document.getElementById('badgeTrendWatchCount');
   if (cntBadge) cntBadge.textContent = `${trendWatches.length} Tag theo dõi`;
 
@@ -1337,7 +1414,6 @@ function renderTrendStudioView() {
   const smpBadge = document.getElementById('badgeTrendSampleCount');
   if (smpBadge) smpBadge.textContent = `${maxSamples} mẫu lịch sử`;
 
-  // Sync Poll button state on Trend toolbar
   const btnPoll = document.getElementById('btnTrendStartPoll');
   if (btnPoll) {
     const anyPolling = sessionTabs.some(t => t.isPolling);
@@ -1354,6 +1430,7 @@ function renderTrendStudioView() {
 
 function initTrendCanvas() {
   bindTrendCanvasEventsOnce();
+  ensureDefaultTrendWatches();
   renderTrendStudioView();
 }
 
@@ -1676,11 +1753,13 @@ function batchSelectTaggedInTrendMgr() {
 
 function clearAllTrendWatches() {
   trendWatches = [];
+  trendWatchesUserCleared = true;
   saveUiStateToStorage();
   renderTrendTagManagerPickerList();
   renderTrendWatchedTableInModal();
   renderTrendStudioView();
   if (typeof renderTable === 'function') renderTable();
+  showToast("🗑️ Đã xóa sạch các Thẻ Động & Tag theo dõi.");
 }
 
 function renderTrendWatchedTableInModal() {
@@ -1696,7 +1775,7 @@ function renderTrendWatchedTableInModal() {
   tbody.innerHTML = trendWatches.map((w, idx) => {
     const snap = getLiveWatchSnapshot(w);
     const pLbl = snap.tab ? shortPortLabel(snap.tab.port) : shortPortLabel(w.port);
-    const ctrl = (snap.tab && snap.idx >= 0) ? getEffectiveControlConfig(snap.tab, snap.idx) : { type: 'none' };
+    const ctrl = (snap.tab && snap.idx >= 0) ? getEffectiveControlConfig(snap.tab, snap.idx) : { type: 'readonly' };
     return `
       <tr>
         <td>
@@ -1736,10 +1815,11 @@ function renderTrendWatchedTableInModal() {
         <td>
           <select style="font-size: 11px; padding: 3px 5px;" onchange="onModalEditWatchField(${idx}, 'ctrlType', this.value)">
             <option value="auto" ${ctrl.isAuto ? 'selected' : ''}>Tự động (${ctrl.type})</option>
-            <option value="toggle" ${!ctrl.isAuto && ctrl.type === 'toggle' ? 'selected' : ''}>Công tắc DO</option>
-            <option value="dropdown" ${!ctrl.isAuto && ctrl.type === 'dropdown' ? 'selected' : ''}>Multistate</option>
-            <option value="stepper" ${!ctrl.isAuto && ctrl.type === 'stepper' ? 'selected' : ''}>Stepper +/-</option>
-            <option value="none" ${!ctrl.isAuto && ctrl.type === 'none' ? 'selected' : ''}>Số thường</option>
+            <option value="readonly" ${!ctrl.isAuto && ctrl.type === 'readonly' ? 'selected' : ''}>🔒 Chỉ đọc</option>
+            <option value="buttons" ${!ctrl.isAuto && ctrl.type === 'buttons' ? 'selected' : ''}>🎛️ Nút Chế Độ</option>
+            <option value="toggle" ${!ctrl.isAuto && ctrl.type === 'toggle' ? 'selected' : ''}>🟢 Bật / Tắt DO</option>
+            <option value="dropdown" ${!ctrl.isAuto && ctrl.type === 'dropdown' ? 'selected' : ''}>📋 Menu Xổ</option>
+            <option value="stepper" ${!ctrl.isAuto && ctrl.type === 'stepper' ? 'selected' : ''}>🔢 Stepper +/-</option>
           </select>
         </td>
         <td>
@@ -1769,23 +1849,34 @@ function onModalEditWatchField(index, field, val) {
     w.span = (Number(val) === 2) ? 2 : 1;
   } else if (field === 'ctrlType' && snap.tab && snap.idx >= 0) {
     if (!snap.tab.controls) snap.tab.controls = {};
-    if (val === 'auto') {
-      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, undefined);
-    } else if (val === 'toggle') {
-      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'toggle', onValue: 1, offValue: 0 });
-    } else if (val === 'stepper') {
-      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'stepper', step: 1, min: 0, max: 65535 });
-    } else if (val === 'dropdown') {
-      const curInferred = inferControlFromTagAndFn(w.alias, snap.tab.fn_code);
-      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, {
-        type: 'dropdown',
-        options: (curInferred.options && curInferred.options.length > 0)
-          ? curInferred.options
-          : [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }, { value: 2, label: 'AUTO' }]
-      });
+    const addrDec = snap.tab.start_addr + snap.idx;
+    const roSet = parseAddrRangeSet(snap.tab.read_only_addrs);
+    const rwSet = parseAddrRangeSet(snap.tab.writable_addrs);
+    if (val === 'readonly' || val === 'none') {
+      roSet.add(addrDec);
+      rwSet.delete(addrDec);
+      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'readonly' });
     } else {
-      setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'none' });
+      roSet.delete(addrDec);
+      if (val !== 'auto') rwSet.add(addrDec);
+      if (val === 'auto') {
+        setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, undefined);
+      } else if (val === 'toggle') {
+        setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'toggle', onValue: 1, offValue: 0 });
+      } else if (val === 'stepper') {
+        setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, { type: 'stepper', step: 1, min: 0, max: 65535 });
+      } else if (val === 'dropdown' || val === 'buttons') {
+        const curInferred = inferControlFromTagAndFn(w.alias, snap.tab.fn_code);
+        setPointMeta(snap.tab.controls, snap.idx, snap.tab.start_addr, {
+          type: val,
+          options: (curInferred.options && curInferred.options.length > 0)
+            ? curInferred.options
+            : [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }, { value: 2, label: 'Toggle' }]
+        });
+      }
     }
+    snap.tab.read_only_addrs = Array.from(roSet).sort((a, b) => a - b);
+    snap.tab.writable_addrs = Array.from(rwSet).sort((a, b) => a - b);
   }
   saveUiStateToStorage();
   renderTrendTagManagerPickerList();

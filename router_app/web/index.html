@@ -130,8 +130,11 @@
             <button class="btn-add-tab" style="background: linear-gradient(135deg, rgba(16,185,129,0.28), rgba(6,182,212,0.28)); border: 1px solid var(--emerald); color: #fff; font-weight: 800;" onclick="openQuickProfileBuilderModal()" title="Tự tạo / Khai báo hồ sơ nhanh để test ngay lập tức (Hỗ trợ 1-Click mẫu thiết bị & né thanh ghi cấm đọc)">
               ➕ Khai Hồ Sơ Nhanh
             </button>
-            <button class="btn-add-tab" style="border-color: rgba(16,185,129,0.5); color: var(--emerald);" onclick="saveCurrentProfileToSd()" title="Lưu bền vững cấu hình đang mở (các Tab, Tag, Thanh ghi cấm đọc) vào Thẻ nhớ SD">
+            <button class="btn-add-tab" style="border-color: rgba(16,185,129,0.5); color: var(--emerald);" onclick="saveCurrentProfileToSd()" title="Lưu bền vững cấu hình đang mở (các Tab, Tag, Thanh ghi cấm đọc/cấm ghi) vào Thẻ nhớ SD">
               💾 Lưu SD
+            </button>
+            <button class="btn-add-tab" style="border-color: rgba(168,85,247,0.55); color: #d8b4fe;" onclick="openProfileVersionModal()" title="Lưu thành phiên bản mới (v1, v2, v3...) của hồ sơ hiện tại hoặc xem/khôi phục các phiên bản cũ trên Thẻ nhớ SD">
+              🗂️ Phiên Bản (v+1)
             </button>
             <button class="btn-add-tab" id="btnPollAllTabs" style="border-color: rgba(6,182,212,0.45); color: var(--cyan);" onclick="toggleAllTabsPolling()" title="Chạy hoặc dừng đồng loạt tất cả các Tab Polling">
               ▶ Chạy Tất Cả
@@ -245,6 +248,9 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
               Đọc 1 Lần
             </button>
+            <button class="btn btn-outline" style="border-color: rgba(16,185,129,0.5); color: var(--emerald);" onclick="openRegisterCrudModal('add')" title="Thêm thanh ghi mới vào bảng dữ liệu hiện tại (hỗ trợ đặt Tên Tag, Đơn vị, Hệ số, Cấm ghi mềm & Nút điều khiển nhanh)">
+              ➕ Thêm Thanh Ghi
+            </button>
             <button class="btn btn-primary" onclick="openQuickWriteModal()">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
               Ghi Giá Trị
@@ -341,6 +347,19 @@
               </button>
             </div>
           </div>
+
+          <div class="skip-bar" style="border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 6px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 240px; flex-wrap: wrap;">
+              <span style="color: #cbd5e1; font-weight: 700; white-space: nowrap;" title="Cài mềm Cấm Ghi (Read-Only): Khóa không cho phép gửi lệnh Write xuống các địa chỉ này và ẩn nút điều khiển trên dòng">🔒 Cấm Ghi Mềm (Bảo Vệ Chỉ Đọc):</span>
+              <input type="text" id="inpReadOnlyAddrs" style="flex: 1; min-width: 160px; max-width: 360px; font-family: monospace; font-size: 11px; padding: 4px 8px; border-color: rgba(148,163,184,0.4);" placeholder="VD: 0-21, 56-59 (Tự động nhận diện các ô trạng thái/đo lường hoặc bấm 🔒 trên dòng)" onchange="onReadOnlyAddrsInputChange(this.value)">
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="autoLockStatusRegistersInActiveTab()" title="Tự động đánh dấu Cấm Ghi (Chỉ đọc) cho các thanh ghi đo lường/trạng thái (ID, Version, Uptime, DI, AI, Temp, Counter)">
+                🔒 Tự Khóa Ô Đo Lường
+              </button>
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="unlockAllWriteInActiveTab()" title="Mở khóa cho phép ghi toàn bộ thanh ghi trong Tab này">
+                🔓 Mở Khóa Ghi Tất Cả
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- CENTER AREA: DATA GRID + POINT INSPECTOR -->
@@ -350,19 +369,20 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th style="width: 52px; text-align: center;" title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)">Đọc</th>
-                  <th style="width: 40px;">#</th>
-                  <th style="width: 78px;">Địa Chỉ DEC</th>
-                  <th style="width: 68px;">HEX</th>
-                  <th style="width: 78px;">PLC Addr</th>
-                  <th style="min-width: 170px;">Tên Gợi Nhớ (Alias / Tag)</th>
-                  <th style="min-width: 175px;">Giá Trị &amp; Điều Khiển Nhanh</th>
-                  <th style="width: 62px;">Đơn Vị</th>
-                  <th style="width: 62px;">Hệ Số</th>
-                  <th style="width: 78px;">Raw Hex</th>
-                  <th style="width: 82px;">Cập Nhật</th>
-                  <th style="width: 98px;">Trạng Thái</th>
-                  <th style="width: 118px;">Thao Tác</th>
+                  <th style="width: 48px; text-align: center;" title="Tích chọn để Đọc, bỏ tích để Cấm Đọc (tự động tách khối lệnh né thanh ghi đó)">Đọc</th>
+                  <th style="width: 36px;">#</th>
+                  <th style="width: 72px;">Địa Chỉ DEC</th>
+                  <th style="width: 64px;">HEX</th>
+                  <th style="width: 72px;">PLC Addr</th>
+                  <th style="min-width: 165px;">Tên Gợi Nhớ (Alias / Tag)</th>
+                  <th style="min-width: 120px;">Giá Trị &amp; Giải Mã</th>
+                  <th style="min-width: 185px;">Điều Khiển Nhanh (Action)</th>
+                  <th style="width: 56px;">Đơn Vị</th>
+                  <th style="width: 56px;">Hệ Số</th>
+                  <th style="width: 74px;">Raw Hex</th>
+                  <th style="width: 76px;">Cập Nhật</th>
+                  <th style="width: 90px;">Trạng Thái</th>
+                  <th style="width: 138px;">Thao Tác</th>
                 </tr>
               </thead>
               <tbody id="tblRegisters">
@@ -394,14 +414,20 @@
                 </div>
               </div>
 
-              <!-- Enable / Disable Register In Poll -->
-              <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(15,23,42,0.65); border: 1px solid var(--border); padding: 8px 12px; border-radius: 8px;">
-                <span style="font-size: 11px; font-weight: 700; color: var(--text-muted);">CHẾ ĐỘ ĐỌC THANH GHI NÀY:</span>
-                <button id="btnInspToggleDisable" class="btn btn-emerald" style="padding: 4px 10px; font-size: 11px;" onclick="toggleInspectorPointDisabled()">☑ Đang Cho Phép Đọc</button>
+              <!-- Enable / Disable Register In Poll & Soft Write-Lock -->
+              <div style="display: flex; flex-direction: column; gap: 6px; background: rgba(15,23,42,0.65); border: 1px solid var(--border); padding: 8px 12px; border-radius: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-size: 11px; font-weight: 700; color: var(--text-muted);">CHẾ ĐỘ ĐỌC:</span>
+                  <button id="btnInspToggleDisable" class="btn btn-emerald" style="padding: 3px 10px; font-size: 11px;" onclick="toggleInspectorPointDisabled()">☑ Đang Cho Phép Đọc</button>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 6px;">
+                  <span style="font-size: 11px; font-weight: 700; color: var(--text-muted);">QUYỀN GHI (CÀI MỀM):</span>
+                  <button id="btnInspToggleWriteLock" class="btn btn-outline" style="padding: 3px 10px; font-size: 11px;" onclick="toggleInspectorPointWriteLock()">✏️ Cho Phép Ghi</button>
+                </div>
               </div>
 
               <!-- Quick Write Box -->
-              <div class="panel-card" style="padding: 12px; gap: 8px;">
+              <div class="panel-card" style="padding: 12px; gap: 8px;" id="boxInspQuickWrite">
                 <div style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Ghi Nhanh Điểm Này</div>
                 <div style="display: flex; gap: 8px;">
                   <input type="number" id="inpInspWriteVal" value="0" style="flex: 1;" placeholder="Giá trị ghi...">
@@ -413,9 +439,14 @@
               <div class="panel-card" style="padding: 12px; gap: 8px;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                   <span style="font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;">Cấu Hình Tên Tag &amp; Tỉ Lệ</span>
-                  <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; color: var(--rose); border-color: rgba(244,63,94,0.35);" onclick="clearSelectedPointMeta()" title="Xóa trắng Tên Tag, Đơn vị, Hệ số và Kiểu điều khiển của thanh ghi này">
-                    🗑️ Xóa Tag
-                  </button>
+                  <div style="display: flex; gap: 4px;">
+                    <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; color: var(--cyan);" onclick="openRegisterCrudModal('edit')" title="Mở hộp thoại sửa toàn diện thanh ghi này">
+                      ✏️ Sửa Đầy Đủ
+                    </button>
+                    <button class="btn btn-outline" style="padding: 2px 7px; font-size: 10px; color: var(--rose); border-color: rgba(244,63,94,0.35);" onclick="clearSelectedPointMeta()" title="Xóa trắng Tên Tag, Đơn vị, Hệ số và Kiểu điều khiển của thanh ghi này">
+                      🗑️ Xóa Tag
+                    </button>
+                  </div>
                 </div>
                 <div class="field-box">
                   <label>Tên Gợi Nhớ (Alias / Tag)</label>
@@ -440,10 +471,12 @@
                   <label>Kiểu Nút Điều Khiển Trên Bảng &amp; Thẻ Động</label>
                   <select id="selInspCtrlType" onchange="onInspectorControlTypeChange(this.value)">
                     <option value="auto">✨ Tự động nhận diện từ Tên Tag / Vùng nhớ</option>
-                    <option value="none">🔢 Mặc định (Số + Ô nhập nhanh)</option>
-                    <option value="toggle">🔘 Công tắc DO (Nút Bật/Tắt ON/OFF)</option>
-                    <option value="dropdown">📋 Multistate (Danh sách trạng thái lựa chọn)</option>
+                    <option value="readonly">🔒 Chỉ đọc (Cấm ghi mềm — Không hiện nút)</option>
+                    <option value="buttons">🎛️ Nhiều Nút Chế Độ (Multi-Buttons bấm trực tiếp)</option>
+                    <option value="toggle">🔘 Công tắc DO (2 Nút BẬT / TẮT riêng biệt)</option>
+                    <option value="dropdown">📋 Menu Xổ Multistate (Dropdown nhiều lựa chọn)</option>
                     <option value="stepper">➕➖ Nút Tăng / Giảm Số (Stepper +/-)</option>
+                    <option value="none">🔢 Ô Nhập Số Cơ Bản</option>
                   </select>
                 </div>
                 <div id="boxInspCtrlToggle" style="display: none; gap: 8px;">
@@ -951,6 +984,9 @@
               </button>
               <button id="btnTrendStartPoll" class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: var(--emerald); border-color: rgba(16,185,129,0.4);" onclick="ensureTrendWatchedTabsPolling()" title="Bật đọc Polling trực tiếp cho các Tab có Tag đang theo dõi">
                 ▶ Bật Polling Các Tag
+              </button>
+              <button class="btn btn-outline" style="padding: 5px 10px; font-size: 11px; color: var(--rose); border-color: rgba(244,63,94,0.35);" onclick="clearAllTrendWatches(false)" title="Xóa sạch tất cả thẻ động (không tự động sinh lại cho tới khi bạn chọn lại)">
+                🗑️ Xóa Hết Thẻ
               </button>
             </div>
           </div>
@@ -2215,6 +2251,144 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
     </div>
   </div>
 
+  <!-- MODAL: ADD / EDIT / DELETE REGISTER ON POLL TABLE (THÊM / SỬA / XÓA THANH GHI TRỰC TIẾP TRÊN BẢNG DỮ LIỆU) -->
+  <div class="modal-overlay" id="registerCrudModal">
+    <div class="modal-box" style="width: 620px; max-width: 96vw;">
+      <div class="modal-header">
+        <span id="lblRegCrudModalTitle">➕ Thêm / Sửa Thanh Ghi Trực Tiếp Trên Bảng Dữ Liệu</span>
+        <button class="btn-icon" onclick="closeRegisterCrudModal()">✕</button>
+      </div>
+      <div class="modal-body" style="gap: 12px;">
+        <input type="hidden" id="regCrudMode" value="add">
+        <input type="hidden" id="regCrudOrigAddr" value="-1">
+        <div style="display: grid; grid-template-columns: 140px 1fr 110px 110px; gap: 8px; align-items: end;">
+          <div class="control-item">
+            <label>Địa Chỉ DEC (0-based)</label>
+            <input type="number" id="regCrudAddr" value="0" min="0" max="65535" style="font-family: var(--font-mono); font-weight: 800; color: var(--cyan);">
+          </div>
+          <div class="control-item">
+            <label>Tên Gợi Nhớ (Alias / Tag)</label>
+            <input type="text" id="regCrudTag" placeholder="VD: RL1_STATE (0=OFF,1=ON,2=Toggle)">
+          </div>
+          <div class="control-item">
+            <label>Đơn Vị Đo</label>
+            <input type="text" id="regCrudUnit" placeholder="°C, bar, Hz...">
+          </div>
+          <div class="control-item">
+            <label>Hệ Số (Scale)</label>
+            <input type="number" id="regCrudScale" value="1" step="any">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div class="control-item">
+            <label>Chế Độ Đọc &amp; Bảo Vệ Ghi Mềm</label>
+            <div style="display: flex; gap: 10px; align-items: center; background: rgba(15,23,42,0.75); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;">
+              <label style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--emerald); cursor: pointer; text-transform: none;">
+                <input type="checkbox" id="regCrudReadEnabled" checked style="accent-color: var(--emerald);"> ☑ Cho phép Đọc
+              </label>
+              <label style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--amber); cursor: pointer; text-transform: none;">
+                <input type="checkbox" id="regCrudWriteLocked" style="accent-color: var(--amber);"> 🔒 Cấm Ghi Mềm (Chỉ Đọc)
+              </label>
+            </div>
+          </div>
+          <div class="control-item">
+            <label>Kiểu Nút Điều Khiển Nhanh (Cột Action)</label>
+            <select id="regCrudCtrlType" onchange="onRegCrudCtrlTypeChange()">
+              <option value="auto">✨ Tự động nhận diện theo Tag</option>
+              <option value="readonly">🔒 Chỉ đọc (Cấm ghi mềm)</option>
+              <option value="buttons">🎛️ Cụm Nút Bấm Chế Độ (Nhiều nút chọn nhanh)</option>
+              <option value="toggle">🟢 Nút Bật / Tắt Riêng (ON / OFF)</option>
+              <option value="dropdown">📋 Menu Xổ Chọn (Multistate Dropdown)</option>
+              <option value="stepper">🔢 Ô Nhập Số Kèm Nút [ - ] / [ + ]</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="regCrudOptionsBox" class="control-item" style="display: none;">
+          <label>Danh Sách Trạng Thái / Nút Chế Độ (Cú pháp: 0=OFF, 1=ON, 2=Toggle hoặc 0=Off, 1=Master, 2=Routed)</label>
+          <input type="text" id="regCrudCtrlOptions" placeholder="0=OFF, 1=ON, 2=Toggle">
+        </div>
+
+        <div id="regCrudAutoDisableGapWrap" style="background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--text-main);">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="regCrudDisableGap" checked style="accent-color: var(--cyan);">
+            <span>Nếu Địa chỉ mới nằm ngoài phạm vi hiện tại, tự động mở rộng bảng và <b>🚫 Cấm đọc (Né lỗi 0x02)</b> các địa chỉ trống ở giữa</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <button id="btnRegCrudDelete" class="btn btn-danger" style="display: none;" onclick="deleteRegisterFromCrudModal()">🗑️ Xóa Thanh Ghi Này</button>
+        <div style="display: flex; gap: 8px; margin-left: auto;">
+          <button class="btn btn-outline" onclick="closeRegisterCrudModal()">Hủy</button>
+          <button class="btn btn-emerald" onclick="saveRegisterCrudModal()">💾 Lưu Thanh Ghi</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: PROFILE VERSIONING STUDIO (QUẢN LÝ & LƯU NHIỀU PHIÊN BẢN CỦA 1 HỒ SƠ TRÊN THẺ NHỚ SD) -->
+  <div class="modal-overlay" id="profileVersionModal">
+    <div class="modal-box" style="width: 760px; max-width: 96vw;">
+      <div class="modal-header">
+        <span>🗂️ Quản Lý &amp; Lưu Nhiều Phiên Bản Hồ Sơ (Profile Versioning Studio)</span>
+        <button class="btn-icon" onclick="closeProfileVersionModal()">✕</button>
+      </div>
+      <div class="modal-body" style="gap: 12px;">
+        <div style="background: rgba(139,92,246,0.09); border: 1px solid rgba(139,92,246,0.3); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+          <div style="font-size: 12px; font-weight: 800; color: #ddd6fe;">
+            ➕ Tạo &amp; Lưu Phiên Bản Mới Cho Hồ Sơ Hiện Tại
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 95px 1.2fr auto; gap: 8px; align-items: end;">
+            <div class="control-item">
+              <label>Tên Gốc Hồ Sơ (Base Profile)</label>
+              <input type="text" id="verBaseProfileName" placeholder="VD: Board_V1_STM32G030">
+            </div>
+            <div class="control-item">
+              <label>Phiên Bản</label>
+              <input type="number" id="verNumberInput" value="2" min="1" max="999" style="font-family: var(--font-mono); font-weight: 800; color: var(--cyan);">
+            </div>
+            <div class="control-item">
+              <label>Ghi Chú Phiên Bản (Version Note)</label>
+              <input type="text" id="verNoteInput" placeholder="VD: Thêm khóa ghi mềm + nút RL1..4">
+            </div>
+            <button class="btn btn-emerald" style="height: 32px; font-weight: 800; padding: 0 14px;" onclick="saveNewProfileVersionToSd()">
+              💾 Lưu Bản Mới (v+1)
+            </button>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 11px; font-weight: 800; color: var(--cyan); text-transform: uppercase;">
+              📜 Lịch Sử Các Phiên Bản Của Hồ Sơ Trên Thẻ Nhớ SD:
+            </span>
+            <span id="lblVersionHistoryCount" class="badge badge-slate">0 phiên bản</span>
+          </div>
+          <div style="max-height: 290px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 72px;">Phiên Bản</th>
+                  <th>Tên Hồ Sơ / File SD</th>
+                  <th>Ghi Chú Thay Đổi</th>
+                  <th style="width: 85px;">Số Tab/Tag</th>
+                  <th style="width: 135px;">Thời Gian Lưu</th>
+                  <th style="width: 155px;">Thao Tác</th>
+                </tr>
+              </thead>
+              <tbody id="tblProfileVersionsList"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <span style="font-size: 11px; color: var(--text-muted);">Mỗi phiên bản được lưu độc lập trên Thẻ nhớ SD — Bạn có thể nạp lại (Rollback) bất kỳ bản nào trong 1 cú nhấp chuột</span>
+        <button class="btn btn-outline" onclick="closeProfileVersionModal()">Đóng</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MOBILE NATIVE BOTTOM NAVIGATION BAR (<= 820px) -->
   <nav class="mobile-bottom-nav">
     <button class="mob-nav-item active" data-view="poll" onclick="showView('poll')">
@@ -2246,8 +2420,8 @@ curl -s -X POST http://192.168.10.1:8098/api/poll/auto_mask -H "Content-Type: ap
   </footer>
 
   <!-- MODULAR FRONTEND JAVASCRIPT (v3.3 Clean Architecture) -->
-  <script src="/js/app_core.js?v=3.3.4"></script>
-  <script src="/js/scanner_gateway_datalog.js?v=3.3.4"></script>
-  <script src="/js/profile_studio_and_builder.js?v=3.3.4"></script>
+  <script src="/js/app_core.js?v=3.3.5"></script>
+  <script src="/js/scanner_gateway_datalog.js?v=3.3.5"></script>
+  <script src="/js/profile_studio_and_builder.js?v=3.3.5"></script>
 </body>
 </html>

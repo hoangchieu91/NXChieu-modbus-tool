@@ -510,6 +510,43 @@ const DataGridView: React.FC<DataGridProps> = ({
                             >
                               {!row.hasValue ? '--' : row.rawValue ? 'ON (1)' : 'OFF (0)'}
                             </button>
+                          ) : row.control?.type === 'readonly' ? (
+                            /* READ-ONLY LOCKED REGISTER */
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono font-bold text-cyan-300">{row.displayValue}</span>
+                              <span
+                                className="px-1.5 py-0.5 rounded text-[10px] font-sans font-bold bg-amber-500/15 text-amber-300 border border-amber-500/35"
+                                title="Thanh ghi đang bật Cấm Ghi Mềm (Chỉ đọc)"
+                              >
+                                🔒 Chỉ đọc
+                              </span>
+                            </div>
+                          ) : row.control?.type === 'buttons' && row.control.options ? (
+                            /* MULTI-BUTTON MODE SELECTOR */
+                            <div className="flex items-center justify-between gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                              <span className="font-mono font-bold text-amber-300 text-xs">{row.displayValue}</span>
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {row.control.options.map((opt, i) => {
+                                  const isAct = Number(row.rawValue) === Number(opt.value);
+                                  return (
+                                    <button
+                                      key={i}
+                                      onClick={() => onInlineWrite(row.address, String(opt.value))}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                        isAct
+                                          ? Number(opt.value) === 0
+                                            ? 'bg-slate-700 text-white border-slate-400'
+                                            : 'bg-emerald-500/25 text-emerald-200 border-emerald-400 shadow-sm'
+                                          : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-cyan-300 hover:border-cyan-500/50'
+                                      }`}
+                                      title={`Ghi trạng thái ${opt.label} xuống địa chỉ ${row.address}`}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           ) : row.control?.type === 'stepper' ? (
                             /* 1. STEPPER CONTROLS (Up/Down Buttons) */
                             <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -548,27 +585,40 @@ const DataGridView: React.FC<DataGridProps> = ({
                               </button>
                             </div>
                           ) : row.control?.type === 'toggle' ? (
-                            /* 2. HOLDING REGISTER TOGGLE (ON/OFF Switch) */
+                            /* 2. HOLDING REGISTER DUAL ON/OFF TOGGLE BUTTONS */
                             (() => {
                               const onVal = row.control.onValue ?? 1;
                               const offVal = row.control.offValue ?? 0;
                               const isCurrentlyOn = Number(row.rawValue) === onVal;
+                              const isCurrentlyOff = Number(row.rawValue) === offVal;
                               return (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onInlineWrite(row.address, String(isCurrentlyOn ? offVal : onVal));
-                                  }}
-                                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-bold transition shadow-sm ${
-                                    isCurrentlyOn
-                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/30'
-                                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 hover:text-slate-200'
-                                  }`}
-                                  title={`Click để chuyển sang: ${isCurrentlyOn ? `${offVal} (OFF)` : `${onVal} (ON)`}`}
-                                >
-                                  <span className={`w-2 h-2 rounded-full ${isCurrentlyOn ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-600'}`} />
-                                  <span>{isCurrentlyOn ? 'ON' : 'OFF'}</span>
-                                </button>
+                                <div className="flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+                                  <span className="font-mono font-bold text-amber-300 text-xs">{row.displayValue}</span>
+                                  <div className="inline-flex items-center gap-1">
+                                    <button
+                                      onClick={() => onInlineWrite(row.address, String(onVal))}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                        isCurrentlyOn
+                                          ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/60 shadow-sm'
+                                          : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-emerald-300'
+                                      }`}
+                                      title={`BẬT: Ghi ${onVal} xuống địa chỉ ${row.address}`}
+                                    >
+                                      🟢 BẬT
+                                    </button>
+                                    <button
+                                      onClick={() => onInlineWrite(row.address, String(offVal))}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                        isCurrentlyOff
+                                          ? 'bg-slate-700 text-slate-100 border-slate-400 shadow-sm'
+                                          : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-rose-300'
+                                      }`}
+                                      title={`TẮT: Ghi ${offVal} xuống địa chỉ ${row.address}`}
+                                    >
+                                      ⚪ TẮT
+                                    </button>
+                                  </div>
+                                </div>
                               );
                             })()
                           ) : row.control?.type === 'dropdown' ? (

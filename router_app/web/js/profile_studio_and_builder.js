@@ -674,6 +674,8 @@ function hydrateTabsFromProfileArray(arr) {
     start_addr: parseInt(t.start_addr) || 0,
     count: Math.max(1, Math.min(250, parseInt(t.count) || 10)),
     disabled_addrs: Array.from(parseAddrRangeSet(t.disabled_addrs)).sort((a, b) => a - b),
+    read_only_addrs: Array.from(parseAddrRangeSet(t.read_only_addrs)).sort((a, b) => a - b),
+    writable_addrs: Array.from(parseAddrRangeSet(t.writable_addrs)).sort((a, b) => a - b),
     only_tagged: Boolean(t.only_tagged),
     format: t.format || "uint16",
     scan_ms: parseInt(t.scan_ms) || 1000,
@@ -730,6 +732,8 @@ function buildCurrentProfileExportObject(customName) {
       start_addr: t.start_addr,
       count: t.count,
       disabled_addrs: Array.from(parseAddrRangeSet(t.disabled_addrs)).sort((a, b) => a - b),
+      read_only_addrs: Array.from(parseAddrRangeSet(t.read_only_addrs)).sort((a, b) => a - b),
+      writable_addrs: Array.from(parseAddrRangeSet(t.writable_addrs)).sort((a, b) => a - b),
       only_tagged: Boolean(t.only_tagged),
       format: t.format || "uint16",
       scan_ms: t.scan_ms || 1000,
@@ -1987,4 +1991,165 @@ function openSdProfileModal() {
 
 function closeSdProfileModal() {
   document.getElementById('sdProfileModal').classList.remove('open');
+}
+
+// ============================================================================
+// PROFILE VERSIONING STUDIO (QUẢN LÝ & LƯU NHIỀU PHIÊN BẢN CỦA 1 HỒ SƠ)
+// ============================================================================
+function extractBaseProfileName(nameOrFile) {
+  let s = String(nameOrFile || "NXChieu_MultiPort_Profile").trim();
+  s = s.replace(/\.json$/i, '');
+  // Strip trailing __v2, __v3_Note, _v2, etc.
+  s = s.replace(/(?:__v\d+(?:_.*)?|_v\d+)$/i, '');
+  return s || "NXChieu_MultiPort_Profile";
+}
+
+async function openProfileVersionModal() {
+  const modal = document.getElementById('profileVersionModal');
+  if (!modal) return;
+  await refreshSdProfilesList();
+
+  const baseName = extractBaseProfileName(currentProfileName);
+  const baseInp = document.getElementById('verBaseProfileName');
+  if (baseInp) baseInp.value = baseName;
+
+  // Compute next version number for this base profile
+  const matching = getVersionsForBaseProfile(baseName);
+  let maxVer = 1;
+  matching.forEach(p => {
+    const v = parseInt(p.version_num) || extractVersionNumFromName(p.profile_name || p.filename);
+    if (v > maxVer) maxVer = v;
+  });
+  const nextVer = matching.length === 0 ? 1 : maxVer + 1;
+  const verInp = document.getElementById('verNumberInput');
+  if (verInp) verInp.value = String(nextVer);
+  const noteInp = document.getElementById('verNoteInput');
+  if (noteInp) noteInp.value = "";
+
+  renderProfileVersionHistoryList(baseName);
+  modal.classList.add('open');
+}
+
+function closeProfileVersionModal() {
+  const modal = document.getElementById('profileVersionModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function extractVersionNumFromName(str) {
+  const m = String(str || '').match(/(?:__v|_v)(\d+)/i);
+  return m ? parseInt(m[1], 10) : 1;
+}
+
+function getVersionsForBaseProfile(baseName) {
+  const cleanBase = extractBaseProfileName(baseName).toLowerCase();
+  return (sdProfilesCache || []).filter(p => {
+    const pBase = extractBaseProfileName(p.base_profile || p.profile_name || p.filename).toLowerCase();
+    return pBase === cleanBase;
+  }).sort((a, b) => {
+    const va = parseInt(a.version_num) || extractVersionNumFromName(a.profile_name || a.filename);
+    const vb = parseInt(b.version_num) || extractVersionNumFromName(b.profile_name || b.filename);
+    if (vb !== va) return vb - va;
+    return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+  });
+}
+
+function renderProfileVersionHistoryList(baseNameOverride) {
+  const tbody = document.getElementById('tblProfileVersionsList');
+  const cntBadge = document.getElementById('lblVersionHistoryCount');
+  if (!tbody) return;
+  const baseName = baseNameOverride || document.getElementById('verBaseProfileName')?.value || currentProfileName;
+  const versions = getVersionsForBaseProfile(baseName);
+  const allList = versions.length > 0 ? versions : (sdProfilesCache || []);
+  if (cntBadge) {
+    cntBadge.textContent = versions.length > 0
+      ? `${versions.length} phiên bản của '${extractBaseProfileName(baseName)}'`
+      : `${allList.length} hồ sơ trên SD`;
+  }
+
+  if (allList.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 18px;">Chưa có phiên bản nào trên Thẻ nhớ SD. Nhấn <b>💾 Lưu Bản Mới (v+1)</b> phía trên để tạo phiên bản đầu tiên!</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = allList.map(p => {
+    const fn = p.filename || p.file;
+    const vNum = parseInt(p.version_num) || extractVersionNumFromName(p.profile_name || fn);
+    const vNote = p.version_note || (vNum === 1 ? 'Bản gốc (Base)' : 'Bản cập nhật');
+    const isCur = (p.profile_name === currentProfileName) || p.is_active;
+    return `
+      <tr style="${isCur ? 'background: rgba(16,185,129,0.08);' : ''}">
+        <td>
+          <span class="badge ${vNum > 1 ? 'badge-purple' : 'badge-cyan'}" style="font-family: monospace; font-weight: 800;">v${vNum}</span>
+        </td>
+        <td>
+          <div style="font-weight: 700; color: #f8fafc; font-size: 12px;">
+            ${escapeHtmlStr(p.profile_name || fn)}
+            ${isCur ? '<span class="badge badge-emerald" style="margin-left: 4px;">ĐANG MỞ</span>' : ''}
+          </div>
+          <div style="font-size: 10px; font-family: monospace; color: var(--text-muted);">${escapeHtmlStr(fn)}</div>
+        </td>
+        <td style="color: #cbd5e1; font-size: 11px;">${escapeHtmlStr(vNote)}</td>
+        <td>
+          <span class="badge badge-slate">${p.tabs_count || 1} Tab • ${p.tagged_total ?? p.tags_total ?? 0} Tag</span>
+        </td>
+        <td style="font-family: monospace; font-size: 11px; color: var(--text-muted);">${escapeHtmlStr(p.updated_at || '--')}</td>
+        <td>
+          <div style="display: flex; gap: 4px; align-items: center;">
+            <button class="btn btn-emerald" style="padding: 3px 8px; font-size: 11px;" onclick="loadProfileVersionFromModal('${fn}')" title="Nạp phiên bản v${vNum} này vào Bảng Dữ Liệu">⚡ Nạp v${vNum}</button>
+            <a href="/api/profile/download?file=${encodeURIComponent(fn)}" class="btn btn-outline" style="padding: 3px 7px; font-size: 11px; text-decoration: none;" title="Tải file JSON phiên bản này về máy">⬇</a>
+            <button class="btn btn-outline" style="padding: 3px 7px; font-size: 11px; color: var(--rose);" onclick="deleteProfileVersionFromModal('${fn}')" title="Xóa phiên bản này khỏi Thẻ nhớ SD">🗑️</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function saveNewProfileVersionToSd() {
+  const rawBase = (document.getElementById('verBaseProfileName')?.value || currentProfileName || "NXChieu_Profile").trim();
+  const baseName = extractBaseProfileName(rawBase);
+  const verNum = Math.max(1, parseInt(document.getElementById('verNumberInput')?.value) || 1);
+  const verNote = (document.getElementById('verNoteInput')?.value || '').trim();
+  const cleanNoteSlug = verNote
+    ? '_' + verNote.replace(/[^a-zA-Z0-9_\-\u00C0-\u1EF9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24)
+    : '';
+  const versionedProfileName = `${baseName}__v${verNum}${cleanNoteSlug}`;
+
+  const exportObj = buildCurrentProfileExportObject(versionedProfileName);
+  exportObj.base_profile = baseName;
+  exportObj.version_num = verNum;
+  exportObj.version_note = verNote || `Phiên bản v${verNum}`;
+
+  try {
+    const res = await fetch('/api/profile/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(exportObj)
+    });
+    const data = await res.json();
+    if (data.success) {
+      currentProfileName = versionedProfileName;
+      const profs = data.saved_profiles || data.sd_profiles || data.profiles;
+      if (profs) syncSdProfilesDropdown(profs, data.saved_file || (data.saved && data.saved.filename));
+      renderProfileVersionHistoryList(baseName);
+      const verInp = document.getElementById('verNumberInput');
+      if (verInp) verInp.value = String(verNum + 1);
+      showToast(`🗂️ Đã lưu phiên bản v${verNum} ['${versionedProfileName}'] vào Thẻ nhớ SD!`);
+    } else {
+      alert("Lỗi lưu phiên bản: " + (data.error || "Thất bại"));
+    }
+  } catch (e) {
+    alert("Lỗi kết nối khi lưu phiên bản: " + e);
+  }
+}
+
+async function loadProfileVersionFromModal(fname) {
+  await loadSdProfileFile(fname);
+  closeProfileVersionModal();
+}
+
+async function deleteProfileVersionFromModal(fname) {
+  await deleteSdProfileFile(fname);
+  const baseName = document.getElementById('verBaseProfileName')?.value || currentProfileName;
+  renderProfileVersionHistoryList(baseName);
 }

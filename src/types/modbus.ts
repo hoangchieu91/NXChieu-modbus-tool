@@ -313,7 +313,7 @@ export interface SnifferCaptureStatus {
   last_error?: string;
 }
 
-export type ControlWidgetType = 'none' | 'stepper' | 'toggle' | 'dropdown';
+export type ControlWidgetType = 'none' | 'readonly' | 'buttons' | 'stepper' | 'toggle' | 'dropdown';
 
 export interface DropdownOption {
   label: string;

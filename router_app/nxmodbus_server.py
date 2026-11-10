@@ -2738,6 +2738,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                                 pass
                         dis_list = sorted(parse_addr_set(t.get("disabled_addrs") or t.get("skip_addrs")))
                         en_list = sorted(parse_addr_set(t.get("enabled_addrs")))
+                        ro_list = sorted(parse_addr_set(t.get("read_only_addrs")))
                         applied_tabs.append({
                             "id": t.get("id") or f"tab_ai_{idx + 1}",
                             "name": t.get("name") or f"Kênh AI {idx + 1}",
@@ -2751,6 +2752,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                             "count": max(1, min(int(t.get("count", 10)), 250)),
                             "disabled_addrs": dis_list,
                             "enabled_addrs": en_list,
+                            "read_only_addrs": ro_list,
                             "only_tagged": bool(t.get("only_tagged", False)),
                             "hide_disabled": bool(t.get("hide_disabled", False)),
                             "format": t.get("format", "uint16"),
@@ -2789,6 +2791,9 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
 
                 saved_meta = save_sd_profile_file({
                     "profile_name": prof_name,
+                    "base_profile": str(req.get("base_profile") or prof_name.split("__v")[0]),
+                    "version_num": int(req.get("version_num", 1)) if str(req.get("version_num", "")).isdigit() else 1,
+                    "version_note": str(req.get("version_note") or ""),
                     "port_aliases": state.port_aliases,
                     "polling_tabs": state.saved_polling_tabs,
                     "trend_watches": req.get("trend_watches") or [],
@@ -2845,6 +2850,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                             pass
                     dis_list = sorted(parse_addr_set(t.get("disabled_addrs") or t.get("skip_addrs")))
                     en_list = sorted(parse_addr_set(t.get("enabled_addrs")))
+                    ro_list = sorted(parse_addr_set(t.get("read_only_addrs")))
                     loaded_tabs.append({
                         "id": t.get("id") or f"tab_sd_{idx + 1}",
                         "name": t.get("name") or f"Kênh {idx + 1}",
@@ -2858,6 +2864,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                         "count": max(1, min(int(t.get("count", 10)), 250)),
                         "disabled_addrs": dis_list,
                         "enabled_addrs": en_list,
+                        "read_only_addrs": ro_list,
                         "only_tagged": bool(t.get("only_tagged", False)),
                         "hide_disabled": bool(t.get("hide_disabled", False)),
                         "format": t.get("format", "uint16"),

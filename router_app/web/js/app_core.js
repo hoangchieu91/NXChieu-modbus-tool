@@ -66,6 +66,8 @@ function saveUiStateToStorage() {
       start_addr: t.start_addr,
       count: t.count,
       disabled_addrs: Array.isArray(t.disabled_addrs) ? t.disabled_addrs : Array.from(parseAddrRangeSet(t.disabled_addrs)),
+      read_only_addrs: Array.isArray(t.read_only_addrs) ? t.read_only_addrs : Array.from(parseAddrRangeSet(t.read_only_addrs)),
+      writable_addrs: Array.isArray(t.writable_addrs) ? t.writable_addrs : Array.from(parseAddrRangeSet(t.writable_addrs)),
       only_tagged: Boolean(t.only_tagged),
       format: t.format || "uint16",
       scan_ms: t.scan_ms || 1000,
@@ -121,6 +123,8 @@ function restoreUiStateFromStorage() {
           start_addr: parseInt(t.start_addr) || 0,
           count: Math.max(1, Math.min(250, parseInt(t.count) || 10)),
           disabled_addrs: Array.isArray(t.disabled_addrs) ? t.disabled_addrs : [],
+          read_only_addrs: Array.isArray(t.read_only_addrs) ? t.read_only_addrs : [],
+          writable_addrs: Array.isArray(t.writable_addrs) ? t.writable_addrs : [],
           only_tagged: Boolean(t.only_tagged),
           format: t.format || "uint16",
           scan_ms: parseInt(t.scan_ms) || 1000,
@@ -1327,8 +1331,12 @@ function syncToolbarWithActiveTab() {
   if (selSR) selSR.value = t.scan_ms;
 
   const disInput = document.getElementById('inpDisabledAddrs');
-  if (disInput) {
+  if (disInput && document.activeElement !== disInput) {
     disInput.value = formatAddrRangeString(parseAddrRangeSet(t.disabled_addrs));
+  }
+  const roInput = document.getElementById('inpReadOnlyAddrs');
+  if (roInput && document.activeElement !== roInput) {
+    roInput.value = formatAddrRangeString(parseAddrRangeSet(t.read_only_addrs));
   }
   const chkOnly = document.getElementById('chkOnlyTagged');
   if (chkOnly) chkOnly.checked = Boolean(t.only_tagged);
@@ -1459,49 +1467,194 @@ function formatMultistateOptionsSpec(options) {
   return options.map(o => `${o.value}=${o.label}`).join(", ");
 }
 
+// Smart detection for telemetry / system status registers that are Read-Only by nature
+function isTagAutoReadOnly(tagName) {
+  const tag = String(tagName || '').trim();
+  if (!tag) return false;
+  if (/WRITE|CLEAR|RESET|CMD|SETPOINT|PULSE|PWM_DUTY|FREQ_SET|_MODE|_BAUD|_PARITY|SLAVE_ID/i.test(tag)) {
+    return false;
+  }
+  if (/^(RL\d+|OUT12V_\d+|RELAY\d*|DO\d+|COIL\d*)\b/i.test(tag)) {
+    return false;
+  }
+  if (/\b(DEVICE_ID|FW_VERSION|HW_VERSION|UPTIME|REBOOT_COUNT|DIP_STATE|DI_BITMAP|DO_BITMAP|RELAY_BITMAP|OUT12V_BITMAP|UID_WORD|NTC_TEMP|AI\d+_|MCU_VDDA|MCU_TEMP|DI\d+_STATE|DI\d+_FREQ|DI\d+_CNT|ERR_CNT|OK_CNT|SERIAL_NO|STATUS_WORD)\b/i.test(tag)) {
+    return true;
+  }
+  return false;
+}
+
+function isRegisterReadOnly(tab, idx) {
+  if (!tab) return false;
+  if (tab.fn_code === 2 || tab.fn_code === 4) return true;
+  const addrDec = tab.start_addr + idx;
+  const roSet = parseAddrRangeSet(tab.read_only_addrs);
+  if (roSet.has(addrDec)) return true;
+
+  const explicit = tab.controls ? getPointMeta(tab.controls, idx, tab.start_addr, null) : null;
+  if (explicit && typeof explicit === 'object' && explicit.type && explicit.type !== 'auto') {
+    if (explicit.type === 'readonly' || explicit.type === 'none') return true;
+    return false;
+  }
+
+  const rwSet = parseAddrRangeSet(tab.writable_addrs);
+  if (rwSet.has(addrDec)) return false;
+
+  const rawTag = getPointMeta(tab.tags, idx, tab.start_addr, "");
+  return isTagAutoReadOnly(rawTag);
+}
+
+function toggleRegisterWriteLock(idx, ev) {
+  if (ev) ev.stopPropagation();
+  const t = getActiveTab();
+  if (!t) return;
+  const addrDec = t.start_addr + idx;
+  const currentlyRo = isRegisterReadOnly(t, idx);
+  const roSet = parseAddrRangeSet(t.read_only_addrs);
+  const rwSet = parseAddrRangeSet(t.writable_addrs);
+  if (!t.controls) t.controls = {};
+
+  if (currentlyRo) {
+    roSet.delete(addrDec);
+    rwSet.add(addrDec);
+    const exp = getPointMeta(t.controls, idx, t.start_addr, null);
+    if (exp && (exp.type === 'readonly' || exp.type === 'none')) {
+      setPointMeta(t.controls, idx, t.start_addr, undefined);
+    }
+    showToast(`🔓 Đã mở khóa cho phép Ghi tại địa chỉ ${addrDec}!`);
+  } else {
+    roSet.add(addrDec);
+    rwSet.delete(addrDec);
+    setPointMeta(t.controls, idx, t.start_addr, { type: 'readonly' });
+    showToast(`🔒 Đã bật Cấm Ghi Mềm (Chỉ Đọc) cho địa chỉ ${addrDec}!`);
+  }
+  t.read_only_addrs = Array.from(roSet).sort((a, b) => a - b);
+  t.writable_addrs = Array.from(rwSet).sort((a, b) => a - b);
+  syncToolbarWithActiveTab();
+  renderTable();
+  updateInspector();
+  if (currentView === 'trend' && typeof renderTrendStudioView === 'function') renderTrendStudioView();
+  saveUiStateToStorage();
+}
+
+function toggleSelectedPointWriteLock() {
+  const t = getActiveTab();
+  if (!t) return;
+  toggleRegisterWriteLock(t.selectedIndex || 0);
+}
+
+function onReadOnlyAddrsInput(val) {
+  const t = getActiveTab();
+  if (!t) return;
+  const roSet = parseAddrRangeSet(val);
+  t.read_only_addrs = Array.from(roSet).sort((a, b) => a - b);
+  renderTable();
+  updateInspector();
+  if (currentView === 'trend' && typeof renderTrendStudioView === 'function') renderTrendStudioView();
+  saveUiStateToStorage();
+}
+
+function autoLockSystemReadOnlyAddrs() {
+  const t = getActiveTab();
+  if (!t) return;
+  const roSet = parseAddrRangeSet(t.read_only_addrs);
+  let lockedCount = 0;
+  for (let i = 0; i < t.count; i++) {
+    const rawTag = getPointMeta(t.tags, i, t.start_addr, "");
+    if (isTagAutoReadOnly(rawTag)) {
+      roSet.add(t.start_addr + i);
+      lockedCount++;
+    }
+  }
+  t.read_only_addrs = Array.from(roSet).sort((a, b) => a - b);
+  t.writable_addrs = [];
+  syncToolbarWithActiveTab();
+  renderTable();
+  updateInspector();
+  if (currentView === 'trend' && typeof renderTrendStudioView === 'function') renderTrendStudioView();
+  saveUiStateToStorage();
+  showToast(`🔒 Đã tự động khóa ghi mềm ${lockedCount} thanh ghi đo lường & hệ thống!`);
+}
+
+function unlockAllReadOnlyAddrs() {
+  const t = getActiveTab();
+  if (!t) return;
+  t.read_only_addrs = [];
+  const rwSet = new Set();
+  for (let i = 0; i < t.count; i++) rwSet.add(t.start_addr + i);
+  t.writable_addrs = Array.from(rwSet);
+  if (t.controls) {
+    Object.keys(t.controls).forEach(k => {
+      if (t.controls[k] && t.controls[k].type === 'readonly') delete t.controls[k];
+    });
+  }
+  syncToolbarWithActiveTab();
+  renderTable();
+  updateInspector();
+  if (currentView === 'trend' && typeof renderTrendStudioView === 'function') renderTrendStudioView();
+  saveUiStateToStorage();
+  showToast("🔓 Đã mở khóa cho phép ghi toàn bộ thanh ghi trong Tab này.");
+}
+
 function inferControlFromTagAndFn(tagName, fnCode) {
   const tag = String(tagName || '').trim();
+  if (fnCode === 2 || fnCode === 4) {
+    return { type: 'readonly', isAuto: true };
+  }
   if (fnCode === 1) {
     return { type: 'toggle', onValue: 1, offValue: 0, isAuto: true };
   }
-  if (/BITMAP|BITMASK/i.test(tag)) {
-    return { type: 'none', isAuto: true };
+  if (isTagAutoReadOnly(tag)) {
+    return { type: 'readonly', isAuto: true };
   }
-  // Check parenthesized state list in tag name, e.g., RL1_STATE (0=OFF,1=ON,2=Toggle) or PORT1_MODE (0=Off,1=Master,2=Routed,3=Trans)
   const parenMatch = tag.match(/\(([^)]*(?:0x[0-9a-fA-F]+|\d+)\s*=\s*[^)]+)\)/);
   if (parenMatch) {
     const opts = parseMultistateOptionsSpec(parenMatch[1]);
     if (opts.length >= 2) {
       if (fnCode === 3) {
-        return { type: 'dropdown', options: opts, isAuto: true };
+        return {
+          type: opts.length <= 5 ? 'buttons' : 'dropdown',
+          options: opts,
+          isAuto: true
+        };
       }
-      return { type: 'none', options: opts, isAuto: true };
+      return { type: 'readonly', options: opts, isAuto: true };
     }
+  }
+  if (/WRITE\s*1\s*CLEAR|CLEAR_ALL|RESET_ERR/i.test(tag)) {
+    return {
+      type: 'buttons',
+      options: [{ value: 1, label: '⚡ Ghi 1 (Clear)' }],
+      isAuto: true
+    };
   }
   if (fnCode === 3 && tag) {
     if (/(^|_)(RL\d+|OUT12V_\d+|RELAY\d*|DO\d+|COIL\d*)(_STATE|_CMD|_ON|_EN)?\b/i.test(tag)) {
       return { type: 'toggle', onValue: 1, offValue: 0, isAuto: true };
     }
-    if (/(PWM|DUTY|FREQ_SET|SETPOINT|SLAVE_ID|BAUD|TIMEOUT)/i.test(tag)) {
-      const isDuty = /DUTY|PWM/i.test(tag);
+    if (/(PWM|DUTY|FREQ_SET|SETPOINT|SLAVE_ID|BAUD|TIMEOUT|PULSE)/i.test(tag)) {
+      const isDuty = /DUTY|PWM|PULSE/i.test(tag);
       return { type: 'stepper', step: isDuty ? 10 : 1, min: 0, max: 65535, isAuto: true };
     }
   }
-  return { type: 'none', isAuto: true };
+  return { type: 'stepper', step: 1, min: 0, max: 65535, isAuto: true };
 }
 
 function getEffectiveControlConfig(tab, idx) {
-  if (!tab) return { type: 'none' };
+  if (!tab) return { type: 'readonly' };
   if (!tab.controls) tab.controls = {};
   const explicit = getPointMeta(tab.controls, idx, tab.start_addr, null);
   const rawTag = getPointMeta(tab.tags, idx, tab.start_addr, "");
   const inferred = inferControlFromTagAndFn(rawTag, tab.fn_code);
 
+  if (isRegisterReadOnly(tab, idx)) {
+    return { type: 'readonly', options: (explicit && explicit.options) || inferred.options };
+  }
+
   if (explicit && typeof explicit === 'object' && explicit.type && explicit.type !== 'auto') {
-    if (explicit.type === 'dropdown') {
+    if (explicit.type === 'buttons' || explicit.type === 'dropdown') {
       const opts = parseMultistateOptionsSpec(explicit.options);
       return {
-        type: 'dropdown',
+        type: explicit.type,
         options: opts.length > 0 ? opts : (inferred.options || [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }])
       };
     }
@@ -1520,7 +1673,9 @@ function getEffectiveControlConfig(tab, idx) {
         max: explicit.max !== undefined ? Number(explicit.max) : 65535
       };
     }
-    return { type: 'none', options: inferred.options };
+    if (explicit.type === 'readonly' || explicit.type === 'none') {
+      return { type: 'readonly', options: inferred.options };
+    }
   }
   return inferred;
 }
@@ -1532,7 +1687,6 @@ function decodeRegisterStateInfo(tab, idx, rawVal) {
   const ctrl = getEffectiveControlConfig(tab, idx);
   const rawTag = String(getPointMeta(tab.tags, idx, tab.start_addr, "") || "");
 
-  // 1. Multistate options (from explicit dropdown or inferred from tag)
   const opts = ctrl.options || [];
   if (opts.length > 0) {
     const matched = opts.find(o => Number(o.value) === numVal);
@@ -1550,8 +1704,7 @@ function decodeRegisterStateInfo(tab, idx, rawVal) {
     }
   }
 
-  // 2. Coils (FC01), Discrete Inputs (FC02), or Toggle Control
-  if (tab.fn_code === 1 || tab.fn_code === 2 || ctrl.type === 'toggle' || /^(DI\d+|RL\d+|OUT12V_\d+)\b/i.test(rawTag)) {
+  if (tab.fn_code === 1 || tab.fn_code === 2 || ctrl.type === 'toggle' || /^(DI\d+_STATE|RL\d+|OUT12V_\d+)\b/i.test(rawTag)) {
     const onVal = ctrl.onValue !== undefined ? Number(ctrl.onValue) : 1;
     const isOn = (numVal === onVal) || (tab.fn_code <= 2 && numVal > 0);
     return {
@@ -1561,7 +1714,6 @@ function decodeRegisterStateInfo(tab, idx, rawVal) {
     };
   }
 
-  // 3. Bitmap registers (e.g., DI_BITMAP, DO_BITMAP, DIP_STATE)
   if (/BITMAP|DIP_STATE|STATUS_BITS/i.test(rawTag)) {
     const activeBits = [];
     for (let b = 0; b < 16; b++) {
@@ -1577,112 +1729,172 @@ function decodeRegisterStateInfo(tab, idx, rawVal) {
   return null;
 }
 
-function buildQuickControlCellHtml(tab, idx, rawVal, isDisabled, context) {
+// Column 1: Pure Value & Decoded State Badge (Never contains interactive inputs)
+function buildValueAndStateCellHtml(tab, idx, rawVal, isDisabled) {
   if (isDisabled) {
     return `<span style="color: #64748b; font-size: 11px;">BỎ QUA</span>`;
   }
+  const scale = getPointMeta(tab.scales, idx, tab.start_addr, 1.0);
+  const valStr = formatValue(rawVal, tab.format, scale);
+  const decoded = decodeRegisterStateInfo(tab, idx, rawVal);
+  const decHtml = decoded ? `<span class="decoded-state-pill tone-${decoded.tone}">${escapeHtmlStr(decoded.badgeText)}</span>` : '';
+  return `<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+    <span style="font-weight: 800; color: #38bdf8; font-family: monospace; font-size: 13px;">${valStr}</span>
+    ${decHtml}
+  </div>`;
+}
+
+// Column 2: Dedicated Quick Control Action Column
+function buildQuickControlCellHtml(tab, idx, rawVal, isDisabled, context) {
+  if (isDisabled) {
+    return `<span style="color: #64748b; font-size: 10px;">—</span>`;
+  }
   const addrDec = tab.start_addr + idx;
   const hasVal = (rawVal !== undefined && rawVal !== null);
+  const curNum = hasVal ? Number(rawVal) : NaN;
   const scale = getPointMeta(tab.scales, idx, tab.start_addr, 1.0);
   const unit = getPointMeta(tab.units, idx, tab.start_addr, "");
   const valStr = formatValue(rawVal, tab.format, scale);
+  const isReadOnly = isRegisterReadOnly(tab, idx);
   const ctrl = getEffectiveControlConfig(tab, idx);
-  const decoded = decodeRegisterStateInfo(tab, idx, rawVal);
-  const isWritable = (tab.fn_code === 1 || tab.fn_code === 3);
+  const isHardwareReadOnly = (tab.fn_code === 2 || tab.fn_code === 4);
 
-  if (! isWritable) {
-    const decHtml = decoded ? `<span class="decoded-state-pill tone-${decoded.tone}">${escapeHtmlStr(decoded.badgeText)}</span>` : '';
-    return `<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-      <span style="font-weight: 800; color: #38bdf8; font-family: monospace;">${valStr}</span>
-      ${decHtml}
+  if (isReadOnly || ctrl.type === 'readonly') {
+    if (context === 'scada_card') {
+      return `<span class="ro-lock-pill" onclick="toggleRegisterWriteLock(${idx}, event)" title="Thanh ghi đang ở chế độ Chỉ Đọc (Cấm ghi mềm). Nhấn để mở khóa nếu muốn điều khiển.">🔒 Chỉ đọc</span>`;
+    }
+    return `<div style="display: flex; align-items: center; gap: 4px;" onclick="event.stopPropagation();">
+      <span class="ro-lock-pill" onclick="${isHardwareReadOnly ? '' : `toggleRegisterWriteLock(${idx}, event)`}" title="${isHardwareReadOnly ? 'Vùng nhớ FC02/FC04 chỉ đọc theo chuẩn Modbus' : 'Đang bật Cấm Ghi Mềm (Chỉ đọc). Nhấn vào đây để Mở Khóa Ghi cho dòng này'}">
+        🔒 Chỉ đọc
+      </span>
     </div>`;
   }
 
-  // Writable 1: DO Toggle Switch (FC01 Coils or FC03 Toggle)
+  const lockToggleBtn = (context === 'table')
+    ? `<span class="rw-unlock-pill" onclick="toggleRegisterWriteLock(${idx}, event)" title="Nhấn để Khóa Ghi Mềm (Chuyển thành 🔒 Chỉ đọc)">🔒</span>`
+    : '';
+
+  if (ctrl.type === 'buttons' && Array.isArray(ctrl.options) && ctrl.options.length > 0) {
+    const btnsHtml = ctrl.options.map(o => {
+      const optVal = Number(o.value);
+      const isAct = hasVal && curNum === optVal;
+      const upper = String(o.label).toUpperCase();
+      let actClass = '';
+      if (isAct) {
+        if (upper === 'OFF' || upper === 'STOP' || upper === 'IDLE' || (optVal === 0 && !upper.includes('ON'))) actClass = 'active-off';
+        else if (upper === 'ON' || upper === 'RUN' || upper === 'MASTER' || optVal === 1) actClass = 'active-on';
+        else actClass = 'active-mode';
+      }
+      return `<button type="button" class="qc-mode-btn ${actClass}" data-write-val="${optVal}" onclick="quickControlWrite('${tab.id}', ${addrDec}, ${optVal}, event)" title="Ghi ngay trạng thái [${optVal}] ${escapeHtmlStr(o.label)} xuống địa chỉ ${addrDec}">${escapeHtmlStr(o.label)}</button>`;
+    }).join('');
+    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; flex-wrap: wrap;" onclick="event.stopPropagation();">
+      <div class="qc-mode-btn-group">${btnsHtml}</div>
+      ${lockToggleBtn}
+    </div>`;
+  }
+
   if (ctrl.type === 'toggle') {
     const onVal = ctrl.onValue !== undefined ? Number(ctrl.onValue) : 1;
     const offVal = ctrl.offValue !== undefined ? Number(ctrl.offValue) : 0;
-    const isOn = hasVal && Number(rawVal) === onVal;
-    const nextVal = isOn ? offVal : onVal;
-    const stateTxt = isOn ? `● ON (${onVal})` : `○ OFF (${hasVal ? rawVal : offVal})`;
-    const actHint = isOn ? 'Nhấn để TẮT' : 'Nhấn để BẬT';
-    return `<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" onclick="event.stopPropagation();">
-      <button class="qc-toggle-btn ${isOn ? 'is-on' : 'is-off'}" onclick="quickControlWrite('${tab.id}', ${addrDec}, ${nextVal}, event)" title="${actHint} (Địa chỉ ${addrDec})">
-        <span>${stateTxt}</span>
-        <span style="font-size: 9px; opacity: 0.8;">⇄</span>
-      </button>
+    const isOn = hasVal && curNum === onVal;
+    const isOff = hasVal && curNum === offVal;
+    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; flex-wrap: wrap;" onclick="event.stopPropagation();">
+      <div class="qc-mode-btn-group">
+        <button type="button" class="qc-mode-btn ${isOn ? 'active-on' : ''}" data-write-val="${onVal}" data-role="on" onclick="quickControlWrite('${tab.id}', ${addrDec}, ${onVal}, event)" title="Ghi ${onVal} (BẬT) xuống địa chỉ ${addrDec}">🟢 BẬT</button>
+        <button type="button" class="qc-mode-btn ${isOff ? 'active-off' : ''}" data-write-val="${offVal}" data-role="off" onclick="quickControlWrite('${tab.id}', ${addrDec}, ${offVal}, event)" title="Ghi ${offVal} (TẮT) xuống địa chỉ ${addrDec}">⚪ TẮT</button>
+      </div>
+      ${lockToggleBtn}
     </div>`;
   }
 
-  // Writable 2: Multistate Dropdown (FC03 Holding Register with state options)
   if (ctrl.type === 'dropdown' && Array.isArray(ctrl.options) && ctrl.options.length > 0) {
-    const curNum = hasVal ? Number(rawVal) : NaN;
     const hasMatch = ctrl.options.some(o => Number(o.value) === curNum);
     let optsHtml = '';
     if (!hasMatch) {
-      optsHtml += `<option value="${hasVal ? curNum : ''}" selected>${hasVal ? `Hiện tại: ${curNum}` : '-- Chọn trạng thái --'}</option>`;
+      optsHtml += `<option value="${hasVal ? curNum : ''}" selected>${hasVal ? `Giá trị: ${curNum}` : '-- Chọn --'}</option>`;
     }
     optsHtml += ctrl.options.map(o =>
       `<option value="${o.value}" ${Number(o.value) === curNum ? 'selected' : ''}>[${o.value}] ${escapeHtmlStr(o.label)}</option>`
     ).join('');
-    const pillHtml = decoded ? `<span class="decoded-state-pill tone-${decoded.tone}">${escapeHtmlStr(decoded.shortLabel)}</span>` : '';
-    return `<div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;" onclick="event.stopPropagation();">
-      <select class="qc-select" onchange="quickControlWrite('${tab.id}', ${addrDec}, parseInt(this.value), event)" title="Chọn trạng thái Multistate để ghi ngay xuống địa chỉ ${addrDec}">
+    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; flex-wrap: wrap;" onclick="event.stopPropagation();">
+      <select class="qc-select" data-qc-role="dropdown" onchange="quickControlWrite('${tab.id}', ${addrDec}, parseInt(this.value), event)" title="Chọn chế độ để ghi xuống địa chỉ ${addrDec}">
         ${optsHtml}
       </select>
-      ${pillHtml}
+      ${lockToggleBtn}
     </div>`;
   }
 
-  // Writable 3: Number Stepper ([-] [input] [+])
-  if (ctrl.type === 'stepper') {
-    const step = ctrl.step !== undefined ? Number(ctrl.step) : 1;
-    const dispNum = hasVal ? valStr : "0";
-    return `<div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;" onclick="event.stopPropagation();">
-      <div class="qc-stepper-wrap">
-        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, ${-step}, event)" title="Giảm ${step} ${unit}">−</button>
-        <input type="number" step="any" class="qc-inline-num" value="${dispNum}"
-           onkeydown="onInlineCellValueKeydown('${tab.id}', ${idx}, this, event)"
-          title="Nhập số rồi nhấn Enter để ghi ngay">
-        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, ${step}, event)" title="Tăng +${step} ${unit}">+</button>
-      </div>
-    </div>`;
-  }
-
-  // Default FC03 Holding Register: Value + Decoded State Badge (if any) + quick step/edit on hover or click
-  const decHtml = decoded ? `<span class="decoded-state-pill tone-${decoded.tone}">${escapeHtmlStr(decoded.badgeText)}</span>` : '';
-  if (context === 'scada_card') {
-    return `<div style="display: flex; align-items: center; gap: 4px;" onclick="event.stopPropagation();">
-      <div class="qc-stepper-wrap">
-        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, -1, event)" title="Giảm -1">−</button>
-        <input type="number" step="any" class="qc-inline-num" value="${hasVal ? valStr : 0}"
-          onkeydown="onInlineCellValueKeydown('${tab.id}', ${idx}, this, event)"
-          title="Nhập giá trị mới rồi nhấn Enter để ghi">
-        <button class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, 1, event)" title="Tăng +1">+</button>
-      </div>
-    </div>`;
-  }
-  return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap;">
-    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-      <span style="font-weight: 800; color: #38bdf8; font-family: monospace;">${valStr}</span>
-      ${decHtml}
+  const step = ctrl.step !== undefined ? Number(ctrl.step) : 1;
+  const dispNum = hasVal ? valStr : "0";
+  return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; flex-wrap: wrap;" onclick="event.stopPropagation();">
+    <div class="qc-stepper-wrap">
+      <button type="button" class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, ${-step}, event)" title="Giảm -${step} ${unit}">−</button>
+      <input type="number" step="any" class="qc-inline-num" data-qc-role="num-input" value="${dispNum}"
+        onkeydown="onInlineCellValueKeydown('${tab.id}', ${idx}, this, event)"
+        title="Nhập số rồi nhấn Enter để ghi ngay">
+      <button type="button" class="qc-step-btn" onclick="quickStepRegisterValue('${tab.id}', ${idx}, ${step}, event)" title="Tăng +${step} ${unit}">+</button>
     </div>
-    <div style="display: inline-flex; align-items: center; gap: 2px; opacity: 0.78;" onclick="event.stopPropagation();">
-      <button class="qc-step-btn" style="width: 19px; height: 19px; font-size: 11px;" onclick="quickStepRegisterValue('${tab.id}', ${idx}, -1, event)" title="Giảm nhanh -1">−</button>
-      <button class="qc-step-btn" style="width: 19px; height: 19px; font-size: 11px;" onclick="quickStepRegisterValue('${tab.id}', ${idx}, 1, event)" title="Tăng nhanh +1">+</button>
-    </div>
+    ${lockToggleBtn}
   </div>`;
+}
+
+function patchQuickControlLiveState(containerEl, tab, idx, rawVal) {
+  if (!containerEl || !tab) return;
+  if (containerEl.contains(document.activeElement)) return;
+  if (containerEl.matches(':hover')) return;
+
+  const hasVal = (rawVal !== undefined && rawVal !== null);
+  const curNum = hasVal ? Number(rawVal) : NaN;
+  const scale = getPointMeta(tab.scales, idx, tab.start_addr, 1.0);
+  const valStr = formatValue(rawVal, tab.format, scale);
+
+  const modeBtns = containerEl.querySelectorAll('.qc-mode-btn[data-write-val]');
+  if (modeBtns.length > 0) {
+    modeBtns.forEach(btn => {
+      const targetVal = Number(btn.getAttribute('data-write-val'));
+      const isAct = hasVal && curNum === targetVal;
+      btn.classList.remove('active-on', 'active-off', 'active-mode');
+      if (isAct) {
+        const txt = (btn.textContent || '').toUpperCase();
+        if (btn.getAttribute('data-role') === 'off' || txt.includes('OFF') || txt.includes('TẮT') || (targetVal === 0 && !txt.includes('ON'))) {
+          btn.classList.add('active-off');
+        } else if (btn.getAttribute('data-role') === 'on' || txt.includes('ON') || txt.includes('BẬT') || txt.includes('MASTER') || targetVal === 1) {
+          btn.classList.add('active-on');
+        } else {
+          btn.classList.add('active-mode');
+        }
+      }
+    });
+  }
+
+  const selEl = containerEl.querySelector('select.qc-select');
+  if (selEl && document.activeElement !== selEl && hasVal) {
+    const strV = String(curNum);
+    if (selEl.value !== strV) {
+      selEl.value = strV;
+    }
+  }
+
+  const numInput = containerEl.querySelector('input.qc-inline-num');
+  if (numInput && document.activeElement !== numInput && hasVal) {
+    if (numInput.value !== String(valStr)) {
+      numInput.value = valStr;
+    }
+  }
 }
 
 async function quickControlWrite(tabId, addrDec, writeVal, ev) {
   if (ev) ev.stopPropagation();
   const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
   if (!tab || isNaN(Number(writeVal))) return;
+  const idx = addrDec - tab.start_addr;
+  if (idx >= 0 && idx < tab.count && isRegisterReadOnly(tab, idx)) {
+    showToast(`🔒 Địa chỉ ${addrDec} đang bật Cấm Ghi Mềm (Chỉ đọc). Nhấn vào nhãn 🔒 Chỉ đọc nếu muốn mở khóa!`);
+    return;
+  }
   const numVal = Math.round(Number(writeVal));
   const fn = (tab.fn_code === 1 || tab.fn_code === 2) ? 5 : 6;
-  const idx = addrDec - tab.start_addr;
 
-  // Optimistic UI update + immediate write
   try {
     const res = await fetch('/api/write', {
       method: 'POST',
@@ -1715,13 +1927,12 @@ async function quickControlWrite(tabId, addrDec, writeVal, ev) {
       showToast(`⚡ Đã ghi [${tagLbl}] = ${numVal} (${data.latency_ms || 0}ms)`);
       if (typeof ingestPollIntoTrendStudio === 'function') ingestPollIntoTrendStudio(tab, nowStr);
       if (tab.id === activeTabId) {
-        renderTable();
+        updateTableLiveValuesInPlace(tab);
         updateInspector();
       }
-      if (currentView === 'trend' && typeof renderTrendStudioView === 'function') {
-        renderTrendStudioView();
+      if (currentView === 'trend' && typeof updateTrendCardsLiveValuesInPlace === 'function') {
+        updateTrendCardsLiveValuesInPlace();
       }
-      // Read back from device to confirm hardware state
       executePoll(tab);
     } else {
       showToast(`❌ Lỗi ghi địa chỉ ${addrDec}: ${data.error || 'Thất bại'}`);
@@ -1767,44 +1978,234 @@ function onInlineCellValueKeydown(tabId, idx, inputEl, ev) {
 
 function promptInlineEditTag(idx, ev) {
   if (ev) ev.stopPropagation();
+  openRegisterCrudModal('edit', idx);
+}
+
+// ==================== REGISTER ADD / EDIT / DELETE MODAL ON POLL TABLE ====================
+function openRegisterCrudModal(mode, rowIdx, ev) {
+  if (ev) ev.stopPropagation();
   const t = getActiveTab();
   if (!t) return;
-  const addrDec = t.start_addr + idx;
-  const curTag = getPointMeta(t.tags, idx, t.start_addr, "");
-  const curUnit = getPointMeta(t.units, idx, t.start_addr, "");
-  const curScale = getPointMeta(t.scales, idx, t.start_addr, 1.0);
-  const currentSpec = curUnit || (curScale !== 1 && curScale !== 1.0)
-    ? `${curTag}:${curUnit}:${curScale}`
-    : curTag;
+  const modal = document.getElementById('registerCrudModal');
+  if (!modal) return;
 
-  const input = prompt(
-    `Sửa nhanh Tên Tag cho địa chỉ ${addrDec} (#${(t.fn_code === 3 ? 40001 : 1) + addrDec}):\n` +
-    `• Nhập mỗi Tên Tag (VD: Áp suất khí xả)\n` +
-    `• Hoặc nhập kèm Đơn vị & Hệ số: Tên_Tag:Đơn_vị:Hệ_số (VD: Nhiệt độ đầu nén:°C:0.1)\n` +
-    `• Mẹo Multistate: Thêm (0=OFF,1=ON,2=AUTO) vào tên Tag để tự động tạo menu chọn trạng thái!\n` +
-    `• Để trống nếu muốn xóa Tag của dòng này.`,
-    currentSpec
-  );
-  if (input === null) return;
-  const trimmed = input.trim();
-  if (!trimmed) {
+  const isEdit = (mode === 'edit' && rowIdx !== undefined && rowIdx >= 0 && rowIdx < t.count);
+  document.getElementById('regCrudMode').value = isEdit ? 'edit' : 'add';
+  const titleEl = document.getElementById('lblRegCrudModalTitle');
+  const delBtn = document.getElementById('btnRegCrudDelete');
+  const gapWrap = document.getElementById('regCrudAutoDisableGapWrap');
+
+  if (isEdit) {
+    const addrDec = t.start_addr + rowIdx;
+    document.getElementById('regCrudOrigAddr').value = String(addrDec);
+    document.getElementById('regCrudAddr').value = String(addrDec);
+    document.getElementById('regCrudTag').value = getPointMeta(t.tags, rowIdx, t.start_addr, "");
+    document.getElementById('regCrudUnit').value = getPointMeta(t.units, rowIdx, t.start_addr, "");
+    document.getElementById('regCrudScale').value = getPointMeta(t.scales, rowIdx, t.start_addr, 1.0);
+    document.getElementById('regCrudReadEnabled').checked = !isRegisterDisabled(t, rowIdx);
+    document.getElementById('regCrudWriteLocked').checked = isRegisterReadOnly(t, rowIdx);
+
+    const expCtrl = t.controls ? getPointMeta(t.controls, rowIdx, t.start_addr, null) : null;
+    const effCtrl = getEffectiveControlConfig(t, rowIdx);
+    const ctrlTypeVal = (expCtrl && expCtrl.type) ? expCtrl.type : 'auto';
+    document.getElementById('regCrudCtrlType').value = ctrlTypeVal;
+    document.getElementById('regCrudCtrlOptions').value = formatMultistateOptionsSpec(effCtrl.options || [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }, { value: 2, label: 'Toggle' }]);
+    if (titleEl) titleEl.textContent = `✏️ Sửa Thanh Ghi #${addrDec} (0x${addrDec.toString(16).toUpperCase().padStart(4, '0')})`;
+    if (delBtn) delBtn.style.display = 'inline-flex';
+    if (gapWrap) gapWrap.style.display = 'none';
+  } else {
+    const nextAddr = t.start_addr + t.count;
+    document.getElementById('regCrudOrigAddr').value = "-1";
+    document.getElementById('regCrudAddr').value = String(nextAddr);
+    document.getElementById('regCrudTag').value = "";
+    document.getElementById('regCrudUnit').value = "";
+    document.getElementById('regCrudScale').value = "1";
+    document.getElementById('regCrudReadEnabled').checked = true;
+    document.getElementById('regCrudWriteLocked').checked = false;
+    document.getElementById('regCrudCtrlType').value = 'auto';
+    document.getElementById('regCrudCtrlOptions').value = "0=OFF, 1=ON, 2=Toggle";
+    if (titleEl) titleEl.textContent = `➕ Thêm Thanh Ghi Mới Vào Bảng Dữ Liệu (${t.name})`;
+    if (delBtn) delBtn.style.display = 'none';
+    if (gapWrap) gapWrap.style.display = 'block';
+  }
+  onRegCrudCtrlTypeChange();
+  modal.classList.add('open');
+}
+
+function closeRegisterCrudModal() {
+  const modal = document.getElementById('registerCrudModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function onRegCrudCtrlTypeChange() {
+  const sel = document.getElementById('regCrudCtrlType')?.value || 'auto';
+  const box = document.getElementById('regCrudOptionsBox');
+  if (box) {
+    box.style.display = (sel === 'buttons' || sel === 'dropdown') ? 'flex' : 'none';
+  }
+  if (sel === 'readonly') {
+    const chkRo = document.getElementById('regCrudWriteLocked');
+    if (chkRo) chkRo.checked = true;
+  }
+}
+
+function rebaseTabMetadataToNewRange(tab, newStart, newCount) {
+  const oldStart = tab.start_addr;
+  const oldCount = tab.count;
+  const newTags = {}, newUnits = {}, newScales = {}, newControls = {}, newValues = [];
+  for (let i = 0; i < oldCount; i++) {
+    const addr = oldStart + i;
+    const newIdx = addr - newStart;
+    if (newIdx < 0 || newIdx >= newCount) continue;
+    const tg = getPointMeta(tab.tags, i, oldStart, undefined);
+    const un = getPointMeta(tab.units, i, oldStart, undefined);
+    const sc = getPointMeta(tab.scales, i, oldStart, undefined);
+    const ct = tab.controls ? getPointMeta(tab.controls, i, oldStart, undefined) : undefined;
+    if (tg !== undefined && tg !== "") newTags[String(newIdx)] = tg;
+    if (un !== undefined && un !== "") newUnits[String(newIdx)] = un;
+    if (sc !== undefined && sc !== 1 && sc !== 1.0) newScales[String(newIdx)] = sc;
+    if (ct !== undefined) newControls[String(newIdx)] = ct;
+    if (Array.isArray(tab.values) && tab.values[i] !== undefined) newValues[newIdx] = tab.values[i];
+  }
+  tab.start_addr = newStart;
+  tab.count = newCount;
+  tab.tags = newTags;
+  tab.units = newUnits;
+  tab.scales = newScales;
+  tab.controls = newControls;
+  tab.values = newValues;
+}
+
+function saveRegisterCrudModal() {
+  const t = getActiveTab();
+  if (!t) return;
+  const targetAddr = Math.max(0, Math.min(65535, parseInt(document.getElementById('regCrudAddr')?.value) || 0));
+  const tagVal = (document.getElementById('regCrudTag')?.value || '').trim();
+  const unitVal = (document.getElementById('regCrudUnit')?.value || '').trim();
+  const scaleVal = parseFloat(document.getElementById('regCrudScale')?.value);
+  const readEnabled = Boolean(document.getElementById('regCrudReadEnabled')?.checked);
+  const writeLocked = Boolean(document.getElementById('regCrudWriteLocked')?.checked);
+  const ctrlType = document.getElementById('regCrudCtrlType')?.value || 'auto';
+  const ctrlOptsStr = (document.getElementById('regCrudCtrlOptions')?.value || '').trim();
+  const autoDisableGap = Boolean(document.getElementById('regCrudDisableGap')?.checked);
+
+  const curMin = t.start_addr;
+  const curMax = t.start_addr + t.count - 1;
+  const disSet = parseAddrRangeSet(t.disabled_addrs);
+
+  if (targetAddr < curMin || targetAddr > curMax) {
+    const newMin = Math.min(curMin, targetAddr);
+    const newMax = Math.max(curMax, targetAddr);
+    const newCount = newMax - newMin + 1;
+    if (newCount > 250) {
+      alert(`Khoảng cách từ địa chỉ ${newMin} đến ${newMax} là ${newCount} thanh ghi (vượt giới hạn 250 thanh ghi/Tab). Hãy tạo Tab mới cho vùng địa chỉ cách xa này!`);
+      return;
+    }
+    if (autoDisableGap) {
+      for (let a = newMin; a < curMin; a++) {
+        if (a !== targetAddr) disSet.add(a);
+      }
+      for (let a = curMax + 1; a <= newMax; a++) {
+        if (a !== targetAddr) disSet.add(a);
+      }
+    }
+    rebaseTabMetadataToNewRange(t, newMin, newCount);
+  }
+
+  const idx = targetAddr - t.start_addr;
+  setPointMeta(t.tags, idx, t.start_addr, tagVal);
+  setPointMeta(t.units, idx, t.start_addr, unitVal);
+  setPointMeta(t.scales, idx, t.start_addr, isNaN(scaleVal) ? 1.0 : scaleVal);
+
+  if (readEnabled) disSet.delete(targetAddr);
+  else disSet.add(targetAddr);
+  t.disabled_addrs = Array.from(disSet).sort((a, b) => a - b);
+
+  const roSet = parseAddrRangeSet(t.read_only_addrs);
+  const rwSet = parseAddrRangeSet(t.writable_addrs);
+  if (writeLocked || ctrlType === 'readonly') {
+    roSet.add(targetAddr);
+    rwSet.delete(targetAddr);
+  } else {
+    roSet.delete(targetAddr);
+    rwSet.add(targetAddr);
+  }
+  t.read_only_addrs = Array.from(roSet).sort((a, b) => a - b);
+  t.writable_addrs = Array.from(rwSet).sort((a, b) => a - b);
+
+  if (!t.controls) t.controls = {};
+  if (ctrlType === 'auto') {
+    setPointMeta(t.controls, idx, t.start_addr, undefined);
+  } else if (ctrlType === 'readonly') {
+    setPointMeta(t.controls, idx, t.start_addr, { type: 'readonly' });
+  } else if (ctrlType === 'buttons' || ctrlType === 'dropdown') {
+    const opts = parseMultistateOptionsSpec(ctrlOptsStr);
+    setPointMeta(t.controls, idx, t.start_addr, {
+      type: ctrlType,
+      options: opts.length > 0 ? opts : [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }]
+    });
+  } else if (ctrlType === 'toggle') {
+    setPointMeta(t.controls, idx, t.start_addr, { type: 'toggle', onValue: 1, offValue: 0 });
+  } else if (ctrlType === 'stepper') {
+    setPointMeta(t.controls, idx, t.start_addr, { type: 'stepper', step: 1, min: 0, max: 65535 });
+  }
+
+  t.selectedIndex = idx;
+  closeRegisterCrudModal();
+  syncToolbarWithActiveTab();
+  renderTable();
+  updateInspector();
+  if (currentView === 'trend' && typeof renderTrendStudioView === 'function') renderTrendStudioView();
+  saveUiStateToStorage();
+  showToast(`✔ Đã lưu cấu hình thanh ghi Addr ${targetAddr} [${tagVal || 'Điểm #' + targetAddr}]!`);
+}
+
+function deleteOrMaskRegisterRow(idx, ev) {
+  if (ev) ev.stopPropagation();
+  const t = getActiveTab();
+  if (!t || idx < 0 || idx >= t.count) return;
+  const addrDec = t.start_addr + idx;
+  const curMin = t.start_addr;
+  const curMax = t.start_addr + t.count - 1;
+
+  if (t.count > 1 && addrDec === curMin) {
+    rebaseTabMetadataToNewRange(t, curMin + 1, t.count - 1);
+    const disSet = parseAddrRangeSet(t.disabled_addrs);
+    disSet.delete(addrDec);
+    t.disabled_addrs = Array.from(disSet).sort((a, b) => a - b);
+    showToast(`🗑️ Đã xóa dòng đầu Addr ${addrDec} (Phạm vi mới: ${t.start_addr}..${t.start_addr + t.count - 1}).`);
+  } else if (t.count > 1 && addrDec === curMax) {
+    rebaseTabMetadataToNewRange(t, curMin, t.count - 1);
+    const disSet = parseAddrRangeSet(t.disabled_addrs);
+    disSet.delete(addrDec);
+    t.disabled_addrs = Array.from(disSet).sort((a, b) => a - b);
+    showToast(`🗑️ Đã xóa dòng cuối Addr ${addrDec} (Phạm vi mới: ${t.start_addr}..${t.start_addr + t.count - 1}).`);
+  } else {
     setPointMeta(t.tags, idx, t.start_addr, "");
     setPointMeta(t.units, idx, t.start_addr, "");
     setPointMeta(t.scales, idx, t.start_addr, 1.0);
-    showToast(`🗑️ Đã xóa Tag tại địa chỉ ${addrDec}.`);
-  } else {
-    const parts = trimmed.split(':');
-    setPointMeta(t.tags, idx, t.start_addr, parts[0].trim());
-    if (parts.length >= 2) setPointMeta(t.units, idx, t.start_addr, parts[1].trim());
-    if (parts.length >= 3 && !isNaN(parseFloat(parts[2]))) {
-      setPointMeta(t.scales, idx, t.start_addr, parseFloat(parts[2]));
-    }
-    showToast(`✏️ Đã cập nhật Tag [${parts[0].trim()}] cho địa chỉ ${addrDec}!`);
+    if (t.controls) setPointMeta(t.controls, idx, t.start_addr, undefined);
+    const disSet = parseAddrRangeSet(t.disabled_addrs);
+    disSet.add(addrDec);
+    t.disabled_addrs = Array.from(disSet).sort((a, b) => a - b);
+    showToast(`🗑️ Đã xóa Tag & Cấm đọc thanh ghi giữa Addr ${addrDec} (Bật 'Ẩn dòng Cấm Đọc' nếu muốn ẩn khỏi bảng).`);
   }
+
+  t.selectedIndex = Math.max(0, Math.min(idx, t.count - 1));
   syncToolbarWithActiveTab();
   renderTable();
   updateInspector();
   saveUiStateToStorage();
+}
+
+function deleteRegisterFromCrudModal() {
+  const t = getActiveTab();
+  if (!t) return;
+  const origAddr = parseInt(document.getElementById('regCrudOrigAddr')?.value);
+  closeRegisterCrudModal();
+  if (!isNaN(origAddr) && origAddr >= t.start_addr && origAddr < t.start_addr + t.count) {
+    deleteOrMaskRegisterRow(origAddr - t.start_addr);
+  }
 }
 
 function clearSelectedPointMeta() {
@@ -1829,7 +2230,7 @@ function onInspectorControlTypeChange(newType) {
   const boxDrop = document.getElementById('boxInspCtrlDropdown');
   if (boxToggle) boxToggle.style.display = (newType === 'toggle') ? 'flex' : 'none';
   if (boxStep) boxStep.style.display = (newType === 'stepper') ? 'flex' : 'none';
-  if (boxDrop) boxDrop.style.display = (newType === 'dropdown') ? 'flex' : 'none';
+  if (boxDrop) boxDrop.style.display = (newType === 'dropdown' || newType === 'buttons') ? 'flex' : 'none';
   saveInspectorControlConfig();
 }
 
@@ -1838,38 +2239,50 @@ function saveInspectorControlConfig() {
   if (!t) return;
   if (!t.controls) t.controls = {};
   const idx = t.selectedIndex || 0;
+  const addrDec = t.start_addr + idx;
   const ctrlType = document.getElementById('selInspCtrlType')?.value || 'auto';
+  const roSet = parseAddrRangeSet(t.read_only_addrs);
+  const rwSet = parseAddrRangeSet(t.writable_addrs);
 
-  if (ctrlType === 'auto') {
-    setPointMeta(t.controls, idx, t.start_addr, undefined);
-  } else if (ctrlType === 'none') {
-    setPointMeta(t.controls, idx, t.start_addr, { type: 'none' });
-  } else if (ctrlType === 'toggle') {
-    const onVal = parseInt(document.getElementById('inpInspCtrlOnVal')?.value);
-    const offVal = parseInt(document.getElementById('inpInspCtrlOffVal')?.value);
-    setPointMeta(t.controls, idx, t.start_addr, {
-      type: 'toggle',
-      onValue: isNaN(onVal) ? 1 : onVal,
-      offValue: isNaN(offVal) ? 0 : offVal
-    });
-  } else if (ctrlType === 'stepper') {
-    const step = parseFloat(document.getElementById('inpInspCtrlStep')?.value);
-    const min = parseFloat(document.getElementById('inpInspCtrlMin')?.value);
-    const max = parseFloat(document.getElementById('inpInspCtrlMax')?.value);
-    setPointMeta(t.controls, idx, t.start_addr, {
-      type: 'stepper',
-      step: isNaN(step) || step <= 0 ? 1 : step,
-      min: isNaN(min) ? 0 : min,
-      max: isNaN(max) ? 65535 : max
-    });
-  } else if (ctrlType === 'dropdown') {
-    const optStr = document.getElementById('inpInspCtrlOptions')?.value || '0=OFF, 1=ON';
-    const opts = parseMultistateOptionsSpec(optStr);
-    setPointMeta(t.controls, idx, t.start_addr, {
-      type: 'dropdown',
-      options: opts.length > 0 ? opts : [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }]
-    });
+  if (ctrlType === 'readonly' || ctrlType === 'none') {
+    roSet.add(addrDec);
+    rwSet.delete(addrDec);
+    setPointMeta(t.controls, idx, t.start_addr, { type: 'readonly' });
+  } else {
+    roSet.delete(addrDec);
+    if (ctrlType !== 'auto') rwSet.add(addrDec);
+    if (ctrlType === 'auto') {
+      setPointMeta(t.controls, idx, t.start_addr, undefined);
+    } else if (ctrlType === 'toggle') {
+      const onVal = parseInt(document.getElementById('inpInspCtrlOnVal')?.value);
+      const offVal = parseInt(document.getElementById('inpInspCtrlOffVal')?.value);
+      setPointMeta(t.controls, idx, t.start_addr, {
+        type: 'toggle',
+        onValue: isNaN(onVal) ? 1 : onVal,
+        offValue: isNaN(offVal) ? 0 : offVal
+      });
+    } else if (ctrlType === 'stepper') {
+      const step = parseFloat(document.getElementById('inpInspCtrlStep')?.value);
+      const min = parseFloat(document.getElementById('inpInspCtrlMin')?.value);
+      const max = parseFloat(document.getElementById('inpInspCtrlMax')?.value);
+      setPointMeta(t.controls, idx, t.start_addr, {
+        type: 'stepper',
+        step: isNaN(step) || step <= 0 ? 1 : step,
+        min: isNaN(min) ? 0 : min,
+        max: isNaN(max) ? 65535 : max
+      });
+    } else if (ctrlType === 'dropdown' || ctrlType === 'buttons') {
+      const optStr = document.getElementById('inpInspCtrlOptions')?.value || '0=OFF, 1=ON';
+      const opts = parseMultistateOptionsSpec(optStr);
+      setPointMeta(t.controls, idx, t.start_addr, {
+        type: ctrlType,
+        options: opts.length > 0 ? opts : [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }]
+      });
+    }
   }
+  t.read_only_addrs = Array.from(roSet).sort((a, b) => a - b);
+  t.writable_addrs = Array.from(rwSet).sort((a, b) => a - b);
+  syncToolbarWithActiveTab();
   renderTable();
   updateInspector();
   if (typeof renderTrendStudioView === 'function' && currentView === 'trend') renderTrendStudioView();
@@ -1885,7 +2298,6 @@ function togglePointInTrend(tabId, idx, ev) {
   if (ev) ev.stopPropagation();
   const tab = sessionTabs.find(t => t.id === tabId) || getActiveTab();
   if (!tab) return;
-  const addrDec = tab.start_addr + idx;
   if (typeof toggleTrendWatchItem === 'function') {
     toggleTrendWatchItem(tab, idx);
   }
@@ -1899,7 +2311,86 @@ function toggleSelectedPointInTrend() {
   togglePointInTrend(t.id, t.selectedIndex || 0);
 }
 
-// ==================== TABLE & MOBILE CARD RENDERING ====================
+// ==================== TABLE & MOBILE CARD RENDERING + IN-PLACE LIVE POLL UPDATE ====================
+function computeTableStructureSig(t, hideDisabled) {
+  if (!t) return "";
+  return `${t.id}:${t.start_addr}:${t.count}:${t.fn_code}:${t.format}:${hideDisabled ? 1 : 0}:${(t.disabled_addrs || []).join(',')}:${(t.read_only_addrs || []).join(',')}:${t.only_tagged ? 1 : 0}`;
+}
+
+function buildRowStatusBadgeHtml(t, addrDec, isDisabled, hasVal, errAddrSet) {
+  if (isDisabled) {
+    return `<span class="badge badge-slate" style="color: var(--amber); border-color: rgba(245,158,11,0.35);" title="Thanh ghi này đã được khóa — Không gửi lệnh Modbus tới địa chỉ ${addrDec}">🚫 CẤM ĐỌC</span>`;
+  }
+  if (hasVal) {
+    return `<span class="badge badge-emerald">✔ OK</span>`;
+  }
+  if (errAddrSet && errAddrSet.has(addrDec)) {
+    return `<span class="badge badge-rose" title="Khối chứa thanh ghi này trả về lỗi Modbus Exception">❌ LỖI KHỐI</span>`;
+  }
+  if (t.lastPollState === 'error') {
+    return `<span class="badge badge-rose" title="${t.lastError || 'Timeout'}">⚠️ TIMEOUT</span>`;
+  }
+  return `<span class="badge badge-slate">⏳ CHỜ ĐỌC</span>`;
+}
+
+// In-Place DOM Update during polling so open <select> dropdowns & <input> fields NEVER get wiped!
+function updateTableLiveValuesInPlace(t) {
+  const tbody = document.getElementById('tblRegisters');
+  if (!tbody || !t) return;
+  const hideDisabled = Boolean(document.getElementById('chkHideDisabled')?.checked);
+  const expectedSig = computeTableStructureSig(t, hideDisabled);
+  if (tbody.dataset.renderedSig !== expectedSig) {
+    renderTable();
+    return;
+  }
+
+  const errAddrSet = new Set();
+  if (Array.isArray(t.blockErrors)) {
+    t.blockErrors.forEach(be => {
+      if (be && typeof be === 'object') {
+        for (let a = be.start_addr; a < be.start_addr + be.count; a++) errAddrSet.add(a);
+      }
+    });
+  }
+
+  for (let i = 0; i < t.count; i++) {
+    const addrDec = t.start_addr + i;
+    const isDisabled = isRegisterDisabled(t, i);
+    if (hideDisabled && isDisabled) continue;
+
+    const raw = Array.isArray(t.values) ? t.values[i] : undefined;
+    const hasVal = (raw !== undefined && raw !== null);
+    const rawHex = hasVal ? ("0x" + (raw & 0xFFFF).toString(16).toUpperCase().padStart(4, "0")) : "--";
+    const updatedAtStr = (!isDisabled && t.lastUpdatedMap && t.lastUpdatedMap[i]) ? t.lastUpdatedMap[i] : (hasVal && t.lastUpdated ? t.lastUpdated : "--");
+
+    const cellVal = document.getElementById(`cellVal_${i}`);
+    if (cellVal) {
+      const newValHtml = buildValueAndStateCellHtml(t, i, raw, isDisabled);
+      if (cellVal.innerHTML !== newValHtml) cellVal.innerHTML = newValHtml;
+    }
+
+    const cellQuick = document.getElementById(`cellQuickCtrl_${i}`);
+    if (cellQuick && !isDisabled) {
+      patchQuickControlLiveState(cellQuick, t, i, raw);
+    }
+
+    const cellHex = document.getElementById(`cellHex_${i}`);
+    if (cellHex && cellHex.textContent !== rawHex) cellHex.textContent = rawHex;
+
+    const cellTime = document.getElementById(`cellTime_${i}`);
+    if (cellTime) {
+      if (cellTime.textContent !== updatedAtStr) cellTime.textContent = updatedAtStr;
+      cellTime.style.color = updatedAtStr !== '--' ? '#38bdf8' : '#64748b';
+    }
+
+    const cellStatus = document.getElementById(`cellStatus_${i}`);
+    if (cellStatus) {
+      const newStatusHtml = buildRowStatusBadgeHtml(t, addrDec, isDisabled, hasVal, errAddrSet);
+      if (cellStatus.innerHTML !== newStatusHtml) cellStatus.innerHTML = newStatusHtml;
+    }
+  }
+}
+
 function renderTable() {
   const t = getActiveTab();
   const tbody = document.getElementById('tblRegisters');
@@ -1908,7 +2399,9 @@ function renderTable() {
   tbody.innerHTML = '';
   if (cardsBox) cardsBox.innerHTML = '';
 
-  const hideDisabled = document.getElementById('chkHideDisabled') && document.getElementById('chkHideDisabled').checked;
+  const hideDisabled = Boolean(document.getElementById('chkHideDisabled')?.checked);
+  tbody.dataset.renderedSig = computeTableStructureSig(t, hideDisabled);
+
   const errAddrSet = new Set();
   if (Array.isArray(t.blockErrors)) {
     t.blockErrors.forEach(be => {
@@ -1942,31 +2435,24 @@ function renderTable() {
     const tag = rawTag || `Điểm #${addrDec}`;
     const unit = getPointMeta(t.units, i, t.start_addr, "");
     const scale = getPointMeta(t.scales, i, t.start_addr, 1.0);
-    const valStr = isDisabled ? "BỎ QUA" : formatValue(raw, t.format, scale);
     const updatedAtStr = (!isDisabled && t.lastUpdatedMap && t.lastUpdatedMap[i]) ? t.lastUpdatedMap[i] : (hasVal && t.lastUpdated ? t.lastUpdated : "--");
     const isWatched = isPointWatchedInTrend(t.id, addrDec);
+    const isReadOnly = isRegisterReadOnly(t, i);
+    const valCellHtml = buildValueAndStateCellHtml(t, i, raw, isDisabled);
     const quickCtrlHtml = buildQuickControlCellHtml(t, i, raw, isDisabled, 'table');
-
-    let statusHtml = '';
-    if (isDisabled) {
-      statusHtml = `<span class="badge badge-slate" style="color: var(--amber); border-color: rgba(245,158,11,0.35);" title="Thanh ghi này đã được khóa — Không gửi lệnh Modbus tới địa chỉ ${addrDec}">🚫 CẤM ĐỌC</span>`;
-    } else if (hasVal) {
-      statusHtml = `<span class="badge badge-emerald">✔ OK</span>`;
-    } else if (errAddrSet.has(addrDec)) {
-      statusHtml = `<span class="badge badge-rose" title="Khối chứa thanh ghi này trả về lỗi Modbus Exception">❌ LỖI KHỐI</span>`;
-    } else if (t.lastPollState === 'error') {
-      statusHtml = `<span class="badge badge-rose" title="${t.lastError || 'Timeout'}">⚠️ TIMEOUT</span>`;
-    } else {
-      statusHtml = `<span class="badge badge-slate">⏳ CHỜ ĐỌC</span>`;
-    }
+    const statusHtml = buildRowStatusBadgeHtml(t, addrDec, isDisabled, hasVal, errAddrSet);
 
     const tr = document.createElement('tr');
+    tr.id = `pollRow_${i}`;
     const classes = [];
     if (i === t.selectedIndex) classes.push("selected");
     if (isDisabled) classes.push("row-disabled");
     tr.className = classes.join(" ");
     tr.onclick = () => selectRow(i, false);
-    tr.ondblclick = () => openQuickWriteModal(addrDec, hasVal ? raw : 0);
+    tr.ondblclick = () => {
+      if (!isReadOnly) openQuickWriteModal(addrDec, hasVal ? raw : 0);
+      else openRegisterCrudModal('edit', i);
+    };
 
     tr.innerHTML = `
       <td style="text-align: center;" onclick="toggleAddrDisabled(${addrDec}, event)" title="Tích chọn để Đọc thanh ghi ${addrDec}, bỏ tích để Cấm Đọc (tách khối né địa chỉ ${addrDec})">
@@ -1976,29 +2462,30 @@ function renderTable() {
       <td style="color: var(--cyan); font-weight: 700;">${addrDec}</td>
       <td style="color: #94a3b8;">${addrHex}</td>
       <td style="color: #cbd5e1; font-weight: 600;">${plcAddr}</td>
-      <td style="color: ${rawTag ? '#f1f5f9' : '#64748b'}; font-weight: ${rawTag ? '600' : '400'};" title="Nhấp biểu tượng ✏️ để sửa nhanh Tên Tag, Đơn vị & Hệ số">
+      <td style="color: ${rawTag ? '#f1f5f9' : '#64748b'}; font-weight: ${rawTag ? '600' : '400'};" title="Nhấp biểu tượng ✏️ để sửa nhanh Tên Tag, Đơn vị, Hệ số & Kiểu nút điều khiển">
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
           <span style="word-break: break-word;">${escapeHtmlStr(tag)}</span>
-          <button class="btn btn-outline" style="padding: 1px 5px; font-size: 10px; opacity: 0.65; flex-shrink: 0;" onclick="promptInlineEditTag(${i}, event)" title="Sửa nhanh Tên Tag / Đơn vị / Hệ số (hoặc xóa Tag)">✏️</button>
+          <button class="btn btn-outline" style="padding: 1px 5px; font-size: 10px; opacity: 0.72; flex-shrink: 0;" onclick="openRegisterCrudModal('edit', ${i}, event)" title="Sửa Thanh Ghi (Tên Tag, Đơn vị, Hệ số, Khóa ghi mềm & Nút điều khiển)">✏️</button>
         </div>
       </td>
-      <td class="cell-value">${quickCtrlHtml}</td>
-      <td style="color: var(--text-muted); cursor: pointer;" onclick="promptInlineEditTag(${i}, event)" title="Nhấp để sửa Đơn vị">${escapeHtmlStr(unit)}</td>
-      <td style="color: #64748b; cursor: pointer;" onclick="promptInlineEditTag(${i}, event)" title="Nhấp để sửa Hệ số nhân">${scale}</td>
-      <td style="color: #94a3b8; font-family: monospace;">${rawHex}</td>
-      <td style="color: ${updatedAtStr !== '--' ? '#38bdf8' : '#64748b'}; font-family: monospace; font-size: 11px;">${updatedAtStr}</td>
-      <td>${statusHtml}</td>
+      <td id="cellVal_${i}" class="cell-value">${valCellHtml}</td>
+      <td id="cellQuickCtrl_${i}">${quickCtrlHtml}</td>
+      <td style="color: var(--text-muted); cursor: pointer;" onclick="openRegisterCrudModal('edit', ${i}, event)" title="Nhấp để sửa Đơn vị">${escapeHtmlStr(unit)}</td>
+      <td style="color: #64748b; cursor: pointer;" onclick="openRegisterCrudModal('edit', ${i}, event)" title="Nhấp để sửa Hệ số nhân">${scale}</td>
+      <td id="cellHex_${i}" style="color: #94a3b8; font-family: monospace;">${rawHex}</td>
+      <td id="cellTime_${i}" style="color: ${updatedAtStr !== '--' ? '#38bdf8' : '#64748b'}; font-family: monospace; font-size: 11px;">${updatedAtStr}</td>
+      <td id="cellStatus_${i}">${statusHtml}</td>
       <td>
-        <div style="display: flex; gap: 4px; align-items: center;">
-          <button class="btn ${isWatched ? 'btn-primary' : 'btn-outline'}" style="padding: 2px 6px; font-size: 11px; ${isWatched ? '' : 'color: var(--cyan);'}" onclick="togglePointInTrend('${t.id}', ${i}, event)" title="${isWatched ? 'Đang hiển thị trên Thẻ Động & Biểu Đồ Trend (Nhấn để bỏ)' : 'Đưa điểm này vào Bảng Thẻ Động & Biểu Đồ Sóng (Trend)'}">📈</button>
-          <button class="btn btn-outline" style="padding: 2px 6px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0}); event.stopPropagation();" title="Ghi giá trị thanh ghi ${addrDec}">Ghi</button>
-          <button class="btn btn-outline" style="padding: 2px 5px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)" title="Mở chi tiết Point Inspector (cấu hình Tên Tag, Kiểu điều khiển DO/Multistate/Stepper & Ma trận kiểu dữ liệu)">🔍</button>
+        <div style="display: flex; gap: 3px; align-items: center;" onclick="event.stopPropagation();">
+          <button class="btn ${isWatched ? 'btn-primary' : 'btn-outline'}" style="padding: 2px 5px; font-size: 11px; ${isWatched ? '' : 'color: var(--cyan);'}" onclick="togglePointInTrend('${t.id}', ${i}, event)" title="${isWatched ? 'Đang hiển thị trên Thẻ Động & Biểu Đồ Trend (Nhấn để bỏ)' : 'Đưa điểm này vào Bảng Thẻ Động & Biểu Đồ Sóng (Trend)'}">📈</button>
+          ${!isReadOnly ? `<button class="btn btn-outline" style="padding: 2px 5px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0})" title="Ghi giá trị thanh ghi ${addrDec}">Ghi</button>` : ''}
+          <button class="btn btn-outline" style="padding: 2px 5px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)" title="Mở chi tiết Point Inspector">🔍</button>
+          <button class="btn btn-outline" style="padding: 2px 5px; font-size: 11px; color: var(--rose);" onclick="deleteOrMaskRegisterRow(${i}, event)" title="Xóa hoặc Khóa thanh ghi ${addrDec}">🗑️</button>
         </div>
       </td>
     `;
     tbody.appendChild(tr);
 
-    // Build Native Mobile Card HTML
     if (cardsBox) {
       const mobileCtrlHtml = buildQuickControlCellHtml(t, i, raw, isDisabled, 'mobile');
       cardItemsHtml.push(`
@@ -2018,25 +2505,25 @@ function renderTable() {
             <div style="font-weight: 700; font-size: 14px; color: ${rawTag ? '#fff' : '#94a3b8'}; line-height: 1.3; word-break: break-word;">
               ${escapeHtmlStr(tag)}
             </div>
-            <div style="text-align: right; flex-shrink: 0;">
-              ${mobileCtrlHtml}
-              ${unit ? `<span style="font-size: 11px; color: var(--cyan); font-weight: 700; margin-left: 3px;">${escapeHtmlStr(unit)}</span>` : ''}
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              ${valCellHtml}
+              ${unit ? `<span style="font-size: 11px; color: var(--cyan); font-weight: 700;">${escapeHtmlStr(unit)}</span>` : ''}
             </div>
           </div>
-          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.07); padding-top: 6px; margin-top: 2px;">
+          <div style="margin-top: 4px;">
+            ${mobileCtrlHtml}
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-muted); border-top: 1px dashed rgba(255,255,255,0.07); padding-top: 6px; margin-top: 4px;">
             <span style="font-family: monospace;">RAW: ${rawHex} • ×${scale}</span>
             <div style="display: flex; gap: 5px;" onclick="event.stopPropagation();">
               <button class="btn ${isWatched ? 'btn-primary' : 'btn-outline'}" style="padding: 3px 8px; font-size: 11px;" onclick="togglePointInTrend('${t.id}', ${i}, event)">
                 📈 ${isWatched ? 'Đang Vẽ' : 'Trend'}
               </button>
-              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="promptInlineEditTag(${i}, event)">
-                ✏️ Tag
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px;" onclick="openRegisterCrudModal('edit', ${i}, event)">
+                ✏️ Sửa
               </button>
-              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--cyan);" onclick="openInspectorForRow(${i}, event)">
-                🔍 Chi Tiết
-              </button>
-              <button class="btn btn-primary" style="padding: 3px 9px; font-size: 11px;" onclick="openQuickWriteModal(${addrDec}, ${hasVal ? raw : 0})">
-                Ghi
+              <button class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--rose);" onclick="deleteOrMaskRegisterRow(${i}, event)">
+                🗑️
               </button>
             </div>
           </div>
@@ -2046,7 +2533,7 @@ function renderTable() {
   }
 
   if (renderedRows === 0) {
-    tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: var(--text-muted); padding: 30px;">Tất cả các dòng trong Tab này đang bị ẩn do bộ lọc 'Ẩn dòng Cấm Đọc'. Bỏ tích 'Ẩn dòng Cấm Đọc' để xem lại.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="14" style="text-align: center; color: var(--text-muted); padding: 30px;">Tất cả các dòng trong Tab này đang bị ẩn do bộ lọc 'Ẩn dòng Cấm Đọc'. Bỏ tích 'Ẩn dòng Cấm Đọc' để xem lại.</td></tr>`;
     if (cardsBox) {
       cardsBox.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px;">Đang ẩn các dòng Cấm Đọc.</div>`;
     }
@@ -2058,7 +2545,14 @@ function renderTable() {
 function selectRow(idx, openInspectorNow) {
   const t = getActiveTab();
   t.selectedIndex = idx;
-  renderTable();
+  const tbody = document.getElementById('tblRegisters');
+  if (tbody) {
+    tbody.querySelectorAll('tr').forEach(tr => {
+      tr.classList.toggle('selected', tr.id === `pollRow_${idx}`);
+    });
+  } else {
+    renderTable();
+  }
   updateInspector();
   if (openInspectorNow) {
     const insp = document.getElementById('pointInspector');
@@ -2088,10 +2582,10 @@ function updateInspector() {
   const rawVal = Array.isArray(t.values) ? t.values[idx] : undefined;
   const raw = (rawVal !== undefined && rawVal !== null) ? rawVal : 0;
   const rawTag = getPointMeta(t.tags, idx, t.start_addr, "");
-  const tag = rawTag || `Điểm #${addrDec}`;
   const unit = getPointMeta(t.units, idx, t.start_addr, "");
   const scale = getPointMeta(t.scales, idx, t.start_addr, 1.0);
   const isDisabled = isRegisterDisabled(t, idx);
+  const isReadOnly = isRegisterReadOnly(t, idx);
   const valStr = isDisabled ? "CẤM ĐỌC" : formatValue(rawVal, t.format, scale);
   const updatedAtStr = (t.lastUpdatedMap && t.lastUpdatedMap[idx]) ? t.lastUpdatedMap[idx] : (t.lastUpdated || "--");
 
@@ -2106,7 +2600,6 @@ function updateInspector() {
       : `${unit ? 'Đơn vị: ' + unit + ' • ' : ''}Cập nhật: ${updatedAtStr}`;
   }
 
-  // Decoded state badge in Inspector
   const decBadge = document.getElementById('inspDecodedStateBadge');
   const decoded = decodeRegisterStateInfo(t, idx, rawVal);
   if (decBadge) {
@@ -2119,7 +2612,6 @@ function updateInspector() {
     }
   }
 
-  // Trend Pin Button state
   const btnPin = document.getElementById('btnInspPinTrend');
   const isWatched = isPointWatchedInTrend(t.id, addrDec);
   if (btnPin) {
@@ -2136,11 +2628,10 @@ function updateInspector() {
   const inpWrite = document.getElementById('inpInspWriteVal');
   if (inpWrite && document.activeElement !== inpWrite) inpWrite.value = raw;
 
-  // Sync Quick Control config fields
   const explicitCtrl = t.controls ? getPointMeta(t.controls, idx, t.start_addr, null) : null;
   const effectiveCtrl = getEffectiveControlConfig(t, idx);
   const selCtrl = document.getElementById('selInspCtrlType');
-  const curCtrlType = (explicitCtrl && explicitCtrl.type) ? explicitCtrl.type : 'auto';
+  const curCtrlType = isReadOnly ? 'readonly' : ((explicitCtrl && explicitCtrl.type) ? explicitCtrl.type : 'auto');
   if (selCtrl && document.activeElement !== selCtrl) {
     selCtrl.value = curCtrlType;
   }
@@ -2150,7 +2641,7 @@ function updateInspector() {
   const boxDrop = document.getElementById('boxInspCtrlDropdown');
   if (boxToggle) boxToggle.style.display = (showType === 'toggle') ? 'flex' : 'none';
   if (boxStep) boxStep.style.display = (showType === 'stepper') ? 'flex' : 'none';
-  if (boxDrop) boxDrop.style.display = (showType === 'dropdown') ? 'flex' : 'none';
+  if (boxDrop) boxDrop.style.display = (showType === 'dropdown' || showType === 'buttons') ? 'flex' : 'none';
 
   const inpOn = document.getElementById('inpInspCtrlOnVal');
   if (inpOn && document.activeElement !== inpOn) inpOn.value = effectiveCtrl.onValue !== undefined ? effectiveCtrl.onValue : 1;
@@ -2164,17 +2655,32 @@ function updateInspector() {
   if (inpMax && document.activeElement !== inpMax) inpMax.value = effectiveCtrl.max !== undefined ? effectiveCtrl.max : 65535;
   const inpOpts = document.getElementById('inpInspCtrlOptions');
   if (inpOpts && document.activeElement !== inpOpts) {
-    inpOpts.value = formatMultistateOptionsSpec(effectiveCtrl.options || [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }]);
+    inpOpts.value = formatMultistateOptionsSpec(effectiveCtrl.options || [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }, { value: 2, label: 'Toggle' }]);
   }
 
   const btnDis = document.getElementById('btnInspToggleDisable');
   if (btnDis) {
     if (isDisabled) {
       btnDis.className = "btn btn-rose";
-      btnDis.textContent = `🚫 Đang Cấm Đọc (Nhấn để Mở lại)`;
+      btnDis.textContent = `🚫 Đang Cấm Đọc`;
     } else {
       btnDis.className = "btn btn-emerald";
-      btnDis.textContent = `☑ Đang Cho Phép Đọc (Nhấn để Cấm)`;
+      btnDis.textContent = `☑ Cho Phép Đọc`;
+    }
+  }
+
+  const btnLock = document.getElementById('btnInspToggleWriteLock');
+  if (btnLock) {
+    if (isReadOnly) {
+      btnLock.className = "btn btn-outline";
+      btnLock.style.color = "var(--amber)";
+      btnLock.style.borderColor = "rgba(245,158,11,0.45)";
+      btnLock.textContent = `🔒 Đang Cấm Ghi`;
+    } else {
+      btnLock.className = "btn btn-outline";
+      btnLock.style.color = "var(--emerald)";
+      btnLock.style.borderColor = "rgba(16,185,129,0.45)";
+      btnLock.textContent = `🔓 Cho Phép Ghi`;
     }
   }
 
@@ -2210,6 +2716,10 @@ function submitInspectorWrite() {
   const t = getActiveTab();
   const idx = t.selectedIndex || 0;
   const addrDec = t.start_addr + idx;
+  if (isRegisterReadOnly(t, idx)) {
+    showToast(`🔒 Địa chỉ ${addrDec} đang bật Cấm Ghi Mềm! Hãy nhấn '🔒 Đang Cấm Ghi' để mở khóa trước.`);
+    return;
+  }
   const val = parseInt(document.getElementById('inpInspWriteVal').value) || 0;
   const fn = (t.fn_code === 1 || t.fn_code === 2) ? 5 : 6;
   doModbusWrite(t.port, t.baud, t.parity || 'N', t.stopbits || 1, t.slave_id, fn, addrDec, val);
@@ -2231,6 +2741,8 @@ function spawn8ComTabs() {
       start_addr: 0,
       count: 10,
       disabled_addrs: [],
+      read_only_addrs: [],
+      writable_addrs: [],
       only_tagged: false,
       format: "uint16",
       scan_ms: 1000,
@@ -2275,7 +2787,7 @@ function toggleAllTabsPolling() {
   renderTabs();
 }
 
-// ==================== POLLING ENGINE (SMART CONTIGUOUS SUB-BLOCKS) ====================
+// ==================== POLLING ENGINE (SMART CONTIGUOUS SUB-BLOCKS + IN-PLACE DOM PATCH) ====================
 async function executePoll(tab) {
   const pTag = shortPortLabel(tab.port);
   const disArr = Array.from(parseAddrRangeSet(tab.disabled_addrs)).sort((a, b) => a - b);
@@ -2323,7 +2835,6 @@ async function executePoll(tab) {
         appendTrafficLog('RX', data.rx_hex, data.latency_ms, pTag);
       }
 
-      // Feed any watched tags belonging to this tab into SCADA Dynamic Cards & Trend Chart
       try {
         if (typeof ingestPollIntoTrendStudio === 'function') {
           ingestPollIntoTrendStudio(tab, nowStr);
@@ -2333,11 +2844,15 @@ async function executePoll(tab) {
       }
 
       if (tab.id === activeTabId) {
-        try { renderTable(); } catch (uiErr) { console.error("renderTable error:", uiErr); }
+        try { updateTableLiveValuesInPlace(tab); } catch (uiErr) { console.error("updateTableLiveValuesInPlace error:", uiErr); }
         try { updateInspector(); } catch (uiErr) { console.error("updateInspector error:", uiErr); }
       }
-      if (currentView === 'trend' && typeof renderTrendStudioView === 'function') {
-        try { renderTrendStudioView(); } catch (uiErr) {}
+      if (currentView === 'trend') {
+        if (typeof updateTrendCardsLiveValuesInPlace === 'function') {
+          try { updateTrendCardsLiveValuesInPlace(); } catch (uiErr) {}
+        } else if (typeof renderTrendStudioView === 'function') {
+          try { renderTrendStudioView(); } catch (uiErr) {}
+        }
       }
     } else {
       tab.lastPollState = 'error';
@@ -2346,7 +2861,7 @@ async function executePoll(tab) {
       if (tab.id === activeTabId) {
         const latEl = document.getElementById('badgeLatency');
         if (latEl) latEl.textContent = `Lỗi (${pTag}): ${data.error || 'Timeout'}`;
-        try { renderTable(); } catch (uiErr) {}
+        try { updateTableLiveValuesInPlace(tab); } catch (uiErr) {}
       }
       appendTrafficLog('ERR', data.error || 'Lỗi Polling', 0, pTag);
     }

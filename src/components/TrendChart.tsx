@@ -966,9 +966,38 @@ export const TrendChart: React.FC<TrendChartProps> = ({
                     )}
                   </div>
 
-                  {/* Inline Quick Controls inside Card (DO Toggle / Multistate Dropdown / Stepper) */}
+                  {/* Inline Quick Controls inside Card (DO Toggle / Multi-Button Mode / Multistate Dropdown / Stepper / Read-Only) */}
                   {ctrl && ctrl.type !== 'none' && (onInlineWrite || onToggleCoil) && (
-                    <div className="flex items-center gap-1.5 mb-1.5 pt-1 border-t border-slate-800/60">
+                    <div className="flex items-center gap-1.5 mb-1.5 pt-1 border-t border-slate-800/60 flex-wrap">
+                      {ctrl.type === 'readonly' && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/35">
+                          🔒 Chỉ đọc
+                        </span>
+                      )}
+
+                      {ctrl.type === 'buttons' && ctrl.options && onInlineWrite && (
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {ctrl.options.map((opt) => {
+                            const isAct = Math.round(rawNum) === Number(opt.value);
+                            return (
+                              <button
+                                key={opt.value}
+                                onClick={() => onInlineWrite(trace.address, String(opt.value))}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                  isAct
+                                    ? Number(opt.value) === 0
+                                      ? 'bg-slate-700 text-white border-slate-400'
+                                      : 'bg-emerald-500/25 text-emerald-200 border-emerald-400'
+                                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-cyan-300'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
                       {ctrl.type === 'toggle' && (
                         <>
                           <button

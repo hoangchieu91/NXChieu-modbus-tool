@@ -264,6 +264,9 @@ def list_sd_profiles(active_name: str = "") -> list:
             items.append({
                 "filename": fn,
                 "profile_name": pname,
+                "base_profile": str(data.get("base_profile") or pname.split("__v")[0]),
+                "version_num": int(data.get("version_num", 1)) if str(data.get("version_num", "")).isdigit() else 1,
+                "version_note": str(data.get("version_note") or ""),
                 "schema": str(data.get("schema") or "nxmodbus-monitor-v3.3"),
                 "tabs_count": len(tabs),
                 "total_registers": total_registers,
@@ -356,6 +359,7 @@ def analyze_sd_profile_dict(prof_data: dict, clean_name: str = "") -> dict:
             "disabled_count": len(act_dis),
             "disabled_addrs": act_dis,
             "disabled_ranges_str": format_addr_ranges(act_dis),
+            "read_only_addrs": sorted(parse_addr_set(t.get("read_only_addrs"))),
             "only_tagged": only_tg,
             "tagged_count": tag_cnt,
             "sub_blocks": s_blocks,
