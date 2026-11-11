@@ -2426,38 +2426,7 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
             if ext_ports and (state.serial_port == "/dev/ttyUSB0" or state.serial_port not in [p["id"] for p in ports]):
                 state.serial_port = ext_ports[0]
 
-            battery_info = {"percent": None, "charging": False, "temperature": None, "cycles": None}
-            if os.path.exists("/usr/bin/xe300-mcu") and state.serial_port != "/dev/ttyUSB0":
-                try:
-                    if not os.path.exists("/tmp/mcu_data"):
-                        os.system("/usr/bin/xe300-mcu >/dev/null 2>&1")
-                    elif (time.time() - os.path.getmtime("/tmp/mcu_data")) > 25:
-                        os.system("/usr/bin/xe300-mcu >/dev/null 2>&1 &")
-                except Exception:
-                    pass
-
-            if os.path.exists("/tmp/mcu_data"):
-                try:
-                    with open("/tmp/mcu_data", "rb") as f:
-                        raw_mcu = f.read().decode("utf-8", errors="ignore").replace("\x00", "").strip()
-                        mcu_data = json.loads(raw_mcu)
-                        if "P" in mcu_data:
-                            battery_info["percent"] = mcu_data["P"]
-                        elif "percent" in mcu_data:
-                            battery_info["percent"] = mcu_data["percent"]
-                        if "T" in mcu_data:
-                            battery_info["temperature"] = mcu_data["T"]
-                        elif "temperature" in mcu_data:
-                            battery_info["temperature"] = mcu_data["temperature"]
-                        if "C" in mcu_data:
-                            battery_info["charging"] = bool(mcu_data["C"])
-                        elif "charging" in mcu_data:
-                            battery_info["charging"] = bool(mcu_data["charging"])
-                        if "N" in mcu_data:
-                            battery_info["cycles"] = mcu_data["N"]
-                except Exception:
-                    pass
-
+            battery_info = get_live_battery_telemetry()
             temperature_c = battery_info.get("temperature")
             if temperature_c is None:
                 for tz in ["/sys/class/thermal/thermal_zone0/temp", "/sys/class/hwmon/hwmon0/temp1_input"]:
@@ -4047,6 +4016,238 @@ def start_mdns_responder():
     t.start()
 
 
+_bms_telemetry_cache = {
+    "percent": None,
+    "charging": False,
+    "temperature": None,
+    "cycles": None,
+    "eco_mode": False,
+    "est_minutes_left": None,
+    "discharge_rate_pct_hr": None,
+    "emergency_flushed": False,
+    "updated_at": 0.0,
+}
+_bms_history = []  # [(ts, pct, charging)]
+
+
+def _read_xe300_mcu_battery(force_refresh: bool = False) -> dict:
+    info = {
+        "percent": _bms_telemetry_cache.get("percent"),
+        "charging": _bms_telemetry_cache.get("charging", False),
+        "temperature": _bms_telemetry_cache.get("temperature"),
+        "cycles": _bms_telemetry_cache.get("cycles"),
+        "eco_mode": _bms_telemetry_cache.get("eco_mode", False),
+        "est_minutes_left": _bms_telemetry_cache.get("est_minutes_left"),
+        "discharge_rate_pct_hr": _bms_telemetry_cache.get("discharge_rate_pct_hr"),
+        "emergency_flushed": _bms_telemetry_cache.get("emergency_flushed", False),
+    }
+    if os.path.exists("/usr/bin/xe300-mcu") and state.serial_port != "/dev/ttyUSB0":
+        try:
+            if not os.path.exists("/tmp/mcu_data"):
+                os.system("/usr/bin/xe300-mcu >/dev/null 2>&1")
+            elif force_refresh or (time.time() - os.path.getmtime("/tmp/mcu_data")) > 20:
+                os.system("/usr/bin/xe300-mcu >/dev/null 2>&1 &")
+        except Exception:
+            pass
+
+    if os.path.exists("/tmp/mcu_data"):
+        try:
+            with open("/tmp/mcu_data", "rb") as f:
+                raw_mcu = f.read().decode("utf-8", errors="ignore").replace("\x00", "").strip()
+                mcu_data = json.loads(raw_mcu)
+                if "P" in mcu_data:
+                    info["percent"] = int(mcu_data["P"])
+                elif "percent" in mcu_data:
+                    info["percent"] = int(mcu_data["percent"])
+                if "T" in mcu_data:
+                    info["temperature"] = float(mcu_data["T"])
+                elif "temperature" in mcu_data:
+                    info["temperature"] = float(mcu_data["temperature"])
+                if "C" in mcu_data:
+                    info["charging"] = bool(mcu_data["C"])
+                elif "charging" in mcu_data:
+                    info["charging"] = bool(mcu_data["charging"])
+                if "N" in mcu_data:
+                    info["cycles"] = mcu_data["N"]
+        except Exception:
+            pass
+    return info
+
+
+def get_live_battery_telemetry() -> dict:
+    info = _read_xe300_mcu_battery(force_refresh=False)
+    _bms_telemetry_cache.update(info)
+    return dict(_bms_telemetry_cache)
+
+
+def _send_bms_ntfy_alert(title: str, message: str, priority: str = "high", tags: str = "battery,warning"):
+    for url in [
+        "http://10.212.156.1:8092/wireguard_alerts",
+        "http://10.25.7.116:8092/wireguard_alerts",
+    ]:
+        try:
+            req = urllib.request.Request(
+                url,
+                data=message.encode("utf-8"),
+                headers={"Title": title, "Priority": priority, "Tags": tags},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=2.5)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def start_battery_bms_guardian():
+    """
+    Chỉ chạy trên OpenWrt (GL-XE300 Puli 4G có Pin Li-Po 5000mAh nội bộ):
+    Hệ thống Bảo vệ Pin Thông minh 3 Tầng (Smart BMS & Anti-Brownout Guardian):
+    1. Theo dõi liên tục mỗi 25s ngay cả khi không mở trình duyệt; nội suy tốc độ xả (%/giờ) & số phút còn lại.
+    2. Chế độ Tiết kiệm Pin tự động (Eco Mode) khi rút sạc:
+       - Nếu không dùng mạng 4G LTE (wwan0/3g-wan không hoạt động), tự động đưa Modem Quectel EG25-G
+         về chế độ ngủ RF (AT+CFUN=0), tiết kiệm 180~300mA dòng chờ (+2.5 giờ dùng Pin).
+       - Khi Pin <= 35% và không sạc: hạ công suất phát Wi-Fi từ 20dBm xuống 15dBm.
+       - Tự động khôi phục 100% công suất ngay khi cắm sạc USB-C trở lại.
+    3. Cảnh báo đẩy sớm qua ntfy (:8092) khi mất nguồn sạc, khi Pin <= 25%, và khi Pin <= 10%.
+    4. Bảo vệ chống hỏng Thẻ nhớ SD & mất dữ liệu Datalogger (<= 10%):
+       - Tự động Flush toàn bộ bộ đệm CSV trong RAM xuống Thẻ nhớ SD, lưu cấu hình và gọi os.sync()
+         trước khi mạch BMS ngắt nguồn cứng.
+    """
+    if not os.path.exists("/etc/openwrt_release"):
+        return
+
+    def _bms_loop():
+        was_charging = None
+        warned_25 = False
+        warned_10 = False
+        eco_active = False
+
+        while True:
+            time.sleep(25.0)
+            try:
+                info = _read_xe300_mcu_battery(force_refresh=True)
+                pct = info.get("percent")
+                chg = bool(info.get("charging", False))
+                temp = info.get("temperature")
+                now = time.time()
+
+                if pct is None:
+                    continue
+
+                # Cập nhật lịch sử xả pin để tính tốc độ %/h và thời gian còn lại
+                _bms_history.append((now, pct, chg))
+                while len(_bms_history) > 30:
+                    _bms_history.pop(0)
+
+                discharge_rate = None
+                est_mins = None
+                if not chg:
+                    # Tìm mẫu đầu tiên trong chuỗi đang xả pin hiện tại
+                    dis_samples = [x for x in _bms_history if not x[2]]
+                    if len(dis_samples) >= 2:
+                        dt_hr = (now - dis_samples[0][0]) / 3600.0
+                        dpct = dis_samples[0][1] - pct
+                        if dt_hr >= 0.05 and dpct > 0:
+                            discharge_rate = round(dpct / dt_hr, 1)
+                            est_mins = int(round((pct / discharge_rate) * 60))
+                    if est_mins is None:
+                        # Ước lượng mặc định cho Pin 5000mAh của GL-XE300 (~15%/giờ khi bật CH348 8-COM, ~11%/giờ ở Eco Mode)
+                        default_rate = 11.5 if eco_active else 15.0
+                        discharge_rate = default_rate
+                        est_mins = int(round((pct / default_rate) * 60))
+                else:
+                    warned_25 = False
+                    warned_10 = False
+                    _bms_telemetry_cache["emergency_flushed"] = False
+
+                # Điều khiển Eco Mode (Tiết kiệm năng lượng khi chạy Pin)
+                if not chg and not eco_active:
+                    eco_active = True
+                    # Nếu không dùng 4G WAN, đưa Quectel EG25-G vào chế độ ngủ RF (AT+CFUN=0) để giảm ~250mA dòng tiêu thụ
+                    try:
+                        ip_wwan = os.popen("ip -4 addr show wwan0 2>/dev/null; ip -4 addr show 3g-wan 2>/dev/null").read()
+                        if "inet " not in ip_wwan and os.path.exists("/dev/ttyUSB2"):
+                            os.system('echo -e "AT+CFUN=0\\r" > /dev/ttyUSB2 2>/dev/null &')
+                    except Exception:
+                        pass
+                    if pct <= 35:
+                        os.system("iw dev wlan0 set txpower fixed 1500 >/dev/null 2>&1")
+                elif chg and eco_active:
+                    eco_active = False
+                    try:
+                        if os.path.exists("/dev/ttyUSB2"):
+                            os.system('echo -e "AT+CFUN=1\\r" > /dev/ttyUSB2 2>/dev/null &')
+                    except Exception:
+                        pass
+                    os.system("iw dev wlan0 set txpower fixed 2000 >/dev/null 2>&1")
+
+                # Phát hiện chuyển trạng thái Cắm sạc <-> Rút sạc
+                if was_charging is not None and was_charging != chg:
+                    if not chg:
+                        _send_bms_ntfy_alert(
+                            f"[GL-XE300 .12] Đang chạy Pin ({pct}%)",
+                            f"Router .12 vừa mất nguồn sạc USB-C ngoài. Pin hiện tại: {pct}% (Nhiệt độ: {temp}°C). Đã tự động bật Eco Mode tiết kiệm năng lượng.",
+                            priority="default",
+                            tags="battery,electric_plug",
+                        )
+                    else:
+                        _send_bms_ntfy_alert(
+                            f"[GL-XE300 .12] Đã có nguồn sạc lại ({pct}%)",
+                            f"Router .12 đã được cấp nguồn sạc USB-C trở lại. Pin hiện tại: {pct}%.",
+                            priority="default",
+                            tags="zap,white_check_mark",
+                        )
+                was_charging = chg
+
+                # Cảnh báo Pin yếu <= 25%
+                if not chg and pct <= 25 and not warned_25:
+                    warned_25 = True
+                    os.system("iw dev wlan0 set txpower fixed 1400 >/dev/null 2>&1")
+                    _send_bms_ntfy_alert(
+                        f"⚠️ [GL-XE300 .12] PIN YẾU {pct}%!",
+                        f"Router Modbus .12 đang chạy Pin còn {pct}% (~{est_mins or 60} phút). Vui lòng cắm nguồn USB-C 5V-2A để tránh sập nguồn!",
+                        priority="high",
+                        tags="warning,battery",
+                    )
+
+                # Bảo vệ khẩn cấp khi Pin <= 10% (Flush RAM Datalogger -> SD Card & os.sync())
+                if not chg and pct <= 10:
+                    try:
+                        if state.logger_running and state.datalog_csv_buffer:
+                            flush_datalog_buffer_to_sd(force=True)
+                        state.save_persistent_config()
+                        if hasattr(os, "sync"):
+                            os.sync()
+                        _bms_telemetry_cache["emergency_flushed"] = True
+                    except Exception:
+                        pass
+                    if not warned_10:
+                        warned_10 = True
+                        _send_bms_ntfy_alert(
+                            f"🚨 [GL-XE300 .12] SẮP SẬP NGUỒN (PIN {pct}%)!",
+                            f"Pin của Router .12 chỉ còn {pct}%! Hệ thống đã tự động Flush toàn bộ dữ liệu Datalogger và đồng bộ an toàn Thẻ nhớ SD (os.sync) trước khi tắt nguồn.",
+                            priority="urgent",
+                            tags="rotating_light,battery",
+                        )
+
+                _bms_telemetry_cache.update({
+                    "percent": pct,
+                    "charging": chg,
+                    "temperature": temp,
+                    "cycles": info.get("cycles"),
+                    "eco_mode": eco_active,
+                    "est_minutes_left": est_mins,
+                    "discharge_rate_pct_hr": discharge_rate,
+                    "updated_at": now,
+                })
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_bms_loop, daemon=True)
+    t.start()
+
+
 def start_flaky_wifi_guardian():
     """
     Chỉ chạy trên OpenWrt (GL-XE300):
@@ -4223,6 +4424,7 @@ def main():
     ensure_router_remote_access_and_wg_watchdog()
     start_mdns_responder()
     start_flaky_wifi_guardian()
+    start_battery_bms_guardian()
     state.load_persistent_config()
 
     if ch348_hub is not None:

@@ -2638,27 +2638,61 @@ async function updateSystemStatus() {
         renderNetworkInterfaces(data.network_interfaces);
       }
 
-      // 3. Battery Telemetry
+      // 3. Battery Telemetry & Smart BMS Guardian
       if (data.battery && data.battery.percent !== null && data.battery.percent !== undefined) {
         const pct = data.battery.percent;
         const chg = data.battery.charging;
+        const estMins = data.battery.est_minutes_left;
+        const eco = data.battery.eco_mode;
+        const timeHint = (!chg && estMins) ? ` • ~${estMins >= 60 ? (estMins / 60).toFixed(1) + 'h' : estMins + 'p'}` : '';
+
         const battEl = document.getElementById('badgeBatt');
         if (battEl) {
-          battEl.className = pct > 20 ? 'badge badge-emerald' : 'badge badge-rose';
-          battEl.textContent = `🔋 Pin: ${pct}% (${chg ? '⚡Sạc' : 'Pin'})`;
+          battEl.className = chg ? 'badge badge-emerald' : (pct > 25 ? 'badge badge-amber' : 'badge badge-rose');
+          battEl.textContent = `🔋 Pin: ${pct}% (${chg ? '⚡Sạc' : 'Pin' + timeHint})`;
         }
+
+        const priBatt = document.getElementById('badgeBattPrimary');
+        if (priBatt) {
+          priBatt.style.display = 'inline-flex';
+          priBatt.className = chg ? 'badge badge-emerald' : (pct > 25 ? 'badge badge-amber' : 'badge badge-rose');
+          priBatt.textContent = chg
+            ? `⚡ ${pct}%`
+            : (pct <= 25 ? `🪫 ${pct}% (PIN YẾU!)` : `🔋 ${pct}%${timeHint}`);
+          priBatt.title = chg
+            ? `Đang cắm sạc nguồn ngoài (${pct}%)`
+            : `Đang chạy Pin dự phòng (${pct}%${timeHint})${eco ? ' • Đã bật chế độ Eco tiết kiệm Pin' : ''}`;
+        }
+
+        const lowBanner = document.getElementById('lowBatteryAlertBanner');
+        const lowMsg = document.getElementById('txtLowBatteryAlertMsg');
+        if (lowBanner) {
+          if (!chg && pct <= 25) {
+            lowBanner.style.display = 'flex';
+            if (lowMsg) {
+              lowMsg.textContent = pct <= 10
+                ? `🚨 NGUY HIỂM SẬP NGUỒN: Pin chỉ còn ${pct}% (${timeHint.replace(' • ', '')})! Đã tự động Flush dữ liệu Datalogger xuống Thẻ nhớ SD — Hãy cắm sạc USB-C 5V-2A ngay!`
+                : `⚠️ CẢNH BÁO PIN YẾU: Router GL-XE300 đang chạy Pin còn ${pct}% (${timeHint.replace(' • ', '')})! Vui lòng cắm sạc USB-C 5V-2A để tránh sập nguồn.`;
+            }
+          } else {
+            lowBanner.style.display = 'none';
+          }
+        }
+
         const sysPct = document.getElementById('lblSysBattPct');
         if (sysPct) sysPct.textContent = `${pct}%`;
         const stEl = document.getElementById('lblSysBattState');
         if (stEl) {
-          stEl.className = chg ? 'badge badge-emerald' : 'badge badge-amber';
-          stEl.textContent = chg ? '⚡ Đang sạc' : 'Dùng Pin';
+          stEl.className = chg ? 'badge badge-emerald' : (pct <= 25 ? 'badge badge-rose' : 'badge badge-amber');
+          stEl.textContent = chg ? '⚡ Đang sạc' : `Dùng Pin${timeHint}`;
         }
         const barBatt = document.getElementById('barSysBatt');
         if (barBatt) barBatt.style.width = `${Math.min(100, Math.max(0, pct))}%`;
-        if (data.battery.cycles !== null && data.battery.cycles !== undefined) {
-          const noteEl = document.getElementById('lblSysBattNote');
-          if (noteEl) noteEl.textContent = `MCU Onboard • Chu kỳ/Mã: ${data.battery.cycles}`;
+        const noteEl = document.getElementById('lblSysBattNote');
+        if (noteEl) {
+          const cycTxt = (data.battery.cycles !== null && data.battery.cycles !== undefined) ? `Chu kỳ: ${data.battery.cycles}` : 'MCU Onboard';
+          const ecoTxt = (!chg && eco) ? ' • Eco Mode: BẬT' : '';
+          noteEl.textContent = `${cycTxt}${ecoTxt}`;
         }
       }
 

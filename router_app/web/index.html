@@ -44,11 +44,20 @@
       <button id="btnHeaderQuickProfile" class="badge badge-emerald" style="cursor: pointer; font-weight: 700;" onclick="openQuickProfileBuilderModal()" title="Tự tạo / Khai báo hồ sơ nhanh để test ngay">
         ➕ Hồ Sơ Nhanh
       </button>
+      <span id="badgeBattPrimary" class="badge badge-emerald" style="display: none; cursor: pointer; font-weight: 700;" onclick="showView('system')" title="Trạng thái Nguồn &amp; Pin dự phòng Router GL-XE300 (Nhấn để xem chi tiết)">
+        🔋 --%
+      </span>
       <button id="btnToggleHeaderDetails" class="badge badge-slate" style="cursor: pointer; color: #e2e8f0; border-color: var(--border-light);" onclick="toggleHeaderDetails()" title="Mở rộng / Thu gọn thanh thông số phần cứng Router (8-COM LED, Pin, Nhiệt độ, RAM, Flash, Thẻ SD, Gateway)">
         📊 <span class="hide-xs">Phần Cứng</span> <span id="icoHeaderDetailsArrow">▾</span>
       </button>
     </div>
   </header>
+
+  <!-- LOW BATTERY EMERGENCY ALERT BANNER -->
+  <div id="lowBatteryAlertBanner" style="display: none; background: linear-gradient(90deg, rgba(225,29,72,0.92), rgba(185,28,28,0.92)); color: #fff; padding: 6px 14px; font-size: 12px; font-weight: 700; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(251,113,133,0.6); z-index: 40;">
+    <span id="txtLowBatteryAlertMsg">🚨 CẢNH BÁO PIN YẾU: Router GL-XE300 đang chạy Pin còn dưới 25%! Vui lòng cắm sạc USB-C (5V-2A) ngay để tránh sập nguồn!</span>
+    <span style="font-size: 11px; background: rgba(0,0,0,0.28); padding: 2px 8px; border-radius: 6px; white-space: nowrap;">Đã bật Eco Mode &amp; Tự động bảo vệ Thẻ SD</span>
+  </div>
 
   <!-- SECONDARY HARDWARE TELEMETRY DRAWER (EXPANDABLE ON DEMAND) -->
   <div id="headerDetailsBar" class="header-details-bar">
